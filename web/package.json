@@ -1,0 +1,17 @@
+{
+  "name": "onlinemenu-web",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @onlinemenu/admin dev",
+    "build": "pnpm --filter @onlinemenu/admin build && pnpm --filter @onlinemenu/pos-desktop build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  }
+}

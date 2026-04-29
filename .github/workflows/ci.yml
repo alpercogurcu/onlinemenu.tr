@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Install go-arch-lint
+        run: go install github.com/fe3dback/go-arch-lint@latest
+
+      - name: go-arch-lint check
+        run: go-arch-lint check
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run gosec
+        run: gosec -conf .gosec.yml -exclude-generated ./...
+
+      - name: Run Trivy (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [lint]
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: onlinemenu_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/onlinemenu_test?sslmode=disable
+      REDIS_ADDR: localhost:6379
+      NATS_URL: nats://localhost:4222
+      VAULT_ADDR: http://localhost:8200
+      VAULT_TOKEN: dev-root-token
+      OPA_BUNDLE_PATH: configs/opa/bundles
+      HTTP_ADDR: ':8080'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Start NATS with JetStream
+        run: |
+          docker run -d \
+            --name nats-js \
+            --network host \
+            nats:2.11-alpine -js
+          for i in $(seq 1 15); do
+            if wget -q --spider http://localhost:8222/healthz 2>/dev/null; then
+              echo "NATS ready"; break
+            fi
+            echo "Waiting for NATS... ($i/15)"; sleep 2
+          done
+
+      - name: Run tests
+        run: go test -race -count=1 -timeout=10m ./...
+
+      - name: Run RLS leak tests
+        run: go test -race -run TestRLS -v ./internal/platform/db/...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build api
+        run: go build -o /dev/null ./cmd/api
+
+      - name: Build edge
+        run: go build -o /dev/null ./cmd/edge
+
+      - name: Build worker
+        run: go build -o /dev/null ./cmd/worker
+
+      - name: Build migrate
+        run: go build -o /dev/null ./cmd/migrate
+
+  web-lint:
+    name: Web Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+        # web-lint aktif olur — pnpm-lock.yaml henüz commit edilmeden bu step fail edebilir.
+        # Frontend iskelet kurulumu tamamlanınca --frozen-lockfile kaldırılır.
+        continue-on-error: true
+
+      - name: Lint
+        working-directory: web
+        run: pnpm run lint
+        continue-on-error: true

@@ -1,0 +1,48 @@
+# =============================================================================
+# Prometheus — Dev Configuration
+# Remote write receiver aktif (--web.enable-remote-write-receiver flag ile)
+# Tempo metrics generator bu endpoint'e yazar
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: dev
+    environment: development
+
+scrape_configs:
+  # OTel Collector internal metrics
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  # OTel Collector kendi iç metrikleri
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  # Tempo metrics generator
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+    metrics_path: /metrics
+
+  # Loki
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+    metrics_path: /metrics
+
+  # NATS
+  - job_name: nats
+    static_configs:
+      - targets: ["nats:8222"]
+    metrics_path: /varz
+
+  # Go API — air ile localhost'ta çalışır, host.docker.internal üzerinden erişilir
+  # Go uygulaması /metrics endpoint'ini expose etmeli (OpenTelemetry Prometheus exporter)
+  - job_name: onlinemenu-api
+    static_configs:
+      - targets: ["host.docker.internal:2112"]
+    scrape_interval: 10s

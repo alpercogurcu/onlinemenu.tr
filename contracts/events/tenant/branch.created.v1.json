@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "branch.created.v1",
+  "description": "Bir tenant'a yeni şube eklendiğinde yayınlanır. Immutable (ADR-DATA-002).",
+  "type": "object",
+  "required": ["event_id", "occurred_at", "tenant_id", "branch_id", "name", "timezone"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Olayın benzersiz kimliği."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Olayın gerçekleştiği UTC timestamp (RFC 3339)."
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Şubenin ait olduğu tenant UUID kimliği."
+    },
+    "branch_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Oluşturulan şubenin UUID kimliği."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "description": "Şubenin görünen adı."
+    },
+    "address": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Şubenin fiziksel adresi (opsiyonel)."
+    },
+    "timezone": {
+      "type": "string",
+      "description": "IANA timezone identifier (örn. Europe/Istanbul). ADR-DATA-003.",
+      "default": "Europe/Istanbul"
+    }
+  }
+}

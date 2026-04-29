@@ -1,0 +1,72 @@
+# =============================================================================
+# OpenTelemetry Collector — Dev Configuration
+# Receivers: OTLP (gRPC + HTTP)
+# Processors: batch
+# Exporters: prometheus, loki, tempo (otlp)
+# =============================================================================
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+exporters:
+  # Prometheus: metrics scrape endpoint
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: onlinemenu
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Loki: log export (OTLP over HTTP)
+  otlphttp/loki:
+    endpoint: "http://loki:3100/otlp"
+    tls:
+      insecure: true
+
+  # Tempo: trace export (OTLP gRPC)
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+
+  # Debug exporter — dev'de pipeline'ı doğrulamak için
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [health_check]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo, debug]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki, debug]

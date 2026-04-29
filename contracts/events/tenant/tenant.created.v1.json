@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tenant.created.v1",
+  "description": "Yeni bir tenant oluşturulduğunda yayınlanır. Immutable — güncelleme yasak (ADR-DATA-002).",
+  "type": "object",
+  "required": ["event_id", "occurred_at", "tenant_id", "name", "slug", "plan"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Olayın benzersiz kimliği. Idempotency için consumer ON CONFLICT (event_id) DO NOTHING kullanır."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Olayın gerçekleştiği UTC timestamp (RFC 3339)."
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Oluşturulan tenant'ın UUID kimliği."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "description": "Tenant'ın görünen adı."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "minLength": 2,
+      "maxLength": 63,
+      "description": "Subdomain routing için kullanılan URL-safe slug. Değiştirilemez."
+    },
+    "plan": {
+      "type": "string",
+      "enum": ["starter", "pro", "enterprise"],
+      "description": "Tenant'ın başlangıç abonelik planı."
+    },
+    "enabled_modules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Tenant için başlangıçta aktif edilen modüller.",
+      "default": []
+    }
+  }
+}

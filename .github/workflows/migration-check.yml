@@ -1,0 +1,58 @@
+name: Migration Check
+
+on:
+  pull_request:
+    paths:
+      - 'migrations/**'
+
+env:
+  GO_VERSION: '1.24'
+  DATABASE_URL: postgres://postgres:postgres@localhost:5432/onlinemenu_test?sslmode=disable
+
+jobs:
+  migration-dry-run:
+    name: Migration Dry Run
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: onlinemenu_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install golang-migrate CLI
+        run: |
+          MIGRATE_VERSION="v4.18.1"
+          curl -sSL \
+            "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin migrate
+          migrate -version
+
+      - name: Migration dry-run — tenant (up + down)
+        run: |
+          migrate -path migrations/tenant -database "$DATABASE_URL" up
+          migrate -path migrations/tenant -database "$DATABASE_URL" down 1
+
+      - name: Migration dry-run — identity (up + down)
+        run: |
+          migrate -path migrations/identity -database "$DATABASE_URL" up
+          migrate -path migrations/identity -database "$DATABASE_URL" down 1

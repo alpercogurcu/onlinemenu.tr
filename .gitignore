@@ -1,0 +1,71 @@
+# Binaries
+bin/
+dist/
+tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output (go build ./cmd/api gibi kök dizine çıkan binary'ler)
+/api
+/edge
+/worker
+/migrate
+
+# Test & coverage
+*.test
+*.out
+coverage.html
+coverage.out
+
+# Go workspace (local overrides)
+go.work
+go.work.sum
+
+# Secrets — asla commit edilmez
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# SOPS şifreli dosyalar commit edilir; düz metin asla
+# .env.sops → commit edilir (şifreli)
+# .env      → commit edilmez (bu satır üstte)
+
+# Air hot-reload
+tmp/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node / pnpm
+node_modules/
+web/node_modules/
+web/apps/*/node_modules/
+web/packages/*/node_modules/
+.pnpm-store/
+
+# Next.js
+web/apps/admin/.next/
+web/apps/admin/out/
+
+# Wails build output
+web/apps/pos-desktop/build/bin/
+
+# Ko build cache
+.ko/
+
+# testcontainers ryuk
+.testcontainers.properties

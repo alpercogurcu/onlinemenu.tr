@@ -1,0 +1,20 @@
+global:
+  nosec: false
+  audit: true
+
+rules:
+  exclude-generated: true
+
+  exclude-paths:
+    - "internal/platform/db/generated/.*"
+    - ".*_mock\\.go$"
+    - ".*\\.pb\\.go$"
+
+  exclude-rules:
+    # errors unhandled — errcheck linter zaten bakıyor
+    - G104
+    # SET LOCAL app.tenant_id pattern — sqlc üretilen kod ve parametrize SET LOCAL güvenli
+    - G202
+
+severity: medium
+confidence: medium

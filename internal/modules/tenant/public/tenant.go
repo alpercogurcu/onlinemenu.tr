@@ -292,8 +292,8 @@ type DocumentStore interface {
 
 	ListBranchDocuments(ctx context.Context, tenantID, branchID uuid.UUID) ([]BranchDocument, error)
 	CreateBranchDocument(ctx context.Context, doc BranchDocument) (BranchDocument, error)
-	UpdateBranchDocumentStatus(ctx context.Context, tenantID, docID uuid.UUID, status DocumentStatus, note string) error
-	DeleteBranchDocument(ctx context.Context, tenantID, docID uuid.UUID) error
+	UpdateBranchDocumentStatus(ctx context.Context, tenantID, branchID, docID uuid.UUID, status DocumentStatus, note string) error
+	DeleteBranchDocument(ctx context.Context, tenantID, branchID, docID uuid.UUID) error
 }
 
 // HoursStore manages a branch's operating schedule.
@@ -327,9 +327,24 @@ type IntegratorStore interface {
 	DeleteIntegrator(ctx context.Context, tenantID, integratorID uuid.UUID) error
 }
 
+// BranchStore manages branch lifecycle. Exposed so other modules can depend on this
+// narrower interface without importing the full service.
+type BranchStore interface {
+	ListBranches(ctx context.Context, tenantID uuid.UUID) ([]Branch, error)
+	CreateBranch(ctx context.Context, b Branch) (Branch, error)
+	UpdateBranch(ctx context.Context, b Branch) (Branch, error)
+}
+
 // ErrNotFound is returned when a requested resource does not exist.
 var ErrNotFound = tenantNotFoundError{}
 
 type tenantNotFoundError struct{}
 
 func (tenantNotFoundError) Error() string { return "tenant: not found" }
+
+// ErrInvalid is returned when input fails domain validation.
+var ErrInvalid = tenantInvalidError{}
+
+type tenantInvalidError struct{}
+
+func (tenantInvalidError) Error() string { return "tenant: invalid input" }

@@ -1,0 +1,129 @@
+version: '3'
+
+vars:
+  GO_MODULE: onlinemenu.tr
+
+tasks:
+  dev:
+    desc: "air ile hot-reload API (compose zaten ayakta olmalı)"
+    cmds:
+      - air -c .air.toml
+
+  build:
+    desc: "Tüm Go binary'lerini build et (ko ile)"
+    cmds:
+      - ko build ./cmd/...
+
+  build:local:
+    desc: "Lokal Go build (ko olmadan)"
+    cmds:
+      - go build -o bin/api ./cmd/api
+      - go build -o bin/edge ./cmd/edge
+      - go build -o bin/worker ./cmd/worker
+
+  test:
+    desc: "Tüm testler (race detector açık)"
+    cmds:
+      - go test ./... -race -count=1
+
+  test:unit:
+    desc: "Sadece unit testler"
+    cmds:
+      - go test ./... -race -short
+
+  test:integration:
+    desc: "testcontainers integration testler"
+    cmds:
+      - go test ./... -race -run Integration -timeout 10m
+
+  test:rls-leak:
+    desc: "RLS sızıntı testleri (SEC-001, SEC-002)"
+    cmds:
+      - go test ./internal/platform/db/... -run TestRLS -v
+
+  test:coverage:
+    desc: "Test coverage raporu"
+    cmds:
+      - go test ./... -race -coverprofile=coverage.out
+      - go tool cover -html=coverage.out -o coverage.html
+
+  lint:
+    desc: "golangci-lint + go-arch-lint"
+    cmds:
+      - golangci-lint run
+      - go-arch-lint check
+
+  fmt:
+    desc: "Go kod formatla"
+    cmds:
+      - gofmt -w .
+      - goimports -w .
+
+  vet:
+    desc: "go vet"
+    cmds:
+      - go vet ./...
+
+  security:scan:
+    desc: "gosec + trivy güvenlik taraması"
+    cmds:
+      - gosec -conf .gosec.yml -exclude-generated ./...
+      - trivy fs --severity HIGH,CRITICAL .
+
+  gen:
+    desc: "Tüm kod üretimi (sqlc, events)"
+    deps: [gen:sqlc, gen:events]
+
+  gen:sqlc:
+    desc: "sqlc ile DB kodu üret"
+    cmds:
+      - sqlc generate
+
+  gen:events:
+    desc: "Event JSON Schema → Go struct"
+    cmds:
+      - go run ./cmd/eventgen contracts/events internal/platform/events/generated
+
+  migrate:up:
+    desc: "Tüm modül migration'larını çalıştır"
+    cmds:
+      - go run ./cmd/migrate up
+
+  migrate:down:
+    desc: "Son migration'ı geri al"
+    cmds:
+      - go run ./cmd/migrate down 1
+
+  migrate:new:
+    desc: "Yeni migration oluştur (task migrate:new MODULE=pos NAME=add_table)"
+    cmds:
+      - migrate create -ext sql -dir migrations/{{.MODULE}} {{.NAME}}
+
+  migrate:verify:
+    desc: "RLS policy sayısını doğrula"
+    cmds:
+      - go run ./cmd/migrate verify
+
+  sops:decrypt:
+    desc: ".env.sops → .env (lokal dev için)"
+    cmds:
+      - sops -d .env.sops > .env
+
+  sops:encrypt:
+    desc: ".env → .env.sops"
+    cmds:
+      - sops -e .env > .env.sops
+
+  ci:
+    desc: "CI pipeline lokalde simüle et"
+    cmds:
+      - task: lint
+      - task: vet
+      - task: test
+      - task: security:scan
+      - task: build:local
+
+  clean:
+    desc: "Build artifact'larını sil"
+    cmds:
+      - rm -rf bin/ tmp/ coverage.out coverage.html

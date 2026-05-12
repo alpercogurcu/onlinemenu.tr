@@ -17,7 +17,7 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 | Katman | Teknoloji |
 |---|---|
 | Backend | Go 1.26+, chi v5, sqlc 1.30, golang-migrate, asynq 0.26+ |
-| DI | uber-go/fx (modül wiring, `cmd/api/main.go`) |
+| DI | uber-go/fx (modül wiring, `backend/cmd/api/main.go`) |
 | Veritabanı | PostgreSQL 18 (RLS), Redis 8 |
 | Messaging | NATS JetStream 2.12+ (monolith), Kafka (Faz 2+ CDC) |
 | Kimlik | Keycloak 26.x (tek realm), OPA 0.68+ (embedded) |
@@ -39,8 +39,8 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 ## Mimari Kurallar (Zorunlu)
 
 ### Modül İzolasyonu
-- Her modül `internal/modules/<name>/` altında kapalı kutu.
-- Dışarıya yalnızca `internal/modules/<name>/public/` sızar.
+- Her modül `backend/internal/modules/<name>/` altında kapalı kutu.
+- Dışarıya yalnızca `backend/internal/modules/<name>/public/` sızar.
 - Modüller arası DB erişimi **yasak** — yalnızca `public/` interface veya NATS event.
 - `go-arch-lint check` CI'da import kurallarını zorlar.
 
@@ -62,19 +62,19 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 
 ### Idempotency (ADR-SEC-003)
 - Payment, invoice, check/close, order POST'larında `Idempotency-Key` header **zorunlu**.
-- Platform middleware `internal/platform/httpx/idempotency.go`.
+- Platform middleware `backend/internal/platform/httpx/idempotency.go`.
 
 ### Fiscal (ADR-FISCAL-001)
 - Payment modülü her işlemde `FiscalDeviceAdapter.RegisterSale()` çağırır (mock bile olsa).
 - `fiscal_device_type = 'none'` üretimde yasak.
 
 ### Graceful Shutdown (Platform Zorunluluğu)
-- `cmd/api/main.go` ve `cmd/edge/main.go` `signal.NotifyContext` + `errgroup` kullanır.
+- `backend/cmd/api/main.go` ve `backend/cmd/edge/main.go` `signal.NotifyContext` + `errgroup` kullanır.
 - Kapatma sırası: HTTP drain → NATS consumer flush → asynq queue drain.
 - `os.Exit` ve `log.Fatal` `main()` dışında **yasak** — context cancel ile kapatma.
 
 ### Dependency Injection (uber-go/fx)
-- Her modül `fx.Module` olarak tanımlanır; `cmd/api/main.go` modülleri birleştirir.
+- Her modül `fx.Module` olarak tanımlanır; `backend/cmd/api/main.go` modülleri birleştirir.
 - `os.Getenv` modül kodunda **yasak** — tüm config `fx.Provide` ile enjekte edilir.
 - Vault client `platform/vault` paketinde; modüller doğrudan Vault API çağırmaz.
 

@@ -18,6 +18,9 @@ tasks:
     desc: "Lokal Go build (ko olmadan)"
     cmds:
       - go build -o bin/api ./cmd/api
+      - go build -o bin/api-core ./cmd/api-core
+      - go build -o bin/api-pos ./cmd/api-pos
+      - go build -o bin/api-finance ./cmd/api-finance
       - go build -o bin/edge ./cmd/edge
       - go build -o bin/worker ./cmd/worker
 

@@ -3,7 +3,7 @@ name: Migration Check
 on:
   pull_request:
     paths:
-      - 'migrations/**'
+      - 'backend/migrations/**'
 
 env:
   GO_VERSION: '1.24'
@@ -38,6 +38,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: backend/go.sum
 
       - name: Install golang-migrate CLI
         run: |
@@ -49,10 +50,10 @@ jobs:
 
       - name: Migration dry-run — tenant (up + down)
         run: |
-          migrate -path migrations/tenant -database "$DATABASE_URL" up
-          migrate -path migrations/tenant -database "$DATABASE_URL" down 1
+          migrate -path backend/migrations/tenant -database "$DATABASE_URL" up
+          migrate -path backend/migrations/tenant -database "$DATABASE_URL" down 1
 
       - name: Migration dry-run — identity (up + down)
         run: |
-          migrate -path migrations/identity -database "$DATABASE_URL" up
-          migrate -path migrations/identity -database "$DATABASE_URL" down 1
+          migrate -path backend/migrations/identity -database "$DATABASE_URL" up
+          migrate -path backend/migrations/identity -database "$DATABASE_URL" down 1

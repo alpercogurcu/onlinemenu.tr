@@ -14,58 +14,81 @@ Proje, **monolitik yapıda başlar** ancak her modül ilk günden bağımsız bi
 
 ```
 onlinemenu.tr/
-├── cmd/
-│   ├── api/                    # Tek monolitik HTTP sunucu
-│   ├── worker/                 # Asynq iş tüketicileri
-│   ├── edge/                   # Şube local server (offline POS)
-│   └── migrate/                # Migration koşucusu
-│
-├── internal/
-│   ├── modules/
-│   │   ├── identity/           # Keycloak sync, JWT middleware
-│   │   ├── tenant/             # İşletme, şube, şube ayarları
-│   │   ├── hr/                 # Personel özlüğü, şube ataması
-│   │   ├── party/              # Tedarikçi, müşteri (cari)
-│   │   ├── catalog/            # Menü, ürün, fiyat listesi
-│   │   ├── pos/                # Masa, adisyon, sipariş, mutfak
-│   │   ├── inventory/          # Stok, depo, sevkiyat
-│   │   ├── billing/            # E-fatura, provider pattern
-│   │   ├── payment/            # Nakit, terminal, sanal POS
-│   │   └── edge_sync/          # Outbox/inbox, sync protokolü
+├── backend/                    # Go monorepo kökü (go.mod burada)
+│   ├── cmd/
+│   │   ├── api/                # Monolitik HTTP sunucu (tek binary, dev)
+│   │   ├── api-core/           # Deployment grubu: identity, tenant, hr, party
+│   │   ├── api-pos/            # Deployment grubu: pos, catalog, edge_sync
+│   │   ├── api-finance/        # Deployment grubu: payment, billing, notification
+│   │   ├── worker/             # Asynq iş tüketicileri
+│   │   ├── edge/               # Şube local server (offline POS)
+│   │   └── migrate/            # Migration koşucusu
 │   │
-│   └── platform/               # Cross-cutting altyapı
-│       ├── db/                 # RLS middleware, sqlc helpers
-│       ├── eventbus/           # NATS JetStream publisher/subscriber
-│       ├── auth/               # Keycloak client, JWT parse, OPA
-│       ├── otel/               # OpenTelemetry setup
-│       ├── vault/              # HashiCorp Vault client
-│       └── cache/              # Redis client
+│   ├── internal/
+│   │   ├── modules/
+│   │   │   ├── identity/           # Keycloak sync, JWT middleware
+│   │   │   ├── tenant/             # İşletme, şube, şube ayarları
+│   │   │   ├── hr/                 # Personel özlüğü, şube ataması
+│   │   │   ├── party/              # Tedarikçi, müşteri (cari)
+│   │   │   ├── catalog/            # Menü, ürün, fiyat listesi
+│   │   │   ├── pos/                # Masa, adisyon, sipariş, mutfak
+│   │   │   ├── inventory/          # Stok, depo, sevkiyat
+│   │   │   ├── billing/            # E-fatura, provider pattern
+│   │   │   ├── payment/            # Nakit, terminal, sanal POS
+│   │   │   ├── edge_sync/          # Outbox/inbox, sync protokolü
+│   │   │   ├── manufacturing/      # İmalat iş emirleri
+│   │   │   └── notification/       # E-posta, SMS, push bildirim
+│   │   │
+│   │   └── platform/               # Cross-cutting altyapı
+│   │       ├── db/                 # RLS middleware, sqlc helpers
+│   │       ├── eventbus/           # NATS JetStream publisher/subscriber
+│   │       ├── auth/               # Keycloak client, JWT parse, OPA
+│   │       ├── otel/               # OpenTelemetry setup
+│   │       ├── vault/              # HashiCorp Vault client
+│   │       └── cache/              # Redis client
+│   │
+│   ├── contracts/
+│   │   ├── events/                 # JSON Schema per event (versiyonlu)
+│   │   └── openapi/                # Modül başına REST spec
+│   │
+│   ├── migrations/
+│   │   ├── tenant/
+│   │   ├── catalog/
+│   │   ├── pos/
+│   │   ├── inventory/
+│   │   └── ...                     # Modül başına ayrı dizin
+│   │
+│   ├── configs/
+│   │   └── opa/bundles/            # OPA policy dosyaları
+│   │
+│   ├── go.mod                      # module onlinemenu.tr
+│   ├── .go-arch-lint.yml           # Modül import kuralları
+│   └── .golangci.yml
 │
-├── contracts/
-│   ├── events/                 # JSON Schema per event (versiyonlu)
-│   └── openapi/                # Modül başına REST spec
+├── web/                        # Frontend monorepo (pnpm workspaces)
+│   ├── apps/
+│   │   ├── admin/              # Next.js 16 yönetim paneli
+│   │   └── pos-desktop/        # Wails + React POS istemcisi
+│   └── packages/               # @onlinemenu/ui-kit, types, config
 │
-├── migrations/
-│   ├── tenant/
-│   ├── catalog/
-│   ├── pos/
-│   ├── inventory/
-│   └── ...                     # Modül başına ayrı dizin
-│
-├── web/
-│   ├── admin/                  # Next.js 14 yönetim paneli
-│   └── pos/                    # Wails + React POS istemcisi
-│
-├── docs/                       # Bu dosyalar
-├── deploy/
-│   ├── docker-compose.dev.yml
-│   └── k8s/                    # Faz 2+
-│
-├── go.mod
-├── go.work
-├── .go-arch-lint.yml           # Modül import kuralları
-└── .golangci.yml
+├── mobile/                     # Flutter (Faz 4)
+├── docs/                       # Mimari belgeler, ADR'lar
+└── deploy/
+    ├── docker-compose.dev.yml
+    └── k8s/                    # Faz 2+
 ```
+
+### Deployment Grubu Yaklaşımı
+
+Tek `cmd/api` binary'si geliştirmede kullanılır. Üretimde her `cmd/api-*` binary'si yalnızca kendi deployment grubunun modüllerini yükler — böylece POS grubu diğerlerinden bağımsız Docker scale edilebilir:
+
+```
+api-core  → identity + tenant + hr + party    (düşük trafik)
+api-pos   → pos + catalog + edge_sync         (yüksek trafik, scale-out)
+api-finance → payment + billing + notification (finansal, ayrı scale)
+```
+
+Modüller arası iletişim NATS JetStream üzerinden yapılır; binary sınırında RPC gerekmez.
 
 ---
 
@@ -76,7 +99,7 @@ onlinemenu.tr/
 Her modülün tek genel API yüzeyi `public/` paketidir:
 
 ```
-internal/modules/pos/
+backend/internal/modules/pos/
 ├── public/          ← Dışarıya açık: interface + DTO tanımları
 ├── domain/          ← Kapalı: iş mantığı, aggregate'ler
 ├── repo/            ← Kapalı: DB erişim katmanı (sqlc üretilen)
@@ -154,7 +177,7 @@ Yeni tablo oluşturan her migration `ENABLE` + `FORCE ROW LEVEL SECURITY` içerm
 ### Platform Helper (ADR-SEC-001)
 
 ```go
-// internal/platform/db/tenant_tx.go
+// backend/internal/platform/db/tenant_tx.go
 // Tek izinli desen — modüller bu fonksiyon dışından DB'ye yazamaz
 func (p *Pool) WithTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(tx pgx.Tx) error) error
 ```
@@ -257,7 +280,7 @@ contracts/events/
 `eventgen` CLI (contracts/ JSON Schema → Go struct):
 
 ```bash
-make contracts-gen  # contracts/events/**/*.json → internal/platform/events/generated/
+task backend:gen:events  # backend/contracts/events/**/*.json → backend/internal/platform/events/generated/
 ```
 
 ---
@@ -290,7 +313,7 @@ Tüm spanlar Grafana Tempo'ya gönderilir. Loglarda `trace_id` + `span_id` zorun
 
 Bir modülü ayırma adımları:
 
-1. `internal/modules/<name>/public` interface'ini RPC (gRPC veya HTTP) transport'una bağla.
+1. `backend/internal/modules/<name>/public` interface'ini RPC (gRPC veya HTTP) transport'una bağla.
 2. Modülün migration'larını yeni bir veritabanına uygula.
 3. Servis discovery'yi Traefik / Consul üzerinden yönet.
 4. NATS event'ler değişmeden çalışmaya devam eder.

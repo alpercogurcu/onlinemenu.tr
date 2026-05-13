@@ -224,7 +224,7 @@ CREATE TABLE tenant_documents (
 
     -- Doğrulayan platform operatörü kullanıcısı.
     -- ON DELETE SET NULL: kullanıcı silinse bile belge kaydı korunmalı (mali kayıt).
-    verified_by     UUID        REFERENCES users (id) ON DELETE SET NULL,
+    verified_by     UUID        REFERENCES persons (id) ON DELETE SET NULL,
     verified_at     TIMESTAMPTZ,
 
     -- Reddedilme sebebi: 'rejected' durumunda operatörün tenant'a bildirdiği açıklama.

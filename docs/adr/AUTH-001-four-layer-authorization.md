@@ -65,36 +65,90 @@ Senaryo: Kasiyer "bugünün satışları" ister.
 
 4. **Decision cache:** Redis `authz:{user_id}:{action}:{resource_type}`, TTL 60s. Keycloak `user.updated` event'i cache invalidate eder.
 
-5. **JWT claim şeması:**
+5. **İki aşamalı kimlik doğrulama + context seçimi:**
+
+   ```
+   Adım 1: Keycloak auth → ham token (yalnızca keycloak_sub taşır)
+   Adım 2: GET /identity/me/contexts → kişinin tüm membership'leri listelenir
+   Adım 3: POST /identity/auth/context { membership_id } → scoped context token
+   ```
+
+   **Keycloak token claim'leri (Adım 1 sonrası):**
    ```json
+   { "sub": "keycloak-sub-uuid" }
+   ```
+
+   **Context token claim'leri (Adım 3 sonrası, platform imzalı):**
+   ```json
+   // Personel context:
    {
-     "sub": "user-uuid",
-     "tenant_id": "tenant-uuid",
-     "branch_ids": ["branch-uuid-1", "branch-uuid-2"],
-     "roles": ["cashier"]
+     "iss": "onlinemenu",
+     "sub": "person-uuid",
+     "ctx": "staff",
+     "tid": "tenant-uuid",
+     "bid": "branch-uuid",
+     "rids": ["role-uuid-1", "role-uuid-2"],
+     "exp": 1234567890
+   }
+
+   // Müşteri context (cross-chain, şube bağımsız):
+   {
+     "iss": "onlinemenu",
+     "sub": "person-uuid",
+     "ctx": "customer",
+     "exp": 1234567890
    }
    ```
-   `branch_ids` **array** — DB'deki `branch_users` M:N ilişkisiyle uyumlu.
 
-6. **Projection helper:** `internal/platform/projection/projector.go`
+   Context token HMAC-SHA256 ile platform secret'ı kullanılarak imzalanır.
+   Middleware: `typ=CTX` header'ı gören token Keycloak doğrulamasına yönlendirilmez.
+
+6. **Principal (güncellenmiş):**
+   ```go
+   type Context string
+   const (
+       ContextStaff    Context = "staff"
+       ContextCustomer Context = "customer"
+   )
+
+   type Principal struct {
+       PersonID uuid.UUID  // platform-level kişi kimliği
+       Context  Context    // staff | customer
+       TenantID uuid.UUID  // staff context'te dolu
+       BranchID uuid.UUID  // staff context'te dolu
+       RoleIDs  []uuid.UUID // birden fazla rol (union'lanır)
+   }
+   ```
+
+7. **PermSet yükleme (DB-driven, Redis cache):**
+   ```go
+   // platform/auth/permset.go
+   type PermSetLoader interface {
+       Load(ctx context.Context, roleIDs []uuid.UUID) (PermSet, error)
+   }
+   // Cache key: authz:perms:{role_id}, TTL: 60s
+   // role.updated.v1 event'i cache'i invalidate eder
+   ```
+
+   PermSet, birden fazla rolün izinlerini **union** eder:
+   - Kasiyer adisyon göremez + Mutfak aşçı adisyon göremez ≠ göremez
+   - Kasiyer adisyon görebilir + Mutfak aşçı adisyon göremez = **görebilir** (union)
+
+8. **Projection helper:** `internal/platform/projection/projector.go`
    ```go
    type Projector[D any, V any] interface {
-       Project(d D, perms authz.PermSet) V
+       Project(d D, perms PermSet) V
    }
    ```
+   Gizli field'lar JSON yanıtından **omit** edilir (null döndürülmez).
+   Satır eksikliği = "yetkisiz", null = "değer yok". Bu iki anlam karıştırılmaz.
 
-7. **Permission tablosu:** `internal/platform/authz/permissions.go`
-   ```go
-   var rolePerms = map[string]PermSet{
-       "cashier":    {"sale.view", "order.create"},
-       "manager":    {"sale.view", "sale.view_financials", "staff.manage"},
-       "owner":      {"*"},
-       "accountant": {"sale.view", "sale.view_financials", "invoice.view"},
-   }
-   ```
-   Tenant-specific override: Faz 2+ (başlangıçta tek tablo, tüm tenant'lara uyar).
+9. **Permission kaynağı:** `role_permissions` ve `role_field_policies` tabloları.
+   Sistem rolleri (tenant_id IS NULL) migration'da seed edilir.
+   Tenant/şube custom rolleri runtime'da DB'ye yazılır.
+   Hard-coded Go map **kaldırıldı**.
 
-8. **Fail-closed:** OPA cevap vermezse → Deny. `Allow` default değeri `false`.
+10. **Fail-closed:** OPA cevap vermezse → Deny. `Allow` default değeri `false`.
 
 ## Sonuçlar
 

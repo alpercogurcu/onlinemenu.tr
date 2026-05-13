@@ -85,7 +85,7 @@ CREATE TABLE branch_documents (
                         CHECK (status IN ('pending', 'verified', 'rejected', 'expired')),
 
     -- Platform operator who reviewed the document. SET NULL on user deletion to preserve audit trail.
-    verified_by     UUID        REFERENCES users(id) ON DELETE SET NULL,
+    verified_by     UUID        REFERENCES persons (id) ON DELETE SET NULL,
     verified_at     TIMESTAMPTZ,
 
     -- Mandatory when status = 'rejected'; describes why the document was not accepted.

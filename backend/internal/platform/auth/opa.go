@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/open-policy-agent/opa/v1/rego"
@@ -83,18 +85,18 @@ func (e *Engine) Decide(ctx context.Context, action string, p Principal) (Decisi
 		return cached, nil
 	}
 
-	branchStrs := make([]string, len(p.BranchIDs))
-	for i, id := range p.BranchIDs {
-		branchStrs[i] = id.String()
+	roleStrs := make([]string, len(p.RoleIDs))
+	for i, id := range p.RoleIDs {
+		roleStrs[i] = id.String()
 	}
 
 	input := opaInput{
 		Action: action,
 		Principal: principal{
-			Sub:       p.Sub,
+			Sub:       p.PersonID.String(),
 			TenantID:  p.TenantID.String(),
-			BranchIDs: branchStrs,
-			Roles:     p.Roles,
+			BranchIDs: []string{p.BranchID.String()},
+			Roles:     roleStrs,
 		},
 	}
 
@@ -128,7 +130,13 @@ func (e *Engine) Decide(ctx context.Context, action string, p Principal) (Decisi
 }
 
 func buildCacheKey(action string, p Principal) string {
-	return fmt.Sprintf("opa:%s:%s:%s", p.TenantID, p.Sub, action)
+	strs := make([]string, len(p.RoleIDs))
+	for i, id := range p.RoleIDs {
+		strs[i] = id.String()
+	}
+	sort.Strings(strs)
+	h := sha256.Sum256([]byte(fmt.Sprintf("%v", strs)))
+	return fmt.Sprintf("opa:%s:%s:%s:%s:%x", p.TenantID, p.BranchID, p.PersonID, action, h[:8])
 }
 
 func (e *Engine) getCached(ctx context.Context, key string) (Decision, error) {

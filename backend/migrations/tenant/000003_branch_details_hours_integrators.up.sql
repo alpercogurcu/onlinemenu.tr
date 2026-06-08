@@ -85,7 +85,7 @@ CREATE TABLE branch_documents (
                         CHECK (status IN ('pending', 'verified', 'rejected', 'expired')),
 
     -- Platform operator who reviewed the document. SET NULL on user deletion to preserve audit trail.
-    verified_by     UUID        REFERENCES persons (id) ON DELETE SET NULL,
+    verified_by     UUID,
     verified_at     TIMESTAMPTZ,
 
     -- Mandatory when status = 'rejected'; describes why the document was not accepted.
@@ -351,7 +351,6 @@ CREATE INDEX branch_special_hours_date_idx
     ON branch_special_hours (branch_id, special_date);
 
 -- Admin UI "upcoming holidays" panel and background pre-warming of schedule cache.
--- Filtered to future/today dates to keep the working set small as the table grows over years.
+-- Full index on special_date (CURRENT_DATE not allowed in partial index predicates — STABLE, not IMMUTABLE).
 CREATE INDEX branch_special_hours_upcoming_idx
-    ON branch_special_hours (special_date)
-    WHERE special_date >= CURRENT_DATE;
+    ON branch_special_hours (special_date);

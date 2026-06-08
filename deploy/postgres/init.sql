@@ -8,8 +8,9 @@
 CREATE DATABASE keycloak;
 
 -- Uygulama rolleri (ADR-SEC-002)
--- app_migrator: migration sahipliği, DDL yetkisi
-CREATE ROLE app_migrator WITH LOGIN PASSWORD 'migrator_dev_password' CREATEDB;
+-- app_migrator: migration sahipliği, DDL yetkisi + BYPASSRLS (sistem seed verisi için).
+-- BYPASSRLS superuser olmadan RLS'yi atlar; tenant_id=NULL sistem verisini yazabilmek için gerekli.
+CREATE ROLE app_migrator WITH LOGIN PASSWORD 'migrator_dev_password' CREATEDB BYPASSRLS;
 -- app_runtime: DML only, RLS zorunlu (SET LOCAL app.tenant_id ile)
 CREATE ROLE app_runtime WITH LOGIN PASSWORD 'runtime_dev_password';
 

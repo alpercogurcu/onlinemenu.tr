@@ -7,7 +7,7 @@
 --
 -- Depends on:
 --   tenant/000001_create_tenants   — tenants, branches, branch_settings tables
---   identity/000001_create_users   — users table (verified_by FK)
+--   (No cross-module FK — verified_by is a bare UUID per modular isolation rules)
 --
 -- ADR references: ADR-SEC-001, ADR-SEC-002, ADR-FISCAL-001, ADR-DATA-003, ADR-OPS-002
 
@@ -224,7 +224,7 @@ CREATE TABLE tenant_documents (
 
     -- Doğrulayan platform operatörü kullanıcısı.
     -- ON DELETE SET NULL: kullanıcı silinse bile belge kaydı korunmalı (mali kayıt).
-    verified_by     UUID        REFERENCES persons (id) ON DELETE SET NULL,
+    verified_by     UUID,
     verified_at     TIMESTAMPTZ,
 
     -- Reddedilme sebebi: 'rejected' durumunda operatörün tenant'a bildirdiği açıklama.

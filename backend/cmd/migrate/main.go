@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -68,10 +69,40 @@ func main() {
 	}
 }
 
+func migrationsDir() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getwd: %w", err)
+	}
+	// When running with "go run ./cmd/migrate" from backend/, migrations/ is in cwd.
+	candidate := filepath.Join(cwd, "migrations")
+	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		return candidate, nil
+	}
+	return "", fmt.Errorf("migrations directory not found (looked in %q)", candidate)
+}
+
+// moduleDSN appends x-migrations-table query parameter so each module tracks
+// its own applied versions independently (avoids version-number collisions).
+func moduleDSN(baseDSN, module string) string {
+	table := fmt.Sprintf("schema_migrations_%s", module)
+	sep := "&"
+	if !strings.Contains(baseDSN, "?") {
+		sep = "?"
+	}
+	return fmt.Sprintf("%s%sx-migrations-table=%s", baseDSN, sep, table)
+}
+
 func runUp(dsn string, logger *zap.Logger) error {
+	base, err := migrationsDir()
+	if err != nil {
+		return err
+	}
+
 	for _, module := range moduleOrder {
-		srcPath := fmt.Sprintf("file://migrations/%s", module)
-		m, err := migrate.New(srcPath, dsn)
+		absPath := filepath.Join(base, module)
+		srcPath := fmt.Sprintf("file://%s", absPath)
+		m, err := migrate.New(srcPath, moduleDSN(dsn, module))
 		if err != nil {
 			return fmt.Errorf("migrate: open %s: %w", module, err)
 		}
@@ -85,11 +116,16 @@ func runUp(dsn string, logger *zap.Logger) error {
 }
 
 func runDown(dsn string, steps int, logger *zap.Logger) error {
+	base, err := migrationsDir()
+	if err != nil {
+		return err
+	}
 	// Roll back in reverse module order to respect foreign key constraints.
 	for i := len(moduleOrder) - 1; i >= 0; i-- {
 		module := moduleOrder[i]
-		srcPath := fmt.Sprintf("file://migrations/%s", module)
-		m, err := migrate.New(srcPath, dsn)
+		absPath := filepath.Join(base, module)
+		srcPath := fmt.Sprintf("file://%s", absPath)
+		m, err := migrate.New(srcPath, moduleDSN(dsn, module))
 		if err != nil {
 			return fmt.Errorf("migrate: open %s: %w", module, err)
 		}

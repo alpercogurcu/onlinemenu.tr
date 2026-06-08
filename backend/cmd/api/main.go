@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 
 	"onlinemenu.tr/internal/modules/catalog"
 	"onlinemenu.tr/internal/modules/identity"
+	"onlinemenu.tr/internal/modules/payment"
 	"onlinemenu.tr/internal/modules/pos"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
@@ -54,12 +59,15 @@ func main() {
 		vault.Module,
 		cache.Module,
 		fx.Provide(auth.NewEngine),
+		fx.Provide(newContextTokenSigner),
+		fx.Provide(newTokenVerifier),
 
 		// Domain modules
 		identity.Module,
 		tenant.Module,
 		catalog.Module,
 		pos.Module,
+		payment.Module,
 
 		// HTTP server
 		fx.Provide(newRouter),
@@ -95,12 +103,27 @@ type httpConfig struct {
 	IdleTimeout  time.Duration
 }
 
-func newRouter() *chi.Mux {
+func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.StripSlashes)
+
+	// Auth middleware is applied to every path except /healthz.
+	// The middleware accepts both platform CTX tokens and Keycloak JWTs,
+	// so identity pre-context endpoints work without a separate auth chain.
+	authMW := auth.Middleware(verifier, signer)
+	r.Use(func(next http.Handler) http.Handler {
+		protected := authMW(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
+	})
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -205,6 +228,41 @@ func newHTTPConfig() httpConfig {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+}
+
+func newContextTokenSigner() (*auth.ContextTokenSigner, error) {
+	secret := envOr("CTX_TOKEN_SECRET", "")
+	if secret == "" {
+		return nil, errors.New("api: CTX_TOKEN_SECRET env var is required")
+	}
+	return auth.NewContextTokenSigner([]byte(secret))
+}
+
+// devTokenVerifier parses JWT claims without signature verification.
+// Replace with a JWKS-backed verifier before production.
+type devTokenVerifier struct{}
+
+func newTokenVerifier() auth.TokenVerifier { return devTokenVerifier{} }
+
+func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.KeycloakClaims, error) {
+	parts := strings.SplitN(rawToken, ".", 3)
+	if len(parts) != 3 {
+		return nil, errors.New("auth: invalid JWT format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("auth: decode JWT payload: %w", err)
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("auth: unmarshal JWT claims: %w", err)
+	}
+	if claims.Sub == "" {
+		return nil, errors.New("auth: missing sub claim")
+	}
+	return &auth.KeycloakClaims{Sub: claims.Sub}, nil
 }
 
 func mustEnv(key string) string {

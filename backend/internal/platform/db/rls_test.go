@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 )
 
 // sharedCtr is the postgres container shared across all RLS tests.
-// It is initialised on the first call to startContainer.
+// Initialised once in TestMain; never in per-test helpers.
 var (
 	sharedCtr    *tcpostgres.PostgresContainer
 	runtimePool  *Pool // app_runtime — subject to RLS
@@ -24,22 +25,6 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m,
-		// testcontainers starts background log-streaming goroutines; ignore them.
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*DockerContainer).followOutput"),
-		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*DockerContainer).tailOrFollowOutput"),
-	)
-}
-
-// startContainer starts the shared PostgreSQL container and initialises pools.
-// Subsequent calls within the same test binary are no-ops.
-func startContainer(t *testing.T) {
-	t.Helper()
-
-	if sharedCtr != nil {
-		return
-	}
-
 	ctx := context.Background()
 
 	ctr, err := tcpostgres.Run(ctx,
@@ -49,37 +34,101 @@ func startContainer(t *testing.T) {
 		tcpostgres.WithPassword("postgres"),
 		tcpostgres.BasicWaitStrategies(),
 	)
-	require.NoError(t, err, "start postgres container")
-
-	t.Cleanup(func() {
-		_ = ctr.Terminate(context.Background())
-	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "start postgres container: %v\n", err)
+		os.Exit(1)
+	}
 
 	superDSN, err := ctr.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "get connection string: %v\n", err)
+		_ = ctr.Terminate(ctx)
+		os.Exit(1)
+	}
 
-	bootstrapSchema(t, ctx, superDSN)
+	bootstrapSchemaMain(ctx, superDSN)
 
-	migratorPool = newBarePool(t, ctx, buildDSN(superDSN, "app_migrator", "migrator_secret"))
-	runtimePool = newBarePool(t, ctx, buildDSN(superDSN, "app_runtime", "runtime_secret"))
-
-	t.Cleanup(func() {
-		migratorPool.inner.Close()
-		runtimePool.inner.Close()
-	})
-
+	runtimePool = newBarePoolMain(ctx, superDSN, "app_runtime", "runtime_secret")
+	migratorPool = newBarePoolMain(ctx, superDSN, "app_migrator", "migrator_secret")
 	sharedCtr = ctr
+
+	rc := m.Run()
+
+	// Teardown before goroutine-leak check so testcontainers goroutines exit.
+	migratorPool.inner.Close()
+	runtimePool.inner.Close()
+	_ = ctr.Terminate(ctx)
+
+	if err := goleak.Find(
+		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*DockerContainer).followOutput"),
+		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*DockerContainer).tailOrFollowOutput"),
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "goleak: %v\n", err)
+		rc = 1
+	}
+
+	os.Exit(rc)
 }
 
-// bootstrapSchema creates roles, the test table, FORCE RLS, and grants.
-func bootstrapSchema(t *testing.T, ctx context.Context, superDSN string) {
-	t.Helper()
-
+// bootstrapSchemaMain is the TestMain-level variant that uses fmt.Fprintf+os.Exit
+// instead of t.Fatal (unavailable outside a test).
+func bootstrapSchemaMain(ctx context.Context, superDSN string) {
 	conn, err := pgx.Connect(ctx, superDSN)
-	require.NoError(t, err, "superuser connect for bootstrap")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap: superuser connect: %v\n", err)
+		os.Exit(1)
+	}
 	defer conn.Close(ctx)
 
-	stmts := []string{
+	stmts := bootstrapStmts()
+	for _, stmt := range stmts {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			fmt.Fprintf(os.Stderr, "bootstrap stmt failed: %s\n  error: %v\n", truncate(stmt, 80), err)
+			os.Exit(1)
+		}
+	}
+}
+
+// newBarePoolMain creates a *Pool (no fx lifecycle) for tests.
+// It accepts a base DSN plus explicit user and password so it can override the
+// superuser credentials without going through a ConnString round-trip (which
+// would discard the mutations — ConnString() returns the original parsed string).
+func newBarePoolMain(ctx context.Context, baseDSN, user, password string) *Pool {
+	cfg, err := pgxpool.ParseConfig(baseDSN)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse pool config: %v\n", err)
+		os.Exit(1)
+	}
+	// Mutate the struct fields directly; never call ConnString() after mutation.
+	cfg.ConnConfig.User = user
+	cfg.ConnConfig.Password = password
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	cfg.MaxConns = 10
+
+	inner, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create pool (%s): %v\n", user, err)
+		os.Exit(1)
+	}
+	if err := inner.Ping(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "ping pool (%s): %v\n", user, err)
+		os.Exit(1)
+	}
+	return &Pool{inner: inner}
+}
+
+// startContainer is kept for backward compatibility; it is now a no-op
+// because the container is always started in TestMain.
+func startContainer(t *testing.T) {
+	t.Helper()
+	if sharedCtr == nil {
+		t.Fatal("postgres container not initialised — TestMain setup failed")
+	}
+}
+
+// bootstrapStmts returns the SQL statements needed to set up the test schema.
+func bootstrapStmts() []string {
+	return []string{
 		`DO $$ BEGIN
 			CREATE ROLE app_migrator LOGIN PASSWORD 'migrator_secret';
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
@@ -101,48 +150,17 @@ func bootstrapSchema(t *testing.T, ctx context.Context, superDSN string) {
 
 		`DROP POLICY IF EXISTS item_isolation ON test_items`,
 
-		// current_setting(..., true) → NULL when GUC absent (missing_ok = true).
-		// NULL::uuid cast → NULL; tenant_id = NULL → false → row hidden.
+		// NULLIF converts empty-string to NULL (PostgreSQL returns '' for unset custom GUC,
+		// not NULL, after a pooled connection resets LOCAL state post-commit).
+		// NULL::uuid → NULL; tenant_id = NULL is NULL (falsy) → row hidden.
 		`CREATE POLICY item_isolation ON test_items
 			FOR ALL TO app_runtime
-			USING  (tenant_id = current_setting('app.tenant_id', true)::uuid)
-			WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid)`,
+			USING  (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+			WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)`,
 
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE test_items TO app_runtime`,
 		`GRANT SELECT ON TABLE test_items TO app_migrator`,
 	}
-
-	for _, stmt := range stmts {
-		_, err := conn.Exec(ctx, stmt)
-		require.NoErrorf(t, err, "bootstrap: %s", truncate(stmt, 80))
-	}
-}
-
-// newBarePool creates a *Pool (no fx lifecycle) suitable for tests.
-func newBarePool(t *testing.T, ctx context.Context, dsn string) *Pool {
-	t.Helper()
-
-	cfg, err := pgxpool.ParseConfig(dsn)
-	require.NoError(t, err)
-	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	cfg.MaxConns = 10
-
-	inner, err := pgxpool.NewWithConfig(ctx, cfg)
-	require.NoError(t, err)
-	require.NoError(t, inner.Ping(ctx))
-
-	return &Pool{inner: inner}
-}
-
-// buildDSN rewrites the user/password in an existing DSN.
-func buildDSN(baseDSN, user, password string) string {
-	cfg, err := pgxpool.ParseConfig(baseDSN)
-	if err != nil {
-		panic(fmt.Sprintf("buildDSN parse: %v", err))
-	}
-	cfg.ConnConfig.User = user
-	cfg.ConnConfig.Password = password
-	return cfg.ConnString()
 }
 
 func truncate(s string, n int) string {

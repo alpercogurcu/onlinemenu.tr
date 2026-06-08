@@ -30,11 +30,11 @@ ALTER TABLE memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memberships FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY memberships_read ON memberships FOR SELECT TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 CREATE POLICY memberships_write ON memberships FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- ============================================================
 -- Deferred persons RLS (requires memberships to exist — see 000001)
@@ -46,7 +46,7 @@ CREATE POLICY persons_select ON persons FOR SELECT TO app_runtime
         current_setting('app.tenant_id', TRUE) = '00000000-0000-0000-0000-000000000000'
         OR id IN (
             SELECT person_id FROM memberships
-            WHERE tenant_id = current_setting('app.tenant_id', TRUE)::uuid
+            WHERE tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid
         )
     );
 
@@ -55,7 +55,7 @@ CREATE POLICY persons_update ON persons FOR UPDATE TO app_runtime
         current_setting('app.tenant_id', TRUE) = '00000000-0000-0000-0000-000000000000'
         OR id IN (
             SELECT person_id FROM memberships
-            WHERE tenant_id = current_setting('app.tenant_id', TRUE)::uuid
+            WHERE tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid
         )
     )
     WITH CHECK (true);

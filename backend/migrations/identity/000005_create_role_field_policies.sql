@@ -25,9 +25,9 @@ ALTER TABLE role_field_policies FORCE ROW LEVEL SECURITY;
 CREATE POLICY role_field_policies_select ON role_field_policies FOR SELECT TO app_runtime
     USING (
         tenant_id IS NULL
-        OR tenant_id = current_setting('app.tenant_id', TRUE)::uuid
+        OR tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid
     );
 
 CREATE POLICY role_field_policies_write ON role_field_policies FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);

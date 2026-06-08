@@ -27,11 +27,11 @@ ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
 
 -- app_runtime may only see its own tenant row.
 CREATE POLICY tenant_read  ON tenants FOR SELECT TO app_runtime
-    USING  (id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 CREATE POLICY tenant_write ON tenants FOR ALL    TO app_runtime
-    USING  (id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- ============================================================
 -- branches
@@ -53,11 +53,11 @@ ALTER TABLE branches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE branches FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY branch_read  ON branches FOR SELECT TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 CREATE POLICY branch_write ON branches FOR ALL    TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- ============================================================
 -- branch_settings
@@ -97,8 +97,8 @@ ALTER TABLE branch_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE branch_settings FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY branch_settings_read  ON branch_settings FOR SELECT TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 CREATE POLICY branch_settings_write ON branch_settings FOR ALL    TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);

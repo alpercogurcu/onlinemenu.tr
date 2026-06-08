@@ -251,7 +251,7 @@ ALTER TABLE tenant_documents FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_documents_read ON tenant_documents
     FOR SELECT TO app_runtime
     USING (
-        tenant_id = current_setting('app.tenant_id', TRUE)::uuid
+        tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid
         AND deleted_at IS NULL
     );
 
@@ -259,8 +259,8 @@ CREATE POLICY tenant_documents_read ON tenant_documents
 -- Silme işlemi hard delete değil; uygulama deleted_at'ı günceller (UPDATE yolu).
 CREATE POLICY tenant_documents_write ON tenant_documents
     FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- Index'ler
 -- Tenant'ın tüm aktif belgelerini listeleyen ana sorgu.

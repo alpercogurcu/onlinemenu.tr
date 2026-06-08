@@ -109,13 +109,13 @@ ALTER TABLE branch_documents FORCE ROW LEVEL SECURITY;
 
 -- Read: tenant sees only its own branches' documents; deleted records are hidden.
 CREATE POLICY branch_docs_read ON branch_documents FOR SELECT TO app_runtime
-    USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid AND deleted_at IS NULL);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid AND deleted_at IS NULL);
 
 -- Write: INSERT/UPDATE/DELETE both the existing row and the new row must belong to the active tenant.
 -- Deletion is performed as an UPDATE setting deleted_at (soft delete), not as a hard DELETE.
 CREATE POLICY branch_docs_write ON branch_documents FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- Primary listing query: all active documents for a given branch.
 CREATE INDEX branch_docs_branch_idx
@@ -206,11 +206,11 @@ ALTER TABLE billing_integrators ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing_integrators FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY billing_int_read ON billing_integrators FOR SELECT TO app_runtime
-    USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid AND deleted_at IS NULL);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid AND deleted_at IS NULL);
 
 CREATE POLICY billing_int_write ON billing_integrators FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- Tenant-level uniqueness: at most one active record per provider at tenant scope.
 -- Partial index on branch_id IS NULL separates tenant-level from branch-level rows.
@@ -286,11 +286,11 @@ ALTER TABLE branch_regular_hours FORCE ROW LEVEL SECURITY;
 -- Read policy intentionally does NOT filter deleted_at — this table has no soft delete.
 -- Rows are replaced wholesale when the schedule is updated.
 CREATE POLICY branch_hours_read ON branch_regular_hours FOR SELECT TO app_runtime
-    USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 CREATE POLICY branch_hours_write ON branch_regular_hours FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- Weekly schedule lookup by branch: covers both full-week fetch and single-day lookup.
 CREATE INDEX branch_regular_hours_branch_idx
@@ -340,11 +340,11 @@ ALTER TABLE branch_special_hours ENABLE ROW LEVEL SECURITY;
 ALTER TABLE branch_special_hours FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY branch_special_hours_read ON branch_special_hours FOR SELECT TO app_runtime
-    USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 CREATE POLICY branch_special_hours_write ON branch_special_hours FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);
 
 -- Primary lookup: fetch a branch's special override for a specific date or date range.
 CREATE INDEX branch_special_hours_date_idx

@@ -31,10 +31,10 @@ ALTER TABLE roles FORCE ROW LEVEL SECURITY;
 CREATE POLICY roles_select ON roles FOR SELECT TO app_runtime
     USING (
         tenant_id IS NULL
-        OR tenant_id = current_setting('app.tenant_id', TRUE)::uuid
+        OR tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid
     );
 
 -- Only tenant's own roles can be inserted/updated/deleted.
 CREATE POLICY roles_write ON roles FOR ALL TO app_runtime
-    USING  (tenant_id = current_setting('app.tenant_id', TRUE)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING  (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid);

@@ -1,0 +1,169 @@
+// Package repo provides persistence for the payment module.
+package repo
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"onlinemenu.tr/internal/modules/payment/domain"
+)
+
+// ErrNotFound is returned when a payment row is not found.
+var ErrNotFound = errors.New("payment/repo: not found")
+
+// ErrDuplicateIdempotencyKey is returned when the idempotency key already exists.
+var ErrDuplicateIdempotencyKey = errors.New("payment/repo: duplicate idempotency key")
+
+// PaymentRepo handles persistence for Payment and FiscalReceipt aggregates.
+type PaymentRepo struct{}
+
+func NewPaymentRepo() *PaymentRepo { return &PaymentRepo{} }
+
+// Create inserts a new payment row and returns the persisted record.
+func (r *PaymentRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Payment) (domain.Payment, error) {
+	p.ID = uuid.New()
+	p.Status = domain.PaymentStatusPending
+	p.CreatedAt = time.Now().UTC()
+
+	_, err := tx.Exec(ctx, `
+		INSERT INTO payments
+			(id, tenant_id, branch_id, check_id, idempotency_key, method, status,
+			 amount_total, currency, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, p.ID, p.TenantID, p.BranchID, p.CheckID, p.IdempotencyKey,
+		string(p.Method), string(p.Status), p.AmountTotal, p.Currency, p.CreatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.Payment{}, ErrDuplicateIdempotencyKey
+		}
+		return domain.Payment{}, fmt.Errorf("payment/repo: create: %w", err)
+	}
+	return p, nil
+}
+
+// GetByID returns the payment with the given ID.
+func (r *PaymentRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Payment, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
+		       method, status, amount_total, currency, fiscal_receipt_id,
+		       created_at, completed_at
+		FROM payments WHERE id = $1
+	`, id)
+	p, err := scanPayment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Payment{}, ErrNotFound
+	}
+	return p, err
+}
+
+// GetByIdempotencyKey returns the payment matching the tenant-scoped key.
+func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, key string) (domain.Payment, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
+		       method, status, amount_total, currency, fiscal_receipt_id,
+		       created_at, completed_at
+		FROM payments WHERE tenant_id = $1 AND idempotency_key = $2
+	`, tenantID, key)
+	p, err := scanPayment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Payment{}, ErrNotFound
+	}
+	return p, err
+}
+
+// Complete marks the payment as completed and links the fiscal receipt.
+func (r *PaymentRepo) Complete(ctx context.Context, tx pgx.Tx, paymentID, receiptID uuid.UUID) error {
+	now := time.Now().UTC()
+	tag, err := tx.Exec(ctx, `
+		UPDATE payments
+		SET status = 'completed', fiscal_receipt_id = $2, completed_at = $3
+		WHERE id = $1
+	`, paymentID, receiptID, now)
+	if err != nil {
+		return fmt.Errorf("payment/repo: complete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// InsertFiscalReceipt persists a fiscal receipt and returns its ID.
+func (r *PaymentRepo) InsertFiscalReceipt(ctx context.Context, tx pgx.Tx, rec domain.FiscalReceipt) (uuid.UUID, error) {
+	id := uuid.New()
+	data, err := json.Marshal(rec.ReceiptData)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("payment/repo: marshal receipt data: %w", err)
+	}
+	// Pass as string so pgx sends it as text; Postgres coerces text → JSONB.
+	// Passing []byte in simple-protocol mode would send hex-bytea, not valid JSON.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO fiscal_receipts
+			(id, tenant_id, payment_id, device_type, receipt_number, receipt_data, issued_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, id, rec.TenantID, rec.PaymentID, rec.DeviceType, rec.ReceiptNumber, string(data), rec.IssuedAt)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("payment/repo: insert fiscal receipt: %w", err)
+	}
+	return id, nil
+}
+
+// TotalPaidForCheck returns the sum of completed payments for a check.
+func (r *PaymentRepo) TotalPaidForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
+	var total int64
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(amount_total), 0)
+		FROM payments
+		WHERE tenant_id = $1 AND check_id = $2 AND status = 'completed'
+	`, tenantID, checkID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("payment/repo: total paid for check: %w", err)
+	}
+	return total, nil
+}
+
+// InsertOutbox records a payment domain event within the caller's transaction.
+func InsertOutbox(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, aggregateType, aggregateID, eventType string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("payment/repo: marshal outbox payload: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO payment_outbox (event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, uuid.New(), tenantID, aggregateType, aggregateID, eventType, string(data))
+	if err != nil {
+		return fmt.Errorf("payment/repo: insert outbox: %w", err)
+	}
+	return nil
+}
+
+func scanPayment(row pgx.Row) (domain.Payment, error) {
+	var p domain.Payment
+	var method, status string
+	err := row.Scan(
+		&p.ID, &p.TenantID, &p.BranchID, &p.CheckID, &p.IdempotencyKey,
+		&method, &status, &p.AmountTotal, &p.Currency, &p.FiscalReceiptID,
+		&p.CreatedAt, &p.CompletedAt,
+	)
+	if err != nil {
+		return domain.Payment{}, err
+	}
+	p.Method = domain.PaymentMethod(method)
+	p.Status = domain.PaymentStatus(status)
+	return p, nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == "23505"
+	}
+	return false
+}

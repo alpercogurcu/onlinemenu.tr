@@ -26,6 +26,7 @@ var moduleOrder = []string{
 	"identity",
 	"catalog",
 	"pos",
+	"payment",
 }
 
 func main() {

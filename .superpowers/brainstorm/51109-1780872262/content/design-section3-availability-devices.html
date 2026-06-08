@@ -1,0 +1,327 @@
+<h2>Bölüm 3 — Catalog Availability & Device Roles</h2>
+<p class="subtitle">Ürün müsaitlik modeli · Auto-close kuralı · Cihaz rol sistemi</p>
+
+<style>
+.flow-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.8px; color: #888; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.flow-title::after { content: ''; flex: 1; height: 1px; background: #2a2a3a; }
+
+.model-block {
+  background: #0d1117;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.9;
+  margin: 8px 0;
+}
+.mf { color: #4a9eff; }
+.mt { color: #f39c12; }
+.mc { color: #555; }
+.mn { color: #2ecc71; }
+.mh { color: #e74c3c; }
+
+/* Priority cascade */
+.priority-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+.priority-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.p-num {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800;
+  flex-shrink: 0;
+}
+.p1 { background: #e74c3c33; border: 1px solid #e74c3c66; }
+.p1 .p-num { background: #e74c3c; color: white; }
+.p2 { background: #f39c1233; border: 1px solid #f39c1266; }
+.p2 .p-num { background: #f39c12; color: white; }
+.p3 { background: #2ecc7133; border: 1px solid #2ecc7166; }
+.p3 .p-num { background: #2ecc71; color: white; }
+.p-label { font-weight: 700; min-width: 180px; }
+.p-code  { font-family: monospace; font-size: 10px; opacity: 0.7; flex: 1; }
+.p-wins  { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 3px; }
+
+/* Channel availability grid */
+.avail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr 1fr 1fr;
+  gap: 1px;
+  background: #2a2a3a;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 11px;
+  margin: 10px 0;
+}
+.avail-cell {
+  background: var(--bg-secondary, #1e1e2e);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avail-cell.header {
+  background: #ffffff08;
+  font-size: 10px;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.avail-cell.product-name { justify-content: flex-start; font-weight: 600; }
+.avail-open  { color: #2ecc71; font-size: 13px; }
+.avail-closed { color: #e74c3c; font-size: 13px; }
+.avail-auto  { color: #f39c12; font-size: 11px; }
+
+/* Permission badge */
+.perm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  margin: 4px 0;
+  font-size: 11px;
+  background: var(--bg-secondary, #1e1e2e);
+}
+.perm-role {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+.role-kasa   { background: #e74c3c22; color: #e74c3c; border: 1px solid #e74c3c44; }
+.role-mutfak { background: #9b59b622; color: #9b59b6; border: 1px solid #9b59b644; }
+.role-garson { background: #4a9eff22; color: #4a9eff; border: 1px solid #4a9eff44; }
+.role-admin  { background: #2ecc7122; color: #2ecc71; border: 1px solid #2ecc7144; }
+
+/* Device table */
+.device-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0;
+}
+.device-card {
+  background: var(--bg-secondary, #1e1e2e);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+}
+.device-name { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.device-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.device-detail { font-size: 10px; color: #666; font-family: monospace; line-height: 1.7; }
+
+/* WS routing */
+.ws-flow {
+  background: #0d1117;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-size: 11px;
+  line-height: 2;
+  font-family: monospace;
+}
+.ws-event  { color: #f39c12; }
+.ws-arrow  { color: #555; }
+.ws-channel{ color: #4a9eff; }
+.ws-recv   { color: #2ecc71; }
+.ws-skip   { color: #444; text-decoration: line-through; }
+</style>
+
+<!-- AVAILABILITY DATA MODEL -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Ürün Müsaitlik — Tablolar</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div>
+      <div style="font-size:10px;color:#888;margin-bottom:4px;font-family:monospace">products (catalog modülü)</div>
+      <div class="model-block">
+        <span class="mf">id</span>                        <span class="mt">UUID PK</span><br>
+        <span class="mf">branch_id</span>                 <span class="mt">UUID</span><br>
+        <span class="mc">... mevcut alanlar ...</span><br>
+        <span class="mn">auto_close_on_zero_stock</span>  <span class="mt">BOOL</span>
+        <span class="mc"> DEFAULT false</span>
+      </div>
+      <div style="font-size:10px;color:#888;padding:0 2px">
+        Şube sahibi/müdürü bu ayarı açarsa stok 0 olunca sistem otomatik kapatır. Çoğu şubede kapalı kalır.
+      </div>
+    </div>
+    <div>
+      <div style="font-size:10px;color:#888;margin-bottom:4px;font-family:monospace">product_channel_availability (yeni tablo)</div>
+      <div class="model-block">
+        <span class="mf">product_id</span>   <span class="mt">UUID</span><br>
+        <span class="mf">branch_id</span>    <span class="mt">UUID</span><br>
+        <span class="mn">channel</span>      <span class="mt">TEXT</span>
+        <span class="mc"> -- 'pos'|'delivery'|'yemeksepeti'|...</span><br>
+        <span class="mn">is_available</span> <span class="mt">BOOL</span>
+        <span class="mc"> DEFAULT true</span><br>
+        <span class="mf">changed_by</span>   <span class="mt">UUID</span>
+        <span class="mc"> -- kim kapattı (audit)</span><br>
+        <span class="mf">changed_at</span>   <span class="mt">TIMESTAMPTZ</span><br>
+        <span class="mc">PRIMARY KEY (product_id, branch_id, channel)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PRIORITY CASCADE -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Öncelik Sırası — Kim Kazanır?</div>
+  <div class="priority-stack">
+    <div class="priority-row p1">
+      <div class="p-num">1</div>
+      <span class="p-label">Manuel kapatma</span>
+      <span class="p-code">is_available = false (product_channel_availability)</span>
+      <span class="p-wins" style="background:#e74c3c33;color:#e74c3c">HER ZAMAN KAZANIR</span>
+    </div>
+    <div class="priority-row p2">
+      <div class="p-num">2</div>
+      <span class="p-label">Auto-close (stok = 0)</span>
+      <span class="p-code">auto_close_on_zero_stock = true AND stock ≤ 0</span>
+      <span class="p-wins" style="background:#f39c1233;color:#f39c12">Manuel açık yazarsa ezilir</span>
+    </div>
+    <div class="priority-row p3">
+      <div class="p-num">3</div>
+      <span class="p-label">Varsayılan</span>
+      <span class="p-code">kayıt yok = açık</span>
+      <span class="p-wins" style="background:#2ecc7133;color:#2ecc71">AÇIK</span>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#888;padding:2px 4px">
+    Tablo satırı sadece <strong style="color:#fff">kapalı veya override edilmiş</strong> ürünler için yazılır — açık ürünler için kayıt yok. Bu "closed set" yaklaşımı insert sayısını minimumda tutar.
+  </div>
+</div>
+
+<!-- CHANNEL MATRIX EXAMPLE -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Kanal Bazlı Müsaitlik — Örnek</div>
+  <div class="avail-grid">
+    <div class="avail-cell header">Ürün</div>
+    <div class="avail-cell header">POS</div>
+    <div class="avail-cell header">Yemeksepeti</div>
+    <div class="avail-cell header">Getir</div>
+    <div class="avail-cell header">Trendyol</div>
+
+    <div class="avail-cell product-name">Mercimek Çorbası</div>
+    <div class="avail-cell"><span class="avail-open">✓</span></div>
+    <div class="avail-cell"><span class="avail-open">✓</span></div>
+    <div class="avail-cell"><span class="avail-open">✓</span></div>
+    <div class="avail-cell"><span class="avail-open">✓</span></div>
+
+    <div class="avail-cell product-name">Izgara Köfte</div>
+    <div class="avail-cell"><span class="avail-open">✓</span></div>
+    <div class="avail-cell"><span class="avail-closed">✗</span></div>
+    <div class="avail-cell"><span class="avail-closed">✗</span></div>
+    <div class="avail-cell"><span class="avail-open">✓</span></div>
+
+    <div class="avail-cell product-name">Limonata <span style="font-size:9px;color:#f39c12">(auto)</span></div>
+    <div class="avail-cell"><span class="avail-auto">stok=0</span></div>
+    <div class="avail-cell"><span class="avail-closed">✗</span></div>
+    <div class="avail-cell"><span class="avail-closed">✗</span></div>
+    <div class="avail-cell"><span class="avail-closed">✗</span></div>
+  </div>
+  <div style="font-size:10px;color:#888;margin-top:4px">
+    Izgara Köfte'yi mutfak Yemeksepeti/Getir'e kapattı ama Trendyol açık bıraktı. Bu 2 kayıt demek (<code>channel='yemeksepeti'</code>, <code>channel='getir'</code>). Trendyol için kayıt yok = açık.
+  </div>
+</div>
+
+<!-- PERMISSION -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Yetki — Kim Kapayabilir?</div>
+  <div class="perm-row"><span class="perm-role role-kasa">kasa</span> <span>✓ <code>product.availability.write</code> — evet</span></div>
+  <div class="perm-row"><span class="perm-role role-mutfak">mutfak</span> <span>✓ <code>product.availability.write</code> — evet (stok tükendi anında KDS'den yapılabilir)</span></div>
+  <div class="perm-row"><span class="perm-role role-garson">garson</span> <span style="color:#666">✗ — hayır (sipariş alıyor, stok kararı vermiyor)</span></div>
+  <div class="perm-row"><span class="perm-role role-admin">admin / müdür</span> <span>✓ — evet, her zaman</span></div>
+</div>
+
+<!-- DEVICE ROLES -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Device Role Sistemi — MVP</div>
+  <div class="model-block" style="margin-bottom:10px">
+    <span class="mc">-- devices tablosu (SEC-004 pairing'e bağlı)</span><br>
+    <span class="mf">id</span>           <span class="mt">UUID PK</span><br>
+    <span class="mf">tenant_id</span>    <span class="mt">UUID NOT NULL</span><br>
+    <span class="mf">branch_id</span>    <span class="mt">UUID NOT NULL</span><br>
+    <span class="mf">name</span>         <span class="mt">TEXT NOT NULL</span>    <span class="mc">-- "Kasa 1", "Mutfak Ekranı"</span><br>
+    <span class="mn">roles</span>        <span class="mt">TEXT[] NOT NULL</span> <span class="mc">-- ['kasa'] | ['garson'] | ['mutfak'] | ['kasa','garson']</span><br>
+    <span class="mf">device_type</span>  <span class="mt">TEXT NOT NULL</span>    <span class="mc">-- 'tablet' | 'kds_screen' | 'desktop' | 'pos_terminal'</span><br>
+    <span class="mf">is_active</span>    <span class="mt">BOOL DEFAULT true</span><br>
+    <span class="mf">last_seen_at</span> <span class="mt">TIMESTAMPTZ</span>     <span class="mc">-- heartbeat</span><br>
+    <span class="mc">-- pairing alanları SEC-004'ten: fingerprint, token, paired_at ...</span>
+  </div>
+
+  <div class="device-cards">
+    <div class="device-card">
+      <div class="device-name">🖥️ Kasa Cihazı</div>
+      <div class="device-roles">
+        <span class="perm-role role-kasa">kasa</span>
+      </div>
+      <div class="device-detail">
+        Delivery accept bildirimi ✓<br>
+        Ödeme terminali ataması ✓<br>
+        Gün açma/kapama ✓<br>
+        Kasa raporu ✓
+      </div>
+    </div>
+    <div class="device-card">
+      <div class="device-name">📱 Garson Tableti</div>
+      <div class="device-roles">
+        <span class="perm-role role-garson">garson</span>
+      </div>
+      <div class="device-detail">
+        Masa/adisyon yönetimi ✓<br>
+        Sipariş alma ✓<br>
+        Delivery accept YOK ✗<br>
+        Ödeme işlemi YOK ✗
+      </div>
+    </div>
+    <div class="device-card">
+      <div class="device-name">📺 Mutfak Ekranı</div>
+      <div class="device-roles">
+        <span class="perm-role role-mutfak">mutfak</span>
+      </div>
+      <div class="device-detail">
+        KDS sipariş görüntüleme ✓<br>
+        Ürün müsaitlik değiştirme ✓<br>
+        Kanal bilgisi (YS/Getir) ✓<br>
+        Ödeme/kasa işlemi YOK ✗
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- WS ROUTING -->
+<div style="margin-bottom: 8px">
+  <div class="flow-title">WebSocket Kanal Routing — Role-based</div>
+  <div class="ws-flow">
+    <span class="ws-event">delivery.order.received.v1</span> <span class="ws-arrow">──▶</span> <span class="ws-channel">ws/branch/{id}/role/kasa</span><br>
+    <span class="ws-arrow" style="padding-left:20px">└──▶</span> <span class="ws-recv">Kasa 1</span> <span style="color:#555">✓ alır</span>  &nbsp; <span class="ws-recv">Kasa 2</span> <span style="color:#555">✓ alır</span><br>
+    <span class="ws-arrow" style="padding-left:20px">└──▶</span> <span class="ws-skip">Garson Tableti</span> <span style="color:#333">✗ almaz</span>  &nbsp; <span class="ws-skip">Mutfak Ekranı</span> <span style="color:#333">✗ almaz</span><br>
+    <br>
+    <span class="ws-event">pos.order.created.v1</span> <span class="ws-arrow">──▶</span> <span class="ws-channel">ws/branch/{id}/role/mutfak</span><br>
+    <span class="ws-arrow" style="padding-left:20px">└──▶</span> <span class="ws-recv">Mutfak Ekranı</span> <span style="color:#555">✓ alır (kanal bilgisiyle)</span><br>
+    <br>
+    <span class="ws-event">catalog.availability.changed.v1</span> <span class="ws-arrow">──▶</span> <span class="ws-channel">ws/branch/{id}/role/kasa</span> <span style="color:#555">+ </span><span class="ws-channel">role/garson</span><br>
+    <span class="ws-arrow" style="padding-left:20px">└──▶</span> <span style="color:#888">Tüm cihazlar menü refresh alır</span>
+  </div>
+</div>

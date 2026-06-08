@@ -1,0 +1,400 @@
+package repo_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	pgxpool "github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.uber.org/goleak"
+
+	"onlinemenu.tr/internal/modules/catalog/domain"
+	"onlinemenu.tr/internal/modules/catalog/repo"
+	"onlinemenu.tr/internal/platform/db"
+)
+
+var (
+	sharedPool *db.Pool
+	tenantA    = uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001")
+	tenantB    = uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000001")
+)
+
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+
+	ctr, err := tcpostgres.Run(ctx,
+		"pgvector/pgvector:pg17",
+		tcpostgres.WithDatabase("testdb"),
+		tcpostgres.WithUsername("postgres"),
+		tcpostgres.WithPassword("postgres"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "start postgres container: %v\n", err)
+		os.Exit(1)
+	}
+
+	superDSN, err := ctr.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "get connection string: %v\n", err)
+		_ = ctr.Terminate(ctx)
+		os.Exit(1)
+	}
+
+	if err := bootstrapRoles(ctx, superDSN); err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap roles: %v\n", err)
+		_ = ctr.Terminate(ctx)
+		os.Exit(1)
+	}
+
+	if err := runMigrations(superDSN); err != nil {
+		fmt.Fprintf(os.Stderr, "run migrations: %v\n", err)
+		_ = ctr.Terminate(ctx)
+		os.Exit(1)
+	}
+
+	sharedPool = newPool(ctx, superDSN, "app_runtime", "runtime_secret")
+
+	rc := m.Run()
+
+	sharedPool.Close()
+	_ = ctr.Terminate(ctx)
+
+	if err := goleak.Find(
+		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*DockerContainer).followOutput"),
+		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*DockerContainer).tailOrFollowOutput"),
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "goleak: %v\n", err)
+		rc = 1
+	}
+
+	os.Exit(rc)
+}
+
+// migrationsBase returns the absolute path to backend/migrations.
+func migrationsBase() string {
+	_, file, _, _ := runtime.Caller(0)
+	// file = .../backend/internal/modules/catalog/repo/integration_test.go
+	// walk up 4 directories: repo/ → catalog/ → modules/ → internal/ → backend/
+	base := filepath.Dir(file)
+	for range 4 {
+		base = filepath.Dir(base)
+	}
+	return filepath.Join(base, "migrations")
+}
+
+func runMigrations(superDSN string) error {
+	// Migrations must run as app_migrator so that DEFAULT PRIVILEGES apply and
+	// tables are owned by app_migrator (enabling app_runtime SELECT/INSERT/...).
+	cfg, err := pgxpool.ParseConfig(superDSN)
+	if err != nil {
+		return fmt.Errorf("parse dsn: %w", err)
+	}
+	cfg.ConnConfig.User = "app_migrator"
+	cfg.ConnConfig.Password = "migrator_secret"
+
+	// Rebuild the DSN string with migrator credentials for golang-migrate.
+	migratorDSN := fmt.Sprintf("pgx5://%s:%s@%s/%s?sslmode=disable",
+		cfg.ConnConfig.User, cfg.ConnConfig.Password,
+		cfg.ConnConfig.Host+fmt.Sprintf(":%d", cfg.ConnConfig.Port),
+		cfg.ConnConfig.Database,
+	)
+
+	migrateModules := []string{"tenant", "identity", "catalog"}
+	for _, mod := range migrateModules {
+		absPath := filepath.Join(migrationsBase(), mod)
+		src := fmt.Sprintf("file://%s", absPath)
+		table := fmt.Sprintf("schema_migrations_%s", mod)
+		dsn := fmt.Sprintf("%s&x-migrations-table=%s", migratorDSN, table)
+
+		m, err := migrate.New(src, dsn)
+		if err != nil {
+			return fmt.Errorf("migrate open %s: %w", mod, err)
+		}
+		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+			m.Close()
+			return fmt.Errorf("migrate up %s: %w", mod, err)
+		}
+		m.Close()
+	}
+	return nil
+}
+
+func bootstrapRoles(ctx context.Context, superDSN string) error {
+	conn, err := pgx.Connect(ctx, superDSN)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	stmts := []string{
+		`DO $$ BEGIN CREATE ROLE app_migrator LOGIN PASSWORD 'migrator_secret' BYPASSRLS;
+		 EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+		`DO $$ BEGIN CREATE ROLE app_runtime LOGIN PASSWORD 'runtime_secret' NOINHERIT;
+		 EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+		`GRANT USAGE ON SCHEMA public TO app_migrator, app_runtime`,
+		`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
+		`CREATE EXTENSION IF NOT EXISTS vector`,
+		`ALTER SCHEMA public OWNER TO app_migrator`,
+		`GRANT ALL ON SCHEMA public TO app_migrator`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE app_migrator IN SCHEMA public
+		 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_runtime`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE app_migrator IN SCHEMA public
+		 GRANT USAGE ON SEQUENCES TO app_runtime`,
+	}
+
+	for _, s := range stmts {
+		if _, err := conn.Exec(ctx, s); err != nil {
+			return fmt.Errorf("stmt failed %q: %w", s[:min(60, len(s))], err)
+		}
+	}
+	return nil
+}
+
+func newPool(ctx context.Context, baseDSN, user, password string) *db.Pool {
+	cfg, err := pgxpool.ParseConfig(baseDSN)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse pool config: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.ConnConfig.User = user
+	cfg.ConnConfig.Password = password
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	cfg.MaxConns = 5
+
+	p, err := db.NewPoolFromConfig(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create pool (%s): %v\n", user, err)
+		os.Exit(1)
+	}
+	return p
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ---------------------------------------------------------------------------
+// Category tests
+// ---------------------------------------------------------------------------
+
+func TestCategoryRepo_CreateAndGet(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewCategoryRepo()
+
+	cat := domain.Category{
+		TenantID:  tenantA,
+		Name:      "Başlangıçlar",
+		IsActive:  true,
+		SortOrder: 1,
+	}
+
+	var created domain.Category
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		created, err = r.Create(ctx, tx, cat)
+		return err
+	}))
+
+	assert.NotEqual(t, uuid.Nil, created.ID)
+	assert.Equal(t, "Başlangıçlar", created.Name)
+	assert.Equal(t, tenantA, created.TenantID)
+
+	// GetByID
+	var fetched domain.Category
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = r.GetByID(ctx, tx, created.ID)
+		return err
+	}))
+	assert.Equal(t, created.ID, fetched.ID)
+	assert.Equal(t, "Başlangıçlar", fetched.Name)
+}
+
+func TestCategoryRepo_TenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewCategoryRepo()
+
+	// Create a category for tenantB
+	var catB domain.Category
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tenantB, func(tx pgx.Tx) error {
+		var err error
+		catB, err = r.Create(ctx, tx, domain.Category{
+			TenantID: tenantB,
+			Name:     "tenantB-cat",
+			IsActive: true,
+		})
+		return err
+	}))
+
+	// tenantA must not see tenantB's category
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		_, err := r.GetByID(ctx, tx, catB.ID)
+		assert.ErrorIs(t, err, repo.ErrNotFound, "tenantA must not see tenantB category")
+		return nil
+	}))
+}
+
+func TestCategoryRepo_List(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewCategoryRepo()
+
+	tid := uuid.New()
+	names := []string{"Ana Yemekler", "Tatlılar", "İçecekler"}
+	for _, n := range names {
+		require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+			_, err := r.Create(ctx, tx, domain.Category{TenantID: tid, Name: n, IsActive: true})
+			return err
+		}))
+	}
+
+	var list []domain.Category
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		list, err = r.List(ctx, tx)
+		return err
+	}))
+	assert.Len(t, list, len(names))
+}
+
+// ---------------------------------------------------------------------------
+// Product tests
+// ---------------------------------------------------------------------------
+
+func TestProductRepo_CreateAndGet(t *testing.T) {
+	ctx := context.Background()
+	pr := repo.NewProductRepo()
+	cr := repo.NewCategoryRepo()
+
+	tid := uuid.New()
+
+	// Create a category first
+	var cat domain.Category
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		cat, err = cr.Create(ctx, tx, domain.Category{TenantID: tid, Name: "Test Kat", IsActive: true})
+		return err
+	}))
+
+	p := domain.Product{
+		TenantID:             tid,
+		CategoryID:           &cat.ID,
+		Name:                 "Adana Kebap",
+		PriceAmount:          18000, // 180 TL
+		Currency:             "TRY",
+		Unit:                 "porsiyon",
+		TaxRateBPS:           1000, // %10
+		IsActive:             true,
+		AutoCloseOnZeroStock: true,
+	}
+
+	var created domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		created, err = pr.Create(ctx, tx, p)
+		return err
+	}))
+
+	assert.NotEqual(t, uuid.Nil, created.ID)
+	assert.Equal(t, int64(18000), created.PriceAmount)
+	assert.True(t, created.AutoCloseOnZeroStock)
+
+	var fetched domain.Product
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = pr.GetByID(ctx, tx, created.ID)
+		return err
+	}))
+	assert.Equal(t, "Adana Kebap", fetched.Name)
+	require.NotNil(t, fetched.CategoryID)
+	assert.Equal(t, cat.ID, *fetched.CategoryID)
+}
+
+func TestProductRepo_TenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	pr := repo.NewProductRepo()
+
+	tidX := uuid.New()
+	tidY := uuid.New()
+
+	var prodX domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tidX, func(tx pgx.Tx) error {
+		var err error
+		prodX, err = pr.Create(ctx, tx, domain.Product{
+			TenantID:    tidX,
+			Name:        "X Product",
+			PriceAmount: 1000,
+			Currency:    "TRY",
+			Unit:        "adet",
+			TaxRateBPS:  1800,
+			IsActive:    true,
+		})
+		return err
+	}))
+
+	// tidY must not see tidX's product
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tidY, func(tx pgx.Tx) error {
+		_, err := pr.GetByID(ctx, tx, prodX.ID)
+		assert.ErrorIs(t, err, repo.ErrNotFound)
+		return nil
+	}))
+}
+
+func TestProductRepo_UpdateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	pr := repo.NewProductRepo()
+	tid := uuid.New()
+
+	var p domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		p, err = pr.Create(ctx, tx, domain.Product{
+			TenantID:    tid,
+			Name:        "Lahmacun",
+			PriceAmount: 5000,
+			Currency:    "TRY",
+			Unit:        "adet",
+			TaxRateBPS:  1800,
+			IsActive:    true,
+		})
+		return err
+	}))
+
+	// Update
+	p.Name = "Lahmacun XL"
+	p.PriceAmount = 7500
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		p, err = pr.Update(ctx, tx, p)
+		return err
+	}))
+	assert.Equal(t, "Lahmacun XL", p.Name)
+	assert.Equal(t, int64(7500), p.PriceAmount)
+
+	// Delete (soft delete via is_active=false)
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		return pr.Delete(ctx, tx, p.ID)
+	}))
+
+	var deleted domain.Product
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		deleted, err = pr.GetByID(ctx, tx, p.ID)
+		return err
+	}))
+	assert.False(t, deleted.IsActive)
+}

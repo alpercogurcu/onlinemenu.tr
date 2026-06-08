@@ -87,3 +87,23 @@ func NewPool(lc fx.Lifecycle, cfg Config, log *zap.Logger) (*Pool, error) {
 func (p *Pool) Inner() *pgxpool.Pool {
 	return p.inner
 }
+
+// NewPoolFromConfig constructs a Pool directly from a pgxpool.Config.
+// Intended for integration tests that need to override user/password after parsing.
+// Production code must use NewPool via fx.
+func NewPoolFromConfig(ctx context.Context, cfg *pgxpool.Config) (*Pool, error) {
+	inner, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("db: create pool from config: %w", err)
+	}
+	if err := inner.Ping(ctx); err != nil {
+		inner.Close()
+		return nil, fmt.Errorf("db: ping pool: %w", err)
+	}
+	return &Pool{inner: inner}, nil
+}
+
+// Close closes the underlying connection pool. Use in tests and graceful shutdown.
+func (p *Pool) Close() {
+	p.inner.Close()
+}

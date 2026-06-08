@@ -1,0 +1,12 @@
+{"type":"server-started","port":50390,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:50390","screen_dir":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content","state_dir":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/state"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/integration-arch.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/integration-modes.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/microservice-path.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/order-channel.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/waiting-1.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/design-section1-architecture.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/design-section2-delivery.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/design-section3-availability-devices.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/design-section4-modules.html"}
+{"type":"screen-added","file":"/Users/alpervural/Documents/GitHub/alper/projeler/onlinemenu.tr/.superpowers/brainstorm/51109-1780872262/content/waiting-2.html"}
+{"type":"server-stopped","reason":"idle timeout"}

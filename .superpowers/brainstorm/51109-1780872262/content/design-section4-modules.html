@@ -1,0 +1,321 @@
+<h2>Bölüm 4 — delivery modülü & platform/integration</h2>
+<p class="subtitle">Adapter mimarisi · Modül iç yapısı · platform/integration temel katmanı</p>
+
+<style>
+.flow-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.8px; color: #888; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.flow-title::after { content: ''; flex: 1; height: 1px; background: #2a2a3a; }
+
+.code-block {
+  background: #0d1117;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: monospace;
+  font-size: 10.5px;
+  line-height: 1.85;
+  margin: 8px 0;
+}
+.ck  { color: #569cd6; }  /* keyword */
+.ct  { color: #4ec9b0; }  /* type */
+.cf  { color: #dcdcaa; }  /* function/method */
+.cs  { color: #ce9178; }  /* string */
+.cc  { color: #555;    }  /* comment */
+.ci  { color: #9cdcfe; }  /* identifier */
+.cn  { color: #2ecc71; }  /* new/added */
+
+/* Directory tree */
+.dir-tree {
+  background: #0d1117;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.9;
+}
+.dir-folder { color: #f39c12; }
+.dir-file   { color: #ccc; }
+.dir-new    { color: #2ecc71; }
+.dir-comment{ color: #555; font-size: 10px; }
+
+/* Two column */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+
+/* Adapter card */
+.adapter-card {
+  background: var(--bg-secondary, #1e1e2e);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+}
+.adapter-title { font-weight: 700; margin-bottom: 6px; font-size: 12px; }
+.adapter-method {
+  font-family: monospace;
+  font-size: 10px;
+  color: #888;
+  line-height: 1.8;
+}
+.adapter-method .done { color: #2ecc71; }
+.adapter-method .todo { color: #555; }
+
+/* Platform integration chips */
+.platform-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.p-chip {
+  padding: 5px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: monospace;
+}
+.pc-orange { background: #f39c1218; border: 1px solid #f39c1240; color: #f39c12; }
+.pc-blue   { background: #4a9eff18; border: 1px solid #4a9eff40; color: #4a9eff; }
+.pc-green  { background: #2ecc7118; border: 1px solid #2ecc7140; color: #2ecc71; }
+.pc-red    { background: #e74c3c18; border: 1px solid #e74c3c40; color: #e74c3c; }
+.pc-purple { background: #9b59b618; border: 1px solid #9b59b640; color: #9b59b6; }
+
+/* Event flow mini */
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1a2e;
+}
+.event-row:last-child { border-bottom: none; }
+.ev-name { font-family: monospace; font-size: 10px; color: #f39c12; min-width: 260px; }
+.ev-arrow { color: #444; }
+.ev-action { color: #ccc; flex: 1; }
+
+/* Scope box */
+.scope-box {
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.scope-in  { background: #2ecc7110; border: 1px solid #2ecc7130; }
+.scope-out { background: #e74c3c10; border: 1px solid #e74c3c30; }
+.scope-title { font-weight: 700; margin-bottom: 6px; }
+.scope-item { color: #ccc; padding: 2px 0; font-size: 11px; }
+</style>
+
+<!-- PLATFORM/INTEGRATION -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">platform/integration — Temel Katman (Yeni Paket)</div>
+  <div style="font-size:12px;color:#ccc;margin-bottom:10px">
+    Tüm modüllerin harici servislerle konuşurken kullandığı altyapı. Delivery, billing, catalog-sync adapter'ları bu üzerine inşa edilir.
+  </div>
+  <div class="platform-chips">
+    <span class="p-chip pc-orange">ProviderConfig</span>
+    <span class="p-chip pc-orange">AdapterFactory[T]</span>
+    <span class="p-chip pc-blue">WebhookRouter</span>
+    <span class="p-chip pc-blue">HMACVerifier</span>
+    <span class="p-chip pc-green">RetryPolicy</span>
+    <span class="p-chip pc-red">CircuitBreaker</span>
+    <span class="p-chip pc-purple">RateLimiter</span>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div style="font-size:10px;color:#888;margin-bottom:4px">ProviderConfig — tüm modüllerde ortak temel tip</div>
+      <div class="code-block">
+<span class="ck">type</span> <span class="ct">ProviderConfig</span> <span class="ck">struct</span> {<br>
+&nbsp;&nbsp;<span class="ci">Provider</span>        <span class="ct">string</span><br>
+&nbsp;&nbsp;<span class="ci">TenantID</span>        <span class="ct">uuid.UUID</span><br>
+&nbsp;&nbsp;<span class="ci">BranchID</span>        <span class="ct">*uuid.UUID</span>  <span class="cc">// nil=tenant</span><br>
+&nbsp;&nbsp;<span class="ci">Config</span>          <span class="ct">map[string]any</span><br>
+&nbsp;&nbsp;<span class="ci">VaultSecretPath</span> <span class="ct">string</span><br>
+&nbsp;&nbsp;<span class="ci">Environment</span>     <span class="ct">string</span>  <span class="cc">// test|prod</span><br>
+&nbsp;&nbsp;<span class="ci">IsActive</span>        <span class="ct">bool</span><br>
+}
+      </div>
+    </div>
+    <div>
+      <div style="font-size:10px;color:#888;margin-bottom:4px">AdapterFactory[T] — generic factory</div>
+      <div class="code-block">
+<span class="ck">type</span> <span class="ct">AdapterFactory</span>[<span class="ct">T</span> <span class="ct">any</span>] <span class="ck">func</span>(<br>
+&nbsp;&nbsp;<span class="ci">cfg</span> <span class="ct">ProviderConfig</span>,<br>
+&nbsp;&nbsp;<span class="ci">creds</span> <span class="ct">map[string]string</span>, <span class="cc">// Vault'tan</span><br>
+) (<span class="ct">T</span>, <span class="ct">error</span>)<br>
+<br>
+<span class="cc">// Kullanım (delivery modülünde):</span><br>
+<span class="ci">factory</span>.<span class="cf">Register</span>(<span class="cs">"yemeksepeti"</span>,<br>
+&nbsp;&nbsp;<span class="ci">yemeksepeti</span>.<span class="cf">NewAdapter</span>)<br>
+<span class="ci">factory</span>.<span class="cf">Register</span>(<span class="cs">"getir"</span>,<br>
+&nbsp;&nbsp;<span class="ci">getir</span>.<span class="cf">NewAdapter</span>)
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DELIVERY MODULE STRUCTURE -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">delivery modülü — İç Yapı</div>
+  <div class="two-col">
+    <div class="dir-tree">
+<span class="dir-folder">backend/internal/modules/delivery/</span><br>
+<span class="dir-comment">├── </span><span class="dir-new">public/</span>          <span class="dir-comment">← dışarıya açık</span><br>
+<span class="dir-comment">│   ├── </span><span class="dir-new">adapter.go</span>    <span class="dir-comment">← DeliveryAdapter interface</span><br>
+<span class="dir-comment">│   └── </span><span class="dir-new">types.go</span>      <span class="dir-comment">← ExternalOrder, ProductAvail...</span><br>
+<span class="dir-comment">├── </span><span class="dir-folder">domain/</span><br>
+<span class="dir-comment">│   ├── </span><span class="dir-file">order.go</span>      <span class="dir-comment">← DeliveryOrder aggregate</span><br>
+<span class="dir-comment">│   └── </span><span class="dir-file">accept_timer.go</span> <span class="dir-comment">← 60s timer logic</span><br>
+<span class="dir-comment">├── </span><span class="dir-folder">repo/</span><br>
+<span class="dir-comment">│   └── </span><span class="dir-file">integrator_repo.go</span><br>
+<span class="dir-comment">├── </span><span class="dir-folder">http/</span><br>
+<span class="dir-comment">│   ├── </span><span class="dir-file">webhook.go</span>    <span class="dir-comment">← inbound webhooks</span><br>
+<span class="dir-comment">│   └── </span><span class="dir-file">routes.go</span><br>
+<span class="dir-comment">├── </span><span class="dir-folder">events/</span><br>
+<span class="dir-comment">│   ├── </span><span class="dir-file">publisher.go</span>  <span class="dir-comment">← order.received yayınlar</span><br>
+<span class="dir-comment">│   └── </span><span class="dir-file">subscriber.go</span> <span class="dir-comment">← catalog events tüketir</span><br>
+<span class="dir-comment">├── </span><span class="dir-new">adapter/</span>         <span class="dir-comment">← platform implementasyonları</span><br>
+<span class="dir-comment">│   ├── </span><span class="dir-new">yemeksepeti/</span><br>
+<span class="dir-comment">│   ├── </span><span class="dir-new">getir/</span><br>
+<span class="dir-comment">│   └── </span><span class="dir-new">trendyol/</span><br>
+<span class="dir-comment">└── </span><span class="dir-file">module.go</span>       <span class="dir-comment">← fx.Module</span>
+    </div>
+    <div>
+      <div style="font-size:10px;color:#888;margin-bottom:4px">DeliveryAdapter interface (public/)</div>
+      <div class="code-block">
+<span class="ck">type</span> <span class="ct">DeliveryAdapter</span> <span class="ck">interface</span> {<br>
+<br>
+&nbsp;&nbsp;<span class="cc">// Inbound</span><br>
+&nbsp;&nbsp;<span class="cf">ParseWebhook</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ci">body</span> []<span class="ct">byte</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ci">headers</span> <span class="ct">map[string]string</span>,<br>
+&nbsp;&nbsp;) (<span class="ct">WebhookEvent</span>, <span class="ct">error</span>)<br>
+<br>
+&nbsp;&nbsp;<span class="cf">ConfirmOrder</span>(<span class="ci">ctx</span>, <span class="ci">externalID</span> <span class="ct">string</span>) <span class="ct">error</span><br>
+&nbsp;&nbsp;<span class="cf">RejectOrder</span>(<span class="ci">ctx</span>, <span class="ci">externalID</span>, <span class="ci">reason</span> <span class="ct">string</span>) <span class="ct">error</span><br>
+<br>
+&nbsp;&nbsp;<span class="cc">// Outbound</span><br>
+&nbsp;&nbsp;<span class="cf">UpdateAvailability</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ci">ctx</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ci">products</span> []<span class="ct">ProductAvailability</span>,<br>
+&nbsp;&nbsp;) <span class="ct">error</span><br>
+<br>
+&nbsp;&nbsp;<span class="cf">SyncMenu</span>(<span class="ci">ctx</span>, <span class="ci">snapshot</span> <span class="ct">CatalogSnapshot</span>) <span class="ct">error</span><br>
+&nbsp;&nbsp;<span class="cf">UpdateHours</span>(<span class="ci">ctx</span>, <span class="ci">hours</span> <span class="ct">BranchHours</span>) <span class="ct">error</span><br>
+}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADAPTER IMPLEMENTATIONS -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Adapter Implementasyonları — Her Platform Kendi Paketinde</div>
+  <div class="three-col">
+    <div class="adapter-card">
+      <div class="adapter-title" style="color:#e74c3c">🍽️ yemeksepati/</div>
+      <div class="adapter-method">
+        <span class="done">✓ ParseWebhook</span> — JSON + HMAC<br>
+        <span class="done">✓ ConfirmOrder</span> — REST API<br>
+        <span class="done">✓ RejectOrder</span><br>
+        <span class="done">✓ UpdateAvailability</span><br>
+        <span class="done">✓ SyncMenu</span><br>
+        <span class="done">✓ UpdateHours</span><br>
+        <span style="font-size:10px;color:#555;margin-top:6px;display:block">rate limit: 10 req/sn<br>webhook: HMAC-SHA256<br>order timeout: 90 sn</span>
+      </div>
+    </div>
+    <div class="adapter-card">
+      <div class="adapter-title" style="color:#9b59b6">🚀 getir/</div>
+      <div class="adapter-method">
+        <span class="done">✓ ParseWebhook</span> — JSON + bearer<br>
+        <span class="done">✓ ConfirmOrder</span><br>
+        <span class="done">✓ RejectOrder</span><br>
+        <span class="done">✓ UpdateAvailability</span><br>
+        <span class="done">✓ SyncMenu</span><br>
+        <span class="done">✓ UpdateHours</span><br>
+        <span style="font-size:10px;color:#555;margin-top:6px;display:block">rate limit: farklı<br>webhook: bearer token<br>order timeout: 60 sn</span>
+      </div>
+    </div>
+    <div class="adapter-card">
+      <div class="adapter-title" style="color:#3498db">🟠 trendyol/</div>
+      <div class="adapter-method">
+        <span class="done">✓ ParseWebhook</span> — JSON + API key<br>
+        <span class="done">✓ ConfirmOrder</span><br>
+        <span class="done">✓ RejectOrder</span><br>
+        <span class="done">✓ UpdateAvailability</span><br>
+        <span class="done">✓ SyncMenu</span><br>
+        <span class="done">✓ UpdateHours</span><br>
+        <span style="font-size:10px;color:#555;margin-top:6px;display:block">rate limit: farklı<br>webhook: API-Key header<br>order timeout: 75 sn</span>
+      </div>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#888;margin-top:8px;padding:0 2px">
+    Her adapter <code style="color:#f39c12">platform/integration.CircuitBreaker</code> ve <code style="color:#f39c12">RateLimiter</code> ile sarılır — modül kodu bunları bilmez, factory injection'dan gelir.
+  </div>
+</div>
+
+<!-- EVENT CONTRACTS -->
+<div style="margin-bottom: 22px">
+  <div class="flow-title">Event Sözleşmeleri — delivery modülü</div>
+  <div class="event-row">
+    <span class="ev-name">delivery.order.received.v1</span>
+    <span class="ev-arrow">→</span>
+    <span class="ev-action">pos modülü tüketir → orders tablosuna yazar, kasa WebSocket bildirim</span>
+  </div>
+  <div class="event-row">
+    <span class="ev-name">delivery.order.accepted.v1</span>
+    <span class="ev-arrow">→</span>
+    <span class="ev-action">adapter.ConfirmOrder çağrılır, platform'a kabul gönderilir</span>
+  </div>
+  <div class="event-row">
+    <span class="ev-name">delivery.order.rejected.v1</span>
+    <span class="ev-arrow">→</span>
+    <span class="ev-action">adapter.RejectOrder, platforma ret gönderilir</span>
+  </div>
+  <div class="event-row">
+    <span class="ev-name">catalog.product_availability.changed.v1</span>
+    <span class="ev-arrow">→</span>
+    <span class="ev-action">delivery subscriber tüketir → aktif tüm platformlara broadcast (UpdateAvailability)</span>
+  </div>
+  <div class="event-row">
+    <span class="ev-name">catalog.product.updated.v1</span>
+    <span class="ev-arrow">→</span>
+    <span class="ev-action">delivery subscriber → SyncMenu (fiyat/isim değişikliği)</span>
+  </div>
+  <div class="event-row">
+    <span class="ev-name">tenant.branch_hours.updated.v1</span>
+    <span class="ev-arrow">→</span>
+    <span class="ev-action">delivery subscriber → UpdateHours tüm aktif platformlara</span>
+  </div>
+</div>
+
+<!-- MVP SCOPE -->
+<div>
+  <div class="flow-title">MVP Kapsamı</div>
+  <div class="two-col">
+    <div class="scope-box scope-in">
+      <div class="scope-title" style="color:#2ecc71">✓ MVP'de var</div>
+      <div class="scope-item">· delivery modülü tam yapısı</div>
+      <div class="scope-item">· DeliveryAdapter interface</div>
+      <div class="scope-item">· platform/integration temel tipler</div>
+      <div class="scope-item">· WebhookRouter + HMAC doğrulama</div>
+      <div class="scope-item">· Zaman limitli oto-kabul</div>
+      <div class="scope-item">· KDS kanal bilgisi</div>
+      <div class="scope-item">· product_channel_availability tablosu</div>
+      <div class="scope-item">· devices tablosu + roller</div>
+      <div class="scope-item">· order_channel + reporting alanları</div>
+    </div>
+    <div class="scope-box scope-out">
+      <div class="scope-title" style="color:#e74c3c">✗ MVP dışı (ilerleyen faz)</div>
+      <div class="scope-item">· Gerçek YS/Getir/Trendyol SDK entegrasyonu</div>
+      <div class="scope-item">· İskonto / kampanya kuralları</div>
+      <div class="scope-item">· Royalty hesap motoru</div>
+      <div class="scope-item">· Bar cihaz rolü</div>
+      <div class="scope-item">· Click&collect online ödeme akışı (PayTR, Faz 2)</div>
+      <div class="scope-item">· Tenant-specific OPA override</div>
+      <div class="scope-item">· Typesense arama (Faz 2)</div>
+    </div>
+  </div>
+</div>

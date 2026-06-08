@@ -20,10 +20,11 @@ import (
 )
 
 // moduleOrder defines the sequence in which module migrations are applied.
-// Tenant must precede identity because identity tables reference tenants.
+// tenant → identity → catalog (catalog products reference no other module tables directly)
 var moduleOrder = []string{
 	"tenant",
 	"identity",
+	"catalog",
 }
 
 func main() {

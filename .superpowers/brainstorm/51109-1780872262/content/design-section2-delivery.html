@@ -1,0 +1,281 @@
+<h2>Bölüm 2 — Order Channel & Delivery Flow</h2>
+<p class="subtitle">Sipariş kanalı modeli · Inbound delivery akışı · Outbound catalog sync</p>
+
+<style>
+.flow-section { margin-bottom: 24px; }
+.flow-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.8px; color: #888; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.flow-title::after { content: ''; flex: 1; height: 1px; background: #2a2a3a; }
+
+/* Flow diagram */
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+.flow-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  position: relative;
+}
+.flow-step-line {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 32px;
+}
+.flow-step-dot {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  flex-shrink: 0;
+}
+.flow-step-connector {
+  width: 2px;
+  flex: 1;
+  min-height: 16px;
+  background: #2a2a3a;
+  margin: 2px 0;
+}
+.flow-step-body {
+  background: var(--bg-secondary, #1e1e2e);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 4px;
+  flex: 1;
+  font-size: 12px;
+}
+.flow-step-body .step-title { font-weight: 700; margin-bottom: 3px; }
+.flow-step-body .step-detail { font-size: 11px; color: #888; line-height: 1.6; }
+.step-code { font-family: monospace; font-size: 10px; color: #f39c12; }
+
+.dot-ext    { background: #e74c3c33; color: #e74c3c; border: 2px solid #e74c3c66; }
+.dot-nats   { background: #f39c1233; color: #f39c12; border: 2px solid #f39c1266; }
+.dot-device { background: #9b59b633; color: #9b59b6; border: 2px solid #9b59b666; }
+.dot-auto   { background: #1abc9c33; color: #1abc9c; border: 2px solid #1abc9c66; }
+.dot-kds    { background: #4a9eff33; color: #4a9eff; border: 2px solid #4a9eff66; }
+.dot-done   { background: #2ecc7133; color: #2ecc71; border: 2px solid #2ecc7166; }
+
+/* Timer visualization */
+.timer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1abc9c12;
+  border: 1px solid #1abc9c33;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  font-size: 11px;
+}
+.timer-track {
+  flex: 1;
+  height: 6px;
+  background: #1a1a2e;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.timer-fill {
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, #2ecc71, #f39c12, #e74c3c);
+  border-radius: 3px;
+}
+
+/* Branch decision */
+.decision {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0;
+}
+.branch-yes {
+  flex: 1; background: #2ecc7112; border: 1px solid #2ecc7133;
+  border-radius: 5px; padding: 7px 10px; font-size: 11px; color: #2ecc71;
+}
+.branch-no {
+  flex: 1; background: #e74c3c12; border: 1px solid #e74c3c33;
+  border-radius: 5px; padding: 7px 10px; font-size: 11px; color: #e74c3c;
+}
+
+/* Data model mini */
+.model-mini {
+  background: #0d1117;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.8;
+  margin: 8px 0;
+}
+.mf { color: #4a9eff; }
+.mt { color: #f39c12; }
+.mc { color: #555; }
+.mn { color: #2ecc71; }
+
+/* Outbound triggers */
+.trigger-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.trigger-card {
+  background: var(--bg-secondary, #1e1e2e);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+}
+.trigger-event { font-family: monospace; font-size: 10px; color: #f39c12; margin-bottom: 4px; }
+.trigger-action { color: #ccc; }
+.trigger-targets { font-size: 10px; color: #2ecc71; margin-top: 4px; font-family: monospace; }
+</style>
+
+<!-- DATA MODEL -->
+<div class="flow-section">
+  <div class="flow-title">Orders Tablosu — Eklenen Alanlar</div>
+  <div class="model-mini">
+    <span class="mf">order_channel</span>        <span class="mt">TEXT NOT NULL</span>  <span class="mc">-- 'dine_in' | 'takeaway' | 'click_collect' | 'delivery'</span><br>
+    <span class="mf">delivery_integrator_id</span> <span class="mt">UUID | NULL</span>   <span class="mc">-- FK → branch_delivery_integrators</span><br>
+    <span class="mf">external_order_id</span>      <span class="mt">TEXT | NULL</span>   <span class="mc">-- Yemeksepeti/Getir sipariş no</span><br>
+    <span class="mf">external_order_ref</span>     <span class="mt">JSONB | NULL</span>  <span class="mc">-- platform'dan gelen ham veri (audit)</span><br>
+    <span class="mf">delivery_address</span>       <span class="mt">JSONB | NULL</span>  <span class="mc">-- kurye adresi</span><br>
+    <span class="mf">channel_commission</span>     <span class="mt">NUMERIC</span>       <span class="mc">-- platform komisyonu (raporlama)</span><br>
+    <span class="mf">accept_deadline_at</span>     <span class="mt">TIMESTAMPTZ | NULL</span> <span class="mc">-- zaman limitli kabul için</span><br>
+    <span class="mf">accepted_at</span>            <span class="mt">TIMESTAMPTZ | NULL</span> <span class="mc">-- kim/ne zaman kabul etti</span><br>
+    <span class="mf">accepted_by</span>            <span class="mt">UUID | NULL</span>   <span class="mc">-- user_id | NULL = oto-kabul</span><br>
+  </div>
+  <div style="font-size:11px;color:#888;padding:0 4px">
+    <code style="color:#4a9eff">accepted_by = NULL</code> → oto-kabul (timer doldu).
+    <code style="color:#4a9eff">accepted_by = user_id</code> → kasiyerin manuel kabulü. Her ikisi de raporlanabilir.
+  </div>
+</div>
+
+<!-- INBOUND FLOW -->
+<div class="flow-section">
+  <div class="flow-title">Inbound — Yemeksepeti'nden Sipariş Gelişi</div>
+  <div class="flow">
+
+    <div class="flow-step">
+      <div class="flow-step-line">
+        <div class="flow-step-dot dot-ext">YS</div>
+        <div class="flow-step-connector"></div>
+      </div>
+      <div class="flow-step-body">
+        <div class="step-title">Webhook Alındı</div>
+        <div class="step-detail">
+          <span class="step-code">POST /webhooks/delivery/{integrator_id}</span><br>
+          platform/integration → imza doğrulama (HMAC) → <span class="step-code">delivery.order.received.v1</span> NATS event
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-step-line">
+        <div class="flow-step-dot dot-nats">N</div>
+        <div class="flow-step-connector"></div>
+      </div>
+      <div class="flow-step-body">
+        <div class="step-title">Delivery Consumer — POS Order Oluşturulur</div>
+        <div class="step-detail">
+          delivery modülü event'i tüketir → <span class="step-code">orders</span> tablosuna yazar<br>
+          <span class="step-code">order_channel = 'delivery'</span>, <span class="step-code">delivery_integrator_id</span> dolu,
+          <span class="step-code">accept_deadline_at = now() + 60s</span><br>
+          status = <span class="step-code">'pending_accept'</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-step-line">
+        <div class="flow-step-dot dot-device">📱</div>
+        <div class="flow-step-connector"></div>
+      </div>
+      <div class="flow-step-body">
+        <div class="step-title">WebSocket Bildirimi — Sadece "kasa" Rolündeki Cihazlar</div>
+        <div class="step-detail">
+          <span class="step-code">ws://api-pos/branch/{id}/role/kasa</span> → bildirim gönderilir<br>
+          Garson tabletleri, KDS ekranı bu bildirimi almaz.
+        </div>
+        <div class="timer-bar">
+          <span style="color:#1abc9c;font-weight:700;white-space:nowrap">⏱ 60 sn</span>
+          <div class="timer-track"><div class="timer-fill"></div></div>
+          <span style="color:#888;white-space:nowrap">Dolmazsa oto-kabul</span>
+        </div>
+        <div class="decision">
+          <div class="branch-yes">✓ Kasiyerin kabulü<br><span style="font-size:10px">accepted_by = user_id</span></div>
+          <div class="branch-no">✗ Reddetme<br><span style="font-size:10px">→ YS API'ye red bildirimi</span></div>
+          <div style="flex:1;background:#1abc9c12;border:1px solid #1abc9c33;border-radius:5px;padding:7px 10px;font-size:11px;color:#1abc9c">
+            ⏰ Süre doldu<br><span style="font-size:10px">accepted_by = NULL</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-step-line">
+        <div class="flow-step-dot dot-kds">KDS</div>
+        <div class="flow-step-connector"></div>
+      </div>
+      <div class="flow-step-body">
+        <div class="step-title">Mutfak Ekranına Düşer — Kanal Bilgisi ile</div>
+        <div class="step-detail">
+          status = <span class="step-code">'preparing'</span><br>
+          KDS ekranında kart başlığı: <strong style="color:#e74c3c">🛵 Yemeksepeti</strong> &nbsp;|&nbsp; <strong style="color:#9b59b6">🚀 Getir</strong> &nbsp;|&nbsp; <strong style="color:#3498db">🟠 Trendyol</strong><br>
+          Mutfak fişinde platform adı basılır → kurye pakete zımbalayabilir.
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <div class="flow-step-line">
+        <div class="flow-step-dot dot-done">✓</div>
+      </div>
+      <div class="flow-step-body">
+        <div class="step-title">Teslim & Kapatma</div>
+        <div class="step-detail">
+          Kurye geldi → status = <span class="step-code">'delivered'</span> → <span class="step-code">pos.order.completed.v1</span> event<br>
+          Billing consumer faturayı tetikler. Ciro raporuna <span class="step-code">channel = delivery / provider = yemeksepeti</span> olarak girer.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- OUTBOUND FLOW -->
+<div class="flow-section">
+  <div class="flow-title">Outbound — Delivery Platformlarına Catalog Sync</div>
+  <div class="trigger-grid">
+    <div class="trigger-card">
+      <div class="trigger-event">catalog.product.updated.v1</div>
+      <div class="trigger-action">Ürün fiyatı/adı değişti</div>
+      <div class="trigger-targets">→ YS + Getir + Trendyol (broadcast)</div>
+    </div>
+    <div class="trigger-card">
+      <div class="trigger-event">catalog.product_availability.changed.v1</div>
+      <div class="trigger-action">Ürün satışa kapatıldı/açıldı</div>
+      <div class="trigger-targets">→ sadece delivery kanalları</div>
+    </div>
+    <div class="trigger-card">
+      <div class="trigger-event">tenant.branch_hours.updated.v1</div>
+      <div class="trigger-action">Çalışma saatleri değişti</div>
+      <div class="trigger-targets">→ YS + Getir + Trendyol</div>
+    </div>
+    <div class="trigger-card">
+      <div class="trigger-event">catalog.image.updated.v1</div>
+      <div class="trigger-action">Ürün görseli güncellendi</div>
+      <div class="trigger-targets">→ MinIO URL → platformlara push</div>
+    </div>
+  </div>
+  <div style="margin-top:8px;background:#f39c1212;border:1px solid #f39c1230;border-radius:6px;padding:10px 12px;font-size:11px;color:#ccc">
+    <strong style="color:#f39c12">⚠️ Platform sınırlaması:</strong>
+    Her delivery platformunun kendi rate limit'i var (Yemeksepeti: ~10 req/sn).
+    <code style="color:#f39c12">platform/integration.RateLimiter</code> bunu yönetir.
+    Aynı anda 50 ürün güncellendiyse → batch queue → sırayla gönderilir.
+  </div>
+</div>

@@ -1,0 +1,250 @@
+<h2>Order Channel Mimarisi</h2>
+<p class="subtitle">Fake masa yok. Her sipariş nereden geldiğini bilir. Muhasebe ve royalty hesabı buna göre yapılır.</p>
+
+<style>
+.section { margin-bottom: 20px; }
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #888;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #333;
+}
+.model-block {
+  background: var(--bg-secondary, #1e1e2e);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.field-name { color: #4a9eff; }
+.field-type { color: #f39c12; }
+.field-comment { color: #555; }
+.field-new { color: #2ecc71; }
+.field-fk { color: #9b59b6; }
+
+.channel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.channel-card {
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.channel-card.dine-in   { background:#4a9eff18; border:1px solid #4a9eff44; }
+.channel-card.takeaway  { background:#f39c1218; border:1px solid #f39c1244; }
+.channel-card.clickcol  { background:#1abc9c18; border:1px solid #1abc9c44; }
+.channel-card.delivery  { background:#9b59b618; border:1px solid #9b59b644; }
+.channel-name { font-weight: 700; margin-bottom: 4px; }
+.channel-detail { font-size: 10px; opacity: 0.7; }
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.report-table th {
+  background: rgba(255,255,255,0.05);
+  padding: 7px 10px;
+  text-align: left;
+  color: #888;
+  font-weight: 600;
+  border-bottom: 1px solid #333;
+  font-size: 11px;
+}
+.report-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #1a1a1a;
+  color: #ccc;
+}
+.report-table tr.subtotal td { color: #fff; font-weight: 700; }
+.report-table tr.total td { background: rgba(74,158,255,0.1); color: #4a9eff; font-weight: 700; border-top: 1px solid #4a9eff33; }
+.report-table tr.royalty-base td { background: rgba(46,204,113,0.08); color: #2ecc71; }
+.amount { text-align: right; font-family: monospace; }
+.channel-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+.badge-dine   { background:#4a9eff22; color:#4a9eff; }
+.badge-take   { background:#f39c1222; color:#f39c12; }
+.badge-click  { background:#1abc9c22; color:#1abc9c; }
+.badge-ys     { background:#e74c3c22; color:#e74c3c; }
+.badge-getir  { background:#9b59b622; color:#9b59b6; }
+.badge-trend  { background:#3498db22; color:#3498db; }
+
+.rule-block {
+  background: var(--bg-secondary,#1e1e2e);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.rule-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 5px 0;
+}
+.rule-cond { min-width: 220px; font-family: monospace; font-size: 11px; color: #f39c12; }
+.rule-action { color: #ccc; font-size: 11px; }
+.rule-result { font-family: monospace; font-size: 11px; color: #2ecc71; }
+</style>
+
+<!-- DATA MODEL -->
+<div class="section">
+  <div class="section-title">Sipariş Veri Modeli — orders tablosu</div>
+  <div class="model-block">
+    <span class="field-name">id</span>                <span class="field-type">UUID</span><br>
+    <span class="field-name">tenant_id</span>         <span class="field-type">UUID</span>         <span class="field-comment">-- RLS</span><br>
+    <span class="field-name">branch_id</span>         <span class="field-type">UUID</span><br>
+    <span class="field-name">table_id</span>          <span class="field-type">UUID | NULL</span>  <span class="field-comment">-- sadece dine_in</span><br>
+    <span class="field-name field-new">order_channel</span>      <span class="field-type">TEXT NOT NULL</span> <span class="field-comment">-- dine_in | takeaway | click_collect | delivery</span><br>
+    <span class="field-name field-fk">delivery_integrator_id</span> <span class="field-type">UUID | NULL</span> <span class="field-comment">-- FK → branch_delivery_integrators (hangi platform)</span><br>
+    <span class="field-name field-new">external_order_id</span>  <span class="field-type">TEXT | NULL</span> <span class="field-comment">-- Yemeksepeti/Getir'in kendi order ID'si</span><br>
+    <span class="field-name field-new">delivery_address</span>   <span class="field-type">JSONB | NULL</span><span class="field-comment">-- sadece delivery kanalı için</span><br>
+    <span class="field-name">status</span>            <span class="field-type">TEXT</span>         <span class="field-comment">-- open | preparing | ready | delivered | cancelled</span><br>
+    <span class="field-name">total_amount</span>      <span class="field-type">NUMERIC</span><br>
+    <span class="field-name field-new">channel_commission</span> <span class="field-type">NUMERIC</span>      <span class="field-comment">-- Yemeksepeti'nin kestiği komisyon (raporlama)</span><br>
+  </div>
+</div>
+
+<!-- CHANNEL TİPLERİ -->
+<div class="section">
+  <div class="section-title">4 Sipariş Kanalı — masa oluşturmak yok</div>
+  <div class="channel-grid">
+    <div class="channel-card dine-in">
+      <div class="channel-name">🪑 dine_in</div>
+      <div class="channel-detail">Masada oturan müşteri. table_id dolu. Normal adisyon akışı.</div>
+    </div>
+    <div class="channel-card takeaway">
+      <div class="channel-name">🛍️ takeaway</div>
+      <div class="channel-detail">Gel-al (kasadan). Masa yok. delivery_integrator_id = null.</div>
+    </div>
+    <div class="channel-card clickcol">
+      <div class="channel-name">📱 click_collect</div>
+      <div class="channel-detail">Online ödenmiş, gelip alacak. İskonto kuralı buraya uygulanır.</div>
+    </div>
+    <div class="channel-card delivery">
+      <div class="channel-name">🛵 delivery</div>
+      <div class="channel-detail">Yemeksepeti / Getir / Trendyol. delivery_integrator_id → hangi platform belli.</div>
+    </div>
+  </div>
+</div>
+
+<!-- AY SONU RAPORU -->
+<div class="section">
+  <div class="section-title">Ay Sonu Ciro Raporu</div>
+  <table class="report-table">
+    <tr>
+      <th>Kanal</th>
+      <th>Platform</th>
+      <th class="amount">Brüt Ciro</th>
+      <th class="amount">Platform Komisyonu</th>
+      <th class="amount">Net Ciro</th>
+    </tr>
+    <tr>
+      <td><span class="channel-badge badge-dine">dine_in</span></td>
+      <td>—</td>
+      <td class="amount">45.200 ₺</td>
+      <td class="amount">—</td>
+      <td class="amount">45.200 ₺</td>
+    </tr>
+    <tr>
+      <td><span class="channel-badge badge-take">takeaway</span></td>
+      <td>—</td>
+      <td class="amount">8.400 ₺</td>
+      <td class="amount">—</td>
+      <td class="amount">8.400 ₺</td>
+    </tr>
+    <tr>
+      <td><span class="channel-badge badge-click">click_collect</span></td>
+      <td>—</td>
+      <td class="amount">3.600 ₺</td>
+      <td class="amount">—</td>
+      <td class="amount">3.240 ₺ <span style="font-size:10px;color:#888">(-10%)</span></td>
+    </tr>
+    <tr>
+      <td><span class="channel-badge badge-ys">delivery</span></td>
+      <td>Yemeksepeti</td>
+      <td class="amount">12.800 ₺</td>
+      <td class="amount" style="color:#e74c3c">-1.920 ₺ <span style="font-size:10px">(%15)</span></td>
+      <td class="amount">10.880 ₺</td>
+    </tr>
+    <tr>
+      <td><span class="channel-badge badge-getir">delivery</span></td>
+      <td>Getir</td>
+      <td class="amount">9.100 ₺</td>
+      <td class="amount" style="color:#e74c3c">-1.365 ₺ <span style="font-size:10px">(%15)</span></td>
+      <td class="amount">7.735 ₺</td>
+    </tr>
+    <tr>
+      <td><span class="channel-badge badge-trend">delivery</span></td>
+      <td>Trendyol Yemek</td>
+      <td class="amount">6.300 ₺</td>
+      <td class="amount" style="color:#e74c3c">-945 ₺ <span style="font-size:10px">(%15)</span></td>
+      <td class="amount">5.355 ₺</td>
+    </tr>
+    <tr class="subtotal">
+      <td colspan="2">TOPLAM</td>
+      <td class="amount">85.400 ₺</td>
+      <td class="amount" style="color:#e74c3c">-4.230 ₺</td>
+      <td class="amount">80.810 ₺</td>
+    </tr>
+    <tr class="royalty-base">
+      <td colspan="2">Royalty Matrahı <span style="font-size:10px;font-weight:400">(delivery platformlar hariç)</span></td>
+      <td class="amount">57.200 ₺</td>
+      <td class="amount">—</td>
+      <td class="amount">56.840 ₺</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ROYALTY KURAL MOTORU -->
+<div class="section">
+  <div class="section-title">Royalty Kural Motoru — şube/franchise bazında config</div>
+  <div class="rule-block">
+    <div style="font-size:10px;color:#888;margin-bottom:10px">franchise_royalty_rules JSONB (branch_settings içinde)</div>
+    <div class="rule-row">
+      <span class="rule-cond">channel = dine_in</span>
+      <span class="rule-action">→</span>
+      <span class="rule-result">royalty_base'e dahil, tam tutar</span>
+    </div>
+    <div class="rule-row">
+      <span class="rule-cond">channel = takeaway</span>
+      <span class="rule-action">→</span>
+      <span class="rule-result">royalty_base'e dahil, tam tutar</span>
+    </div>
+    <div class="rule-row">
+      <span class="rule-cond">channel = click_collect</span>
+      <span class="rule-action">→</span>
+      <span class="rule-result">royalty_base'e dahil, <strong style="color:#f39c12">-10% iskonto</strong> uygulanır</span>
+    </div>
+    <div class="rule-row">
+      <span class="rule-cond">channel = delivery</span>
+      <span class="rule-action">→</span>
+      <span class="rule-result"><strong style="color:#e74c3c">royalty_base'den hariç</strong> (platform komisyon var)</span>
+    </div>
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid #333;font-size:11px;color:#888">
+      💡 Her franchise şubesi farklı kural seti taşıyabilir. Kurallar <code>branch_settings.royalty_rules JSONB</code> içinde.
+      Değişiklik → NATS event → royalty hesap servisi cache'i invalidate eder.
+    </div>
+  </div>
+</div>

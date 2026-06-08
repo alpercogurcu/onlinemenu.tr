@@ -1,0 +1,25 @@
+# Build artifacts
+/api
+/worker
+/migrate
+/edge
+/api-core
+/api-pos
+/api-finance
+*.test
+*.out
+
+# Local environment
+.env
+.env.local
+*.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

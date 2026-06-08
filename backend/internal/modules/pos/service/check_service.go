@@ -10,30 +10,41 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	paymentpub "onlinemenu.tr/internal/modules/payment/public"
 	"onlinemenu.tr/internal/modules/pos/domain"
 	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/repo"
 	"onlinemenu.tr/internal/platform/db"
 )
 
+// ErrInsufficientPayment is returned when the total paid is less than the check total.
+var ErrInsufficientPayment = errors.New("pos/service/check: payment insufficient to close check")
+
 // CheckService manages dine-in check (adisyon) lifecycle.
 type CheckService struct {
-	db        *db.Pool
-	checkRepo *repo.CheckRepo
-	logger    *zap.Logger
+	db         *db.Pool
+	checkRepo  *repo.CheckRepo
+	saleReader paymentpub.SaleReader
+	logger     *zap.Logger
 }
 
 // CheckParams groups fx-injected dependencies.
 type CheckParams struct {
 	fx.In
 
-	DB        *db.Pool
-	CheckRepo *repo.CheckRepo
-	Logger    *zap.Logger
+	DB         *db.Pool
+	CheckRepo  *repo.CheckRepo
+	SaleReader paymentpub.SaleReader
+	Logger     *zap.Logger
 }
 
 func NewCheckService(p CheckParams) *CheckService {
-	return &CheckService{db: p.DB, checkRepo: p.CheckRepo, logger: p.Logger}
+	return &CheckService{
+		db:         p.DB,
+		checkRepo:  p.CheckRepo,
+		saleReader: p.SaleReader,
+		logger:     p.Logger,
+	}
 }
 
 func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, c domain.Check) (domain.Check, error) {
@@ -86,10 +97,25 @@ func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID) ([]domain.C
 	return checks, nil
 }
 
+// Close closes a check after verifying total payments cover the check total.
+// Returns ErrInsufficientPayment if the paid amount is less than the order total.
 func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uuid.UUID) (domain.Check, error) {
+	// SaleReader manages its own transaction; call outside the write tx.
+	paid, err := s.saleReader.TotalPaidForCheck(ctx, tenantID, checkID)
+	if err != nil {
+		return domain.Check{}, fmt.Errorf("pos/service/check: close: read payment total: %w", err)
+	}
+
 	var closed domain.Check
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		total, err := s.checkRepo.GetTotal(ctx, tx, checkID)
+		if err != nil {
+			return err
+		}
+		if paid < total {
+			return ErrInsufficientPayment
+		}
+
 		closed, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusClosed, &closedBy)
 		if err != nil {
 			return err

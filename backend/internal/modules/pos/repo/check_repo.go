@@ -72,6 +72,22 @@ func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Check, error)
 	return out, rows.Err()
 }
 
+// GetTotal returns the sum of all order items (quantity × unit_price_amount) for a check.
+// Returns 0 if the check has no orders.
+func (r *CheckRepo) GetTotal(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) (int64, error) {
+	var total int64
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(oi.quantity * oi.unit_price_amount), 0)
+		FROM orders o
+		JOIN order_items oi ON oi.order_id = o.id
+		WHERE o.check_id = $1
+	`, checkID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("pos/repo/check: get total: %w", err)
+	}
+	return total, nil
+}
+
 // UpdateStatus transitions a check to a new status.
 func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status domain.CheckStatus, closedBy *uuid.UUID) (domain.Check, error) {
 	const q = `

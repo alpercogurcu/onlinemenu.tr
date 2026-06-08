@@ -239,10 +239,17 @@ func newContextTokenSigner() (*auth.ContextTokenSigner, error) {
 }
 
 // devTokenVerifier parses JWT claims without signature verification.
-// Replace with a JWKS-backed verifier before production.
+// ONLY active when APP_ENV=dev. Returns an error on any other environment
+// so it cannot accidentally reach production.
 type devTokenVerifier struct{}
 
-func newTokenVerifier() auth.TokenVerifier { return devTokenVerifier{} }
+func newTokenVerifier() (auth.TokenVerifier, error) {
+	env := envOr("APP_ENV", "")
+	if env != "dev" {
+		return nil, fmt.Errorf("api: devTokenVerifier requires APP_ENV=dev (got %q); configure a real JWKS verifier for non-dev environments", env)
+	}
+	return devTokenVerifier{}, nil
+}
 
 func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.KeycloakClaims, error) {
 	parts := strings.SplitN(rawToken, ".", 3)
@@ -255,6 +262,7 @@ func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.Keyclo
 	}
 	var claims struct {
 		Sub string `json:"sub"`
+		Exp int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return nil, fmt.Errorf("auth: unmarshal JWT claims: %w", err)

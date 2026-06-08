@@ -69,10 +69,15 @@ func TestFxGraphValidation(t *testing.T) {
 func TestRouterMiddleware(t *testing.T) {
 	const secret = "test-secret-32-bytes-long-padding!"
 
+	t.Setenv("APP_ENV", "dev")
+
 	signer, err := auth.NewContextTokenSigner([]byte(secret))
 	require.NoError(t, err)
 
-	router := newRouter(signer, newTokenVerifier())
+	verifier, err := newTokenVerifier()
+	require.NoError(t, err)
+
+	router := newRouter(signer, verifier)
 
 	t.Run("healthz_no_auth_200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

@@ -43,7 +43,16 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, c domain.Ch
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		created, err = s.checkRepo.Create(ctx, tx, c)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "check", created.ID.String(), "check.opened", map[string]any{
+			"tenant_id":   tenantID,
+			"check_id":    created.ID,
+			"branch_id":   created.BranchID,
+			"table_label": created.TableLabel,
+			"opened_by":   created.OpenedBy,
+		})
 	})
 	if err != nil {
 		return domain.Check{}, fmt.Errorf("pos/service/check: open: %w", err)
@@ -82,7 +91,14 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		closed, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusClosed, &closedBy)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "check", checkID.String(), "check.closed", map[string]any{
+			"tenant_id": tenantID,
+			"check_id":  checkID,
+			"closed_by": closedBy,
+		})
 	})
 	if err != nil {
 		return domain.Check{}, wrapErr(err, "pos/service/check: close: %w")
@@ -95,7 +111,14 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID, checkID, cancelledB
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		cancelled, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusCancelled, &cancelledBy)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "check", checkID.String(), "check.cancelled", map[string]any{
+			"tenant_id":    tenantID,
+			"check_id":     checkID,
+			"cancelled_by": cancelledBy,
+		})
 	})
 	if err != nil {
 		return domain.Check{}, wrapErr(err, "pos/service/check: cancel: %w")

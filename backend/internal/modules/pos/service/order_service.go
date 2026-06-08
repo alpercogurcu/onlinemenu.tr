@@ -46,7 +46,17 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, o domain.O
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		created, err = s.orderRepo.Create(ctx, tx, o)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "order", created.ID.String(), "order.placed", map[string]any{
+			"tenant_id":     tenantID,
+			"order_id":      created.ID,
+			"branch_id":     created.BranchID,
+			"check_id":      created.CheckID,
+			"order_channel": created.OrderChannel,
+			"item_count":    len(created.Items),
+		})
 	})
 	if err != nil {
 		return domain.Order{}, fmt.Errorf("pos/service/order: place: %w", err)
@@ -88,7 +98,14 @@ func (s *OrderService) Accept(ctx context.Context, tenantID, orderID, acceptedBy
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		o, err = s.orderRepo.Accept(ctx, tx, orderID, acceptedBy)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "order", orderID.String(), "order.accepted", map[string]any{
+			"tenant_id":   tenantID,
+			"order_id":    orderID,
+			"accepted_by": acceptedBy,
+		})
 	})
 	if err != nil {
 		return domain.Order{}, wrapErr(err, "pos/service/order: accept: %w")
@@ -102,7 +119,15 @@ func (s *OrderService) Reject(ctx context.Context, tenantID, orderID, rejectedBy
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		o, err = s.orderRepo.Reject(ctx, tx, orderID, rejectedBy, reason)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "order", orderID.String(), "order.rejected", map[string]any{
+			"tenant_id":   tenantID,
+			"order_id":    orderID,
+			"rejected_by": rejectedBy,
+			"reason":      reason,
+		})
 	})
 	if err != nil {
 		return domain.Order{}, wrapErr(err, "pos/service/order: reject: %w")
@@ -119,7 +144,14 @@ func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID, orderID uuid
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		o, err = s.orderRepo.AdvanceStatus(ctx, tx, orderID, status)
-		return err
+		if err != nil {
+			return err
+		}
+		return repo.InsertOutbox(ctx, tx, "order", orderID.String(), "order.status_changed", map[string]any{
+			"tenant_id": tenantID,
+			"order_id":  orderID,
+			"status":    status,
+		})
 	})
 	if err != nil {
 		return domain.Order{}, wrapErr(err, "pos/service/order: advance status: %w")

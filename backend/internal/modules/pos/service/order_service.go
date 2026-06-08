@@ -49,7 +49,7 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, o domain.O
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "order", created.ID.String(), "order.placed", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "order", created.ID.String(), "order.placed", map[string]any{
 			"tenant_id":     tenantID,
 			"order_id":      created.ID,
 			"branch_id":     created.BranchID,
@@ -101,7 +101,7 @@ func (s *OrderService) Accept(ctx context.Context, tenantID, orderID, acceptedBy
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "order", orderID.String(), "order.accepted", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "order", orderID.String(), "order.accepted", map[string]any{
 			"tenant_id":   tenantID,
 			"order_id":    orderID,
 			"accepted_by": acceptedBy,
@@ -122,7 +122,7 @@ func (s *OrderService) Reject(ctx context.Context, tenantID, orderID, rejectedBy
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "order", orderID.String(), "order.rejected", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "order", orderID.String(), "order.rejected", map[string]any{
 			"tenant_id":   tenantID,
 			"order_id":    orderID,
 			"rejected_by": rejectedBy,
@@ -147,7 +147,7 @@ func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID, orderID uuid
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "order", orderID.String(), "order.status_changed", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "order", orderID.String(), "order.status_changed", map[string]any{
 			"tenant_id": tenantID,
 			"order_id":  orderID,
 			"status":    status,

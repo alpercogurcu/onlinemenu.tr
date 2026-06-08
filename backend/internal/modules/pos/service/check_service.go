@@ -57,7 +57,7 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, c domain.Ch
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "check", created.ID.String(), "check.opened", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "check", created.ID.String(), "check.opened", map[string]any{
 			"tenant_id":   tenantID,
 			"check_id":    created.ID,
 			"branch_id":   created.BranchID,
@@ -120,7 +120,7 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "check", checkID.String(), "check.closed", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "check", checkID.String(), "check.closed", map[string]any{
 			"tenant_id": tenantID,
 			"check_id":  checkID,
 			"closed_by": closedBy,
@@ -140,7 +140,7 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID, checkID, cancelledB
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, "check", checkID.String(), "check.cancelled", map[string]any{
+		return repo.InsertOutbox(ctx, tx, tenantID, "check", checkID.String(), "check.cancelled", map[string]any{
 			"tenant_id":    tenantID,
 			"check_id":     checkID,
 			"cancelled_by": cancelledBy,

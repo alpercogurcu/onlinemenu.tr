@@ -398,3 +398,358 @@ func TestProductRepo_UpdateAndDelete(t *testing.T) {
 	}))
 	assert.False(t, deleted.IsActive)
 }
+
+// ---------------------------------------------------------------------------
+// Modifier group tests
+// ---------------------------------------------------------------------------
+
+func TestModifierGroupRepo_CreateAndGet(t *testing.T) {
+	ctx := context.Background()
+	gr := repo.NewModifierGroupRepo()
+	tid := uuid.New()
+
+	maxSel := int16(3)
+	var created domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		created, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID:      tid,
+			Name:          "Soslar",
+			SelectionType: domain.SelectionMultiple,
+			MinSelections: 0,
+			MaxSelections: &maxSel,
+			IsRequired:    false,
+			SortOrder:     1,
+		})
+		return err
+	}))
+
+	assert.NotEqual(t, uuid.Nil, created.ID)
+	assert.Equal(t, "Soslar", created.Name)
+	assert.Equal(t, domain.SelectionMultiple, created.SelectionType)
+	require.NotNil(t, created.MaxSelections)
+	assert.Equal(t, int16(3), *created.MaxSelections)
+
+	var fetched domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = gr.GetByID(ctx, tx, created.ID)
+		return err
+	}))
+	assert.Equal(t, created.ID, fetched.ID)
+}
+
+func TestModifierGroupRepo_TenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	gr := repo.NewModifierGroupRepo()
+
+	tidX := uuid.New()
+	tidY := uuid.New()
+
+	var gX domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tidX, func(tx pgx.Tx) error {
+		var err error
+		gX, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID:      tidX,
+			Name:          "X-Soslar",
+			SelectionType: domain.SelectionSingle,
+		})
+		return err
+	}))
+
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tidY, func(tx pgx.Tx) error {
+		_, err := gr.GetByID(ctx, tx, gX.ID)
+		assert.ErrorIs(t, err, repo.ErrNotFound, "tenantY must not see tenantX group")
+		return nil
+	}))
+}
+
+func TestModifierGroupRepo_DeleteCascadesToModifiers(t *testing.T) {
+	ctx := context.Background()
+	gr := repo.NewModifierGroupRepo()
+	mr := repo.NewModifierRepo()
+	tid := uuid.New()
+
+	var g domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		g, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID: tid, Name: "Boyut", SelectionType: domain.SelectionSingle,
+		})
+		return err
+	}))
+
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		_, err := mr.Create(ctx, tx, domain.Modifier{
+			TenantID: tid, GroupID: g.ID, Name: "Küçük", IsActive: true,
+		})
+		return err
+	}))
+
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		return gr.Delete(ctx, tx, g.ID)
+	}))
+
+	// After group delete, modifiers must be gone (CASCADE)
+	var modifiers []domain.Modifier
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		modifiers, err = mr.ListByGroup(ctx, tx, g.ID)
+		return err
+	}))
+	assert.Empty(t, modifiers)
+}
+
+// ---------------------------------------------------------------------------
+// Modifier tests
+// ---------------------------------------------------------------------------
+
+func TestModifierRepo_CreateListUpdate(t *testing.T) {
+	ctx := context.Background()
+	gr := repo.NewModifierGroupRepo()
+	mr := repo.NewModifierRepo()
+	tid := uuid.New()
+
+	var g domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		g, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID: tid, Name: "Pişirme", SelectionType: domain.SelectionSingle,
+		})
+		return err
+	}))
+
+	names := []string{"Az Pişmiş", "Orta", "İyi Pişmiş"}
+	for _, n := range names {
+		require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+			_, err := mr.Create(ctx, tx, domain.Modifier{
+				TenantID: tid, GroupID: g.ID, Name: n, IsActive: true,
+			})
+			return err
+		}))
+	}
+
+	var list []domain.Modifier
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		list, err = mr.ListByGroup(ctx, tx, g.ID)
+		return err
+	}))
+	assert.Len(t, list, len(names))
+
+	// Update first modifier
+	m := list[0]
+	m.Name = "Extra Az"
+	m.PriceDelta = 500
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		m, err = mr.Update(ctx, tx, m)
+		return err
+	}))
+	assert.Equal(t, "Extra Az", m.Name)
+	assert.Equal(t, int64(500), m.PriceDelta)
+}
+
+// ---------------------------------------------------------------------------
+// ProductModifierGroup junction tests
+// ---------------------------------------------------------------------------
+
+func TestProductModifierGroupRepo_AssignAndList(t *testing.T) {
+	ctx := context.Background()
+	pr := repo.NewProductRepo()
+	gr := repo.NewModifierGroupRepo()
+	pmgr := repo.NewProductModifierGroupRepo()
+	tid := uuid.New()
+
+	var prod domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		prod, err = pr.Create(ctx, tx, domain.Product{
+			TenantID: tid, Name: "Köfte", PriceAmount: 12000,
+			Currency: "TRY", Unit: "adet", TaxRateBPS: 1800, IsActive: true,
+		})
+		return err
+	}))
+
+	var g1, g2 domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		g1, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID: tid, Name: "Sos", SelectionType: domain.SelectionSingle,
+		})
+		if err != nil {
+			return err
+		}
+		g2, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID: tid, Name: "Boyut", SelectionType: domain.SelectionSingle,
+		})
+		return err
+	}))
+
+	// Assign both groups
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		if err := pmgr.Assign(ctx, tx, prod.ID, g1.ID, tid, 0); err != nil {
+			return err
+		}
+		return pmgr.Assign(ctx, tx, prod.ID, g2.ID, tid, 1)
+	}))
+
+	var ids []uuid.UUID
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		ids, err = pmgr.ListByProduct(ctx, tx, prod.ID)
+		return err
+	}))
+	assert.Len(t, ids, 2)
+	assert.Contains(t, ids, g1.ID)
+	assert.Contains(t, ids, g2.ID)
+
+	// Remove one
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		return pmgr.Remove(ctx, tx, prod.ID, g1.ID)
+	}))
+
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		ids, err = pmgr.ListByProduct(ctx, tx, prod.ID)
+		return err
+	}))
+	assert.Len(t, ids, 1)
+	assert.Equal(t, g2.ID, ids[0])
+}
+
+// ---------------------------------------------------------------------------
+// Menu tests
+// ---------------------------------------------------------------------------
+
+func TestMenuRepo_CreateAndGet(t *testing.T) {
+	ctx := context.Background()
+	mr := repo.NewMenuRepo()
+	tid := uuid.New()
+
+	var created domain.Menu
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		created, err = mr.Create(ctx, tx, domain.Menu{
+			TenantID:  tid,
+			Name:      "Öğle Menüsü",
+			IsActive:  true,
+			SortOrder: 1,
+		})
+		return err
+	}))
+
+	assert.NotEqual(t, uuid.Nil, created.ID)
+	assert.Equal(t, "Öğle Menüsü", created.Name)
+
+	var fetched domain.Menu
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = mr.GetByID(ctx, tx, created.ID)
+		return err
+	}))
+	assert.Equal(t, created.ID, fetched.ID)
+	assert.Equal(t, "Öğle Menüsü", fetched.Name)
+}
+
+func TestMenuRepo_TenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	mr := repo.NewMenuRepo()
+
+	tidA := uuid.New()
+	tidB := uuid.New()
+
+	var mA domain.Menu
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tidA, func(tx pgx.Tx) error {
+		var err error
+		mA, err = mr.Create(ctx, tx, domain.Menu{
+			TenantID: tidA, Name: "A-Menü", IsActive: true,
+		})
+		return err
+	}))
+
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tidB, func(tx pgx.Tx) error {
+		_, err := mr.GetByID(ctx, tx, mA.ID)
+		assert.ErrorIs(t, err, repo.ErrNotFound)
+		return nil
+	}))
+}
+
+// ---------------------------------------------------------------------------
+// MenuItem junction tests
+// ---------------------------------------------------------------------------
+
+func TestMenuItemRepo_AddListRemove(t *testing.T) {
+	ctx := context.Background()
+	mnr := repo.NewMenuRepo()
+	pr := repo.NewProductRepo()
+	mir := repo.NewMenuItemRepo()
+	tid := uuid.New()
+
+	var menu domain.Menu
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		menu, err = mnr.Create(ctx, tx, domain.Menu{TenantID: tid, Name: "Akşam", IsActive: true})
+		return err
+	}))
+
+	var p1, p2 domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		p1, err = pr.Create(ctx, tx, domain.Product{
+			TenantID: tid, Name: "Izgara Tavuk", PriceAmount: 9000,
+			Currency: "TRY", Unit: "porsiyon", TaxRateBPS: 1800, IsActive: true,
+		})
+		if err != nil {
+			return err
+		}
+		p2, err = pr.Create(ctx, tx, domain.Product{
+			TenantID: tid, Name: "Mercimek Çorbası", PriceAmount: 4000,
+			Currency: "TRY", Unit: "porsiyon", TaxRateBPS: 800, IsActive: true,
+		})
+		return err
+	}))
+
+	override := int64(8500)
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		if err := mir.AddItem(ctx, tx, domain.MenuItem{
+			MenuID: menu.ID, ProductID: p1.ID, TenantID: tid,
+			PriceOverride: &override, IsActive: true, SortOrder: 0,
+		}); err != nil {
+			return err
+		}
+		return mir.AddItem(ctx, tx, domain.MenuItem{
+			MenuID: menu.ID, ProductID: p2.ID, TenantID: tid,
+			IsActive: true, SortOrder: 1,
+		})
+	}))
+
+	var items []domain.MenuItem
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		items, err = mir.ListByMenu(ctx, tx, menu.ID)
+		return err
+	}))
+	assert.Len(t, items, 2)
+
+	// Verify price override
+	for _, item := range items {
+		if item.ProductID == p1.ID {
+			require.NotNil(t, item.PriceOverride)
+			assert.Equal(t, int64(8500), *item.PriceOverride)
+		}
+	}
+
+	// Remove one item
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		return mir.RemoveItem(ctx, tx, menu.ID, p2.ID)
+	}))
+
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		items, err = mir.ListByMenu(ctx, tx, menu.ID)
+		return err
+	}))
+	assert.Len(t, items, 1)
+	assert.Equal(t, p1.ID, items[0].ProductID)
+}

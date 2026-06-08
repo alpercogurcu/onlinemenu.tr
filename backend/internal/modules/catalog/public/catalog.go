@@ -32,3 +32,9 @@ var ErrNotFound = catalogNotFoundError{}
 type catalogNotFoundError struct{}
 
 func (catalogNotFoundError) Error() string { return "catalog: not found" }
+
+// ValidationError is returned when service-level domain validation fails.
+// The HTTP layer checks for it with errors.As and returns 422 Unprocessable Entity.
+type ValidationError struct{ Msg string }
+
+func (e *ValidationError) Error() string { return "catalog: " + e.Msg }

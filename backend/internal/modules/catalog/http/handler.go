@@ -21,6 +21,8 @@ import (
 type Handler struct {
 	categories *service.CategoryService
 	products   *service.ProductService
+	modifiers  *service.ModifierService
+	menus      *service.MenuService
 	logger     *zap.Logger
 }
 
@@ -30,6 +32,8 @@ type Params struct {
 
 	Categories *service.CategoryService
 	Products   *service.ProductService
+	Modifiers  *service.ModifierService
+	Menus      *service.MenuService
 	Logger     *zap.Logger
 }
 
@@ -38,6 +42,8 @@ func NewHandler(p Params) *Handler {
 	return &Handler{
 		categories: p.Categories,
 		products:   p.Products,
+		modifiers:  p.Modifiers,
+		menus:      p.Menus,
 		logger:     p.Logger,
 	}
 }
@@ -56,6 +62,35 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 		r.Delete("/products/{id}", h.deleteProduct)
 
 		r.Get("/categories/{id}/products", h.listByCategory)
+
+		// Modifier groups
+		r.Post("/modifier-groups", h.createModifierGroup)
+		r.Get("/modifier-groups", h.listModifierGroups)
+		r.Get("/modifier-groups/{id}", h.getModifierGroup)
+		r.Put("/modifier-groups/{id}", h.updateModifierGroup)
+		r.Delete("/modifier-groups/{id}", h.deleteModifierGroup)
+
+		// Modifiers within a group
+		r.Post("/modifier-groups/{id}/modifiers", h.createModifier)
+		r.Get("/modifier-groups/{id}/modifiers", h.listModifiers)
+		r.Put("/modifier-groups/{groupID}/modifiers/{id}", h.updateModifier)
+		r.Delete("/modifier-groups/{groupID}/modifiers/{id}", h.deleteModifier)
+
+		// Product ↔ modifier group assignments
+		r.Post("/products/{id}/modifier-groups", h.assignModifierGroup)
+		r.Get("/products/{id}/modifier-groups", h.listProductModifierGroups)
+		r.Delete("/products/{id}/modifier-groups/{groupID}", h.removeModifierGroup)
+
+		// Menus
+		r.Post("/menus", h.createMenu)
+		r.Get("/menus", h.listMenus)
+		r.Get("/menus/{id}", h.getMenu)
+		r.Put("/menus/{id}", h.updateMenu)
+
+		// Menu items
+		r.Post("/menus/{id}/items", h.addMenuItem)
+		r.Get("/menus/{id}/items", h.listMenuItems)
+		r.Delete("/menus/{id}/items/{productID}", h.removeMenuItem)
 	})
 }
 
@@ -296,8 +331,504 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	var ve *pub.ValidationError
+	if errors.As(err, &ve) {
+		http.Error(w, ve.Msg, http.StatusUnprocessableEntity)
+		return
+	}
 	h.logger.Error("catalog handler error", zap.Error(err))
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+// ---------------------------------------------------------------------------
+// Modifier group handlers
+// ---------------------------------------------------------------------------
+
+func (h *Handler) createModifierGroup(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name          string `json:"name"`
+		SelectionType string `json:"selection_type"`
+		MinSelections int16  `json:"min_selections"`
+		MaxSelections *int16 `json:"max_selections"`
+		IsRequired    bool   `json:"is_required"`
+		SortOrder     int16  `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name is required", http.StatusUnprocessableEntity)
+		return
+	}
+	if req.SelectionType == "" {
+		req.SelectionType = "single"
+	}
+	g, err := h.modifiers.CreateGroup(r.Context(), tenantID, domain.ModifierGroup{
+		Name:          req.Name,
+		SelectionType: domain.SelectionType(req.SelectionType),
+		MinSelections: req.MinSelections,
+		MaxSelections: req.MaxSelections,
+		IsRequired:    req.IsRequired,
+		SortOrder:     req.SortOrder,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, g)
+}
+
+func (h *Handler) listModifierGroups(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	groups, err := h.modifiers.ListGroups(r.Context(), tenantID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, groups)
+}
+
+func (h *Handler) getModifierGroup(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	g, err := h.modifiers.GetGroup(r.Context(), tenantID, id)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, g)
+}
+
+func (h *Handler) updateModifierGroup(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Name          string `json:"name"`
+		SelectionType string `json:"selection_type"`
+		MinSelections int16  `json:"min_selections"`
+		MaxSelections *int16 `json:"max_selections"`
+		IsRequired    bool   `json:"is_required"`
+		SortOrder     int16  `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updated, err := h.modifiers.UpdateGroup(r.Context(), tenantID, domain.ModifierGroup{
+		ID:            id,
+		Name:          req.Name,
+		SelectionType: domain.SelectionType(req.SelectionType),
+		MinSelections: req.MinSelections,
+		MaxSelections: req.MaxSelections,
+		IsRequired:    req.IsRequired,
+		SortOrder:     req.SortOrder,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+func (h *Handler) deleteModifierGroup(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := h.modifiers.DeleteGroup(r.Context(), tenantID, id); err != nil {
+		h.error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// Modifier handlers
+// ---------------------------------------------------------------------------
+
+func (h *Handler) createModifier(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	groupID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Name       string `json:"name"`
+		PriceDelta int64  `json:"price_delta"`
+		IsActive   bool   `json:"is_active"`
+		SortOrder  int16  `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	m, err := h.modifiers.CreateModifier(r.Context(), tenantID, domain.Modifier{
+		GroupID:    groupID,
+		Name:       req.Name,
+		PriceDelta: req.PriceDelta,
+		IsActive:   req.IsActive,
+		SortOrder:  req.SortOrder,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, m)
+}
+
+func (h *Handler) listModifiers(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	groupID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	modifiers, err := h.modifiers.ListModifiers(r.Context(), tenantID, groupID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, modifiers)
+}
+
+func (h *Handler) updateModifier(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Name       string `json:"name"`
+		PriceDelta int64  `json:"price_delta"`
+		IsActive   bool   `json:"is_active"`
+		SortOrder  int16  `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updated, err := h.modifiers.UpdateModifier(r.Context(), tenantID, domain.Modifier{
+		ID:         id,
+		Name:       req.Name,
+		PriceDelta: req.PriceDelta,
+		IsActive:   req.IsActive,
+		SortOrder:  req.SortOrder,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+func (h *Handler) deleteModifier(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := h.modifiers.DeleteModifier(r.Context(), tenantID, id); err != nil {
+		h.error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// Product ↔ modifier group assignment handlers
+// ---------------------------------------------------------------------------
+
+func (h *Handler) assignModifierGroup(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid product id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		GroupID   uuid.UUID `json:"group_id"`
+		SortOrder int16     `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.GroupID == uuid.Nil {
+		http.Error(w, "group_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+	if err := h.modifiers.AssignGroup(r.Context(), tenantID, productID, req.GroupID, req.SortOrder); err != nil {
+		h.error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) listProductModifierGroups(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid product id", http.StatusBadRequest)
+		return
+	}
+	ids, err := h.modifiers.ListProductGroups(r.Context(), tenantID, productID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, ids)
+}
+
+func (h *Handler) removeModifierGroup(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid product id", http.StatusBadRequest)
+		return
+	}
+	groupID, err := uuid.Parse(chi.URLParam(r, "groupID"))
+	if err != nil {
+		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	if err := h.modifiers.RemoveGroup(r.Context(), tenantID, productID, groupID); err != nil {
+		h.error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// Menu handlers
+// ---------------------------------------------------------------------------
+
+func (h *Handler) createMenu(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		IsActive    bool   `json:"is_active"`
+		SortOrder   int16  `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name is required", http.StatusUnprocessableEntity)
+		return
+	}
+	m, err := h.menus.Create(r.Context(), tenantID, domain.Menu{
+		Name:        req.Name,
+		Description: req.Description,
+		IsActive:    req.IsActive,
+		SortOrder:   req.SortOrder,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, m)
+}
+
+func (h *Handler) listMenus(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	menus, err := h.menus.List(r.Context(), tenantID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, menus)
+}
+
+func (h *Handler) getMenu(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	m, err := h.menus.GetByID(r.Context(), tenantID, id)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, m)
+}
+
+func (h *Handler) updateMenu(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		IsActive    bool   `json:"is_active"`
+		SortOrder   int16  `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updated, err := h.menus.Update(r.Context(), tenantID, domain.Menu{
+		ID:          id,
+		Name:        req.Name,
+		Description: req.Description,
+		IsActive:    req.IsActive,
+		SortOrder:   req.SortOrder,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+// ---------------------------------------------------------------------------
+// Menu item handlers
+// ---------------------------------------------------------------------------
+
+func (h *Handler) addMenuItem(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	menuID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid menu id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		ProductID     uuid.UUID `json:"product_id"`
+		PriceOverride *int64    `json:"price_override"`
+		IsActive      bool      `json:"is_active"`
+		SortOrder     int16     `json:"sort_order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.ProductID == uuid.Nil {
+		http.Error(w, "product_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+	if err := h.menus.AddItem(r.Context(), tenantID, domain.MenuItem{
+		MenuID:        menuID,
+		ProductID:     req.ProductID,
+		PriceOverride: req.PriceOverride,
+		IsActive:      req.IsActive,
+		SortOrder:     req.SortOrder,
+	}); err != nil {
+		h.error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) listMenuItems(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	menuID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid menu id", http.StatusBadRequest)
+		return
+	}
+	items, err := h.menus.ListItems(r.Context(), tenantID, menuID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, items)
+}
+
+func (h *Handler) removeMenuItem(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	menuID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid menu id", http.StatusBadRequest)
+		return
+	}
+	productID, err := uuid.Parse(chi.URLParam(r, "productID"))
+	if err != nil {
+		http.Error(w, "invalid product id", http.StatusBadRequest)
+		return
+	}
+	if err := h.menus.RemoveItem(r.Context(), tenantID, menuID, productID); err != nil {
+		h.error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {

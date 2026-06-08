@@ -14,6 +14,7 @@ import (
 	"onlinemenu.tr/internal/modules/catalog/domain"
 	pub "onlinemenu.tr/internal/modules/catalog/public"
 	"onlinemenu.tr/internal/modules/catalog/service"
+	"onlinemenu.tr/internal/platform/auth"
 )
 
 // Handler exposes catalog REST endpoints.
@@ -58,12 +59,15 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	})
 }
 
-// tenantIDFromCtx extracts the tenant UUID set by the auth middleware.
-// Returns uuid.Nil on failure — handlers must guard against this.
-func tenantIDFromCtx(r *http.Request) uuid.UUID {
-	raw, _ := r.Context().Value("tenant_id").(string)
-	id, _ := uuid.Parse(raw)
-	return id
+// requireTenantID extracts the tenant UUID from the auth principal in the request context.
+// Writes a 401 response and returns (uuid.Nil, false) if no valid principal is found.
+func requireTenantID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	p, err := auth.FromContext(r.Context())
+	if err != nil || p.TenantID == uuid.Nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return uuid.Nil, false
+	}
+	return p.TenantID, true
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +75,10 @@ func tenantIDFromCtx(r *http.Request) uuid.UUID {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) listCategories(w http.ResponseWriter, r *http.Request) {
-	tenantID := tenantIDFromCtx(r)
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	cats, err := h.categories.List(r.Context(), tenantID)
 	if err != nil {
 		h.error(w, r, err)
@@ -81,12 +88,16 @@ func (h *Handler) listCategories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getCategory(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	cat, err := h.categories.GetByID(r.Context(), tenantIDFromCtx(r), id)
+	cat, err := h.categories.GetByID(r.Context(), tenantID, id)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -95,6 +106,10 @@ func (h *Handler) getCategory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	var req struct {
 		Name        string     `json:"name"`
 		Description string     `json:"description"`
@@ -110,7 +125,7 @@ func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cat, err := h.categories.Create(r.Context(), tenantIDFromCtx(r), domain.Category{
+	cat, err := h.categories.Create(r.Context(), tenantID, domain.Category{
 		Name:        req.Name,
 		Description: req.Description,
 		ParentID:    req.ParentID,
@@ -129,7 +144,11 @@ func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) listProducts(w http.ResponseWriter, r *http.Request) {
-	products, err := h.products.List(r.Context(), tenantIDFromCtx(r))
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	products, err := h.products.List(r.Context(), tenantID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -138,12 +157,16 @@ func (h *Handler) listProducts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getProduct(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	p, err := h.products.GetByID(r.Context(), tenantIDFromCtx(r), id)
+	p, err := h.products.GetByID(r.Context(), tenantID, id)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -152,6 +175,10 @@ func (h *Handler) getProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	var req struct {
 		CategoryID           *uuid.UUID `json:"category_id"`
 		Name                 string     `json:"name"`
@@ -179,7 +206,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		req.Unit = "adet"
 	}
 
-	p, err := h.products.Create(r.Context(), tenantIDFromCtx(r), domain.Product{
+	p, err := h.products.Create(r.Context(), tenantID, domain.Product{
 		CategoryID:           req.CategoryID,
 		Name:                 req.Name,
 		Description:          req.Description,
@@ -200,6 +227,10 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
@@ -213,7 +244,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = id
 
-	updated, err := h.products.Update(r.Context(), tenantIDFromCtx(r), req)
+	updated, err := h.products.Update(r.Context(), tenantID, req)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -222,12 +253,16 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteProduct(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	if err := h.products.Delete(r.Context(), tenantIDFromCtx(r), id); err != nil {
+	if err := h.products.Delete(r.Context(), tenantID, id); err != nil {
 		h.error(w, r, err)
 		return
 	}
@@ -235,12 +270,16 @@ func (h *Handler) deleteProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listByCategory(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
 	catID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid category id", http.StatusBadRequest)
 		return
 	}
-	products, err := h.products.ListByCategory(r.Context(), tenantIDFromCtx(r), catID)
+	products, err := h.products.ListByCategory(r.Context(), tenantID, catID)
 	if err != nil {
 		h.error(w, r, err)
 		return

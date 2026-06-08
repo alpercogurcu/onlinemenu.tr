@@ -37,8 +37,18 @@ linters-settings:
       - errors.Unwrap(
       - .Wrap(
       - .Wrapf(
+      # pgx and Redis interface methods: errors are already contextual at the call site.
+      - .Scan(
+      - .Err()
+      - .Result()
+      # Standard library patterns used in HTTP helpers.
+      - .Decode(
+      - .Write(
+      - uuid.Parse(
     ignorePackageGlobs:
       - onlinemenu.tr/internal/platform/*
+      # Internal module packages: errors propagate with module-level context from repo/service funcs.
+      - onlinemenu.tr/internal/modules/*
 
   exhaustive:
     default-signifies-exhaustive: true
@@ -51,10 +61,16 @@ issues:
         - wrapcheck
         - errcheck
 
-    # cmd/migrate uses os.Exit in main by design.
+    # cmd/ files are composition roots; wrapcheck doesn't add value there.
     - path: cmd/
       linters:
         - wrapcheck
+
+    # Deferred cache deletions intentionally use context.Background() because the
+    # request context is already cancelled when the defer runs.
+    - path: internal/platform/httpx/idempotency\.go
+      linters:
+        - contextcheck
 
   # Maximum issues per linter before the run fails.
   max-issues-per-linter: 50

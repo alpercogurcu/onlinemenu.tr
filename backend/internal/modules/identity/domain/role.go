@@ -10,9 +10,9 @@ import (
 type RoleScope string
 
 const (
-	RoleScopeSystem  RoleScope = "system"  // tenant_id IS NULL
-	RoleScopeTenant  RoleScope = "tenant"  // tenant-wide custom role
-	RoleScopeBranch  RoleScope = "branch"  // branch-specific custom role
+	RoleScopeSystem RoleScope = "system" // tenant_id IS NULL
+	RoleScopeTenant RoleScope = "tenant" // tenant-wide custom role
+	RoleScopeBranch RoleScope = "branch" // branch-specific custom role
 )
 
 // Role defines a named permission profile. System roles (IsSystem=true) are seeded

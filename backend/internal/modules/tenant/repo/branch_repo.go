@@ -151,12 +151,12 @@ type rowScanner interface {
 
 func scanBranch(row rowScanner) (pub.Branch, error) {
 	var (
-		b                              pub.Branch
-		supplyRaw                      []byte
-		ownershipType, operationType   string
-		identityType                   string
-		addressLine1                   string
-		city, district, postalCode     string
+		b                            pub.Branch
+		supplyRaw                    []byte
+		ownershipType, operationType string
+		identityType                 string
+		addressLine1                 string
+		city, district, postalCode   string
 	)
 
 	err := row.Scan(

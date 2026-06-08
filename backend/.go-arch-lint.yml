@@ -1,49 +1,138 @@
-version: 2
+version: 3
 workdir: .
 
+allow:
+  depOnAnyVendor: true
+  ignoreNotFoundComponents: true
+
+# Composition root files: cmd/ binaries and module.go wiring are excluded from
+# boundary checks because they legitimately import across all modules.
+excludeFiles:
+  - "cmd/.*"
+  - "internal/modules/[^/]+/module\\.go"
+
+# Sub-layer granularity enforces cross-module boundary: modules may only import
+# the public/ interface of other modules, never domain/, repo/, or service/.
 components:
-  platform:      { in: "internal/platform/**" }
-  identity:      { in: "internal/modules/identity/**" }
-  tenant:        { in: "internal/modules/tenant/**" }
-  catalog:       { in: "internal/modules/catalog/**" }
-  pos:           { in: "internal/modules/pos/**" }
-  inventory:     { in: "internal/modules/inventory/**" }
-  billing:       { in: "internal/modules/billing/**" }
-  payment:       { in: "internal/modules/payment/**" }
-  edge_sync:     { in: "internal/modules/edge_sync/**" }
-  hr:            { in: "internal/modules/hr/**" }
-  party:         { in: "internal/modules/party/**" }
-  manufacturing: { in: "internal/modules/manufacturing/**" }
-  notification:  { in: "internal/modules/notification/**" }
+  platform: { in: "internal/platform/**" }
+
+  # Catalog
+  catalog_domain:   { in: "internal/modules/catalog/domain/**" }
+  catalog_repo:     { in: "internal/modules/catalog/repo/**" }
+  catalog_service:  { in: "internal/modules/catalog/service/**" }
+  catalog_http:     { in: "internal/modules/catalog/http/**" }
+  catalog_public:   { in: "internal/modules/catalog/public/**" }
+  catalog_events:   { in: "internal/modules/catalog/events/**" }
+
+  # Identity
+  identity_domain:  { in: "internal/modules/identity/domain/**" }
+  identity_repo:    { in: "internal/modules/identity/repo/**" }
+  identity_service: { in: "internal/modules/identity/service/**" }
+  identity_http:    { in: "internal/modules/identity/http/**" }
+  identity_public:  { in: "internal/modules/identity/public/**" }
+  identity_events:  { in: "internal/modules/identity/events/**" }
+
+  # Tenant
+  tenant_repo:     { in: "internal/modules/tenant/repo/**" }
+  tenant_service:  { in: "internal/modules/tenant/service/**" }
+  tenant_http:     { in: "internal/modules/tenant/http/**" }
+  tenant_public:   { in: "internal/modules/tenant/public/**" }
+  tenant_events:   { in: "internal/modules/tenant/events/**" }
+
+  # POS
+  pos_domain:    { in: "internal/modules/pos/domain/**" }
+  pos_repo:      { in: "internal/modules/pos/repo/**" }
+  pos_service:   { in: "internal/modules/pos/service/**" }
+  pos_http:      { in: "internal/modules/pos/http/**" }
+  pos_public:    { in: "internal/modules/pos/public/**" }
+  pos_events:    { in: "internal/modules/pos/events/**" }
+
+  # Payment
+  payment_domain:   { in: "internal/modules/payment/domain/**" }
+  payment_repo:     { in: "internal/modules/payment/repo/**" }
+  payment_service:  { in: "internal/modules/payment/service/**" }
+  payment_http:     { in: "internal/modules/payment/http/**" }
+  payment_public:   { in: "internal/modules/payment/public/**" }
+
+  # Notification
+  notification_public: { in: "internal/modules/notification/public/**" }
+
+  # Manufacturing
+  manufacturing_public: { in: "internal/modules/manufacturing/public/**" }
 
 deps:
-  identity:
-    may_depend_on: [platform]
-  tenant:
-    may_depend_on: [platform]
-  catalog:
-    may_depend_on: [platform]
-  hr:
-    may_depend_on: [platform]
-  party:
-    may_depend_on: [platform]
-  notification:
-    may_depend_on: [platform]
-  manufacturing:
-    may_depend_on: [platform, inventory.public]
-    must_not_depend_on: [pos.domain, pos.repo, billing.domain, payment.domain]
-  inventory:
-    may_depend_on: [platform, catalog.public]
-    must_not_depend_on: [pos.domain, payment.domain, pos.repo, payment.repo]
-  pos:
-    may_depend_on: [platform, catalog.public, inventory.public, payment.public]
-    must_not_depend_on: [inventory.repo, inventory.domain, billing.domain, catalog.domain, payment.repo]
-  payment:
-    may_depend_on: [platform, notification.public]
-    must_not_depend_on: [pos.domain, pos.repo, billing.domain]
-  billing:
-    may_depend_on: [platform, notification.public]
-    must_not_depend_on: [pos.domain, payment.domain, pos.repo, payment.repo]
-  edge_sync:
-    may_depend_on: [platform, catalog.public, pos.public, inventory.public]
-    must_not_depend_on: [pos.repo, pos.domain, catalog.domain, inventory.domain]
+  # Platform is unrestricted — it is the foundation all modules build on.
+  platform:
+    anyProjectDeps: true
+
+  # --- Catalog ---
+  # Self-reference allows black-box test files (package domain_test) to compile.
+  catalog_domain:
+    mayDependOn: [platform, catalog_domain]
+  catalog_repo:
+    mayDependOn: [platform, catalog_domain, catalog_repo]
+  catalog_service:
+    mayDependOn: [platform, catalog_domain, catalog_repo, catalog_public]
+  catalog_http:
+    mayDependOn: [platform, catalog_domain, catalog_service, catalog_public]
+  catalog_public:
+    mayDependOn: [platform]
+  catalog_events:
+    mayDependOn: [platform, catalog_public]
+
+  # --- Identity ---
+  identity_domain:
+    mayDependOn: [platform]
+  identity_repo:
+    # Repos return identity_public types directly (no separate domain DTOs).
+    mayDependOn: [platform, identity_domain, identity_public]
+  identity_service:
+    mayDependOn: [platform, identity_domain, identity_repo, identity_public]
+  identity_http:
+    mayDependOn: [platform, identity_domain, identity_service, identity_public]
+  identity_public:
+    mayDependOn: [platform]
+  identity_events:
+    # Subscriber creates repo records when tenant events arrive.
+    mayDependOn: [platform, identity_public, identity_repo]
+
+  # --- Tenant ---
+  tenant_repo:
+    mayDependOn: [platform, tenant_public]
+  tenant_service:
+    mayDependOn: [platform, tenant_repo, tenant_public, tenant_events]
+  tenant_http:
+    mayDependOn: [platform, tenant_service, tenant_public]
+  tenant_public:
+    mayDependOn: [platform]
+  tenant_events:
+    mayDependOn: [platform, tenant_public]
+
+  # --- POS ---
+  # pos may use catalog_public and payment_public; never their internal layers.
+  pos_domain:
+    mayDependOn: [platform, catalog_public, pos_domain]
+  pos_repo:
+    mayDependOn: [platform, pos_domain, pos_repo]
+  pos_service:
+    mayDependOn: [platform, pos_domain, pos_repo, pos_public, catalog_public, payment_public]
+  pos_http:
+    mayDependOn: [platform, pos_domain, pos_service, pos_public, catalog_public]
+  pos_public:
+    # pos_public exposes types built from pos_domain aggregates.
+    mayDependOn: [platform, pos_domain]
+  pos_events:
+    mayDependOn: [platform, pos_public]
+
+  # --- Payment ---
+  # payment must NOT import any pos or billing internals.
+  payment_domain:
+    mayDependOn: [platform]
+  payment_repo:
+    mayDependOn: [platform, payment_domain, payment_repo]
+  payment_service:
+    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public]
+  payment_http:
+    mayDependOn: [platform, payment_domain, payment_service, payment_public]
+  payment_public:
+    mayDependOn: [platform]

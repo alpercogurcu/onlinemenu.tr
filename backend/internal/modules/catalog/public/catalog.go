@@ -14,7 +14,7 @@ import (
 type Product struct {
 	ID          uuid.UUID
 	Name        string
-	PriceAmount int64  // kuruş
+	PriceAmount int64 // kuruş
 	Currency    string
 	TaxRateBPS  int
 	IsActive    bool

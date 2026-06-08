@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"onlinemenu.tr/internal/platform/auth"
 	pub "onlinemenu.tr/internal/modules/tenant/public"
 	"onlinemenu.tr/internal/modules/tenant/service"
+	"onlinemenu.tr/internal/platform/auth"
 )
 
 // maxBodyBytes is the hard cap on incoming JSON request bodies (1 MB).

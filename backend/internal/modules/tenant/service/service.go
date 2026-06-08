@@ -32,14 +32,14 @@ var (
 
 // Service implements the tenant module's public interfaces.
 type Service struct {
-	db          *db.Pool
-	tenantRepo  *repo.TenantRepo
-	branchRepo  *repo.BranchRepo
-	docRepo     *repo.DocumentRepo
-	intRepo     *repo.IntegratorRepo
-	hoursRepo   *repo.HoursRepo
-	publisher   eventbus.Publisher
-	logger      *zap.Logger
+	db         *db.Pool
+	tenantRepo *repo.TenantRepo
+	branchRepo *repo.BranchRepo
+	docRepo    *repo.DocumentRepo
+	intRepo    *repo.IntegratorRepo
+	hoursRepo  *repo.HoursRepo
+	publisher  eventbus.Publisher
+	logger     *zap.Logger
 }
 
 // Params groups the fx-injected dependencies for NewService.

@@ -27,13 +27,13 @@ func (c OrderChannel) Valid() bool {
 type OrderStatus string
 
 const (
-	OrderStatusPending    OrderStatus = "pending"
-	OrderStatusAccepted   OrderStatus = "accepted"
-	OrderStatusRejected   OrderStatus = "rejected"
-	OrderStatusPreparing  OrderStatus = "preparing"
-	OrderStatusReady      OrderStatus = "ready"
-	OrderStatusDelivered  OrderStatus = "delivered"
-	OrderStatusCancelled  OrderStatus = "cancelled"
+	OrderStatusPending   OrderStatus = "pending"
+	OrderStatusAccepted  OrderStatus = "accepted"
+	OrderStatusRejected  OrderStatus = "rejected"
+	OrderStatusPreparing OrderStatus = "preparing"
+	OrderStatusReady     OrderStatus = "ready"
+	OrderStatusDelivered OrderStatus = "delivered"
+	OrderStatusCancelled OrderStatus = "cancelled"
 )
 
 func (s OrderStatus) Valid() bool {
@@ -47,37 +47,37 @@ func (s OrderStatus) Valid() bool {
 
 // OrderItem is a single line on an order with product data snapshotted at order time.
 type OrderItem struct {
-	ID                  uuid.UUID
-	TenantID            uuid.UUID
-	OrderID             uuid.UUID
-	ProductID           uuid.UUID
-	ProductName         string
-	ProductPriceAmount  int64
-	ProductCurrency     string
-	TaxRateBPS          int
-	Quantity            int
-	UnitPriceAmount     int64
-	Note                string
-	CreatedAt           time.Time
+	ID                 uuid.UUID
+	TenantID           uuid.UUID
+	OrderID            uuid.UUID
+	ProductID          uuid.UUID
+	ProductName        string
+	ProductPriceAmount int64
+	ProductCurrency    string
+	TaxRateBPS         int
+	Quantity           int
+	UnitPriceAmount    int64
+	Note               string
+	CreatedAt          time.Time
 }
 
 // Order is a kitchen ticket for one fulfillment event (one channel, one round).
 type Order struct {
-	ID                    uuid.UUID
-	TenantID              uuid.UUID
-	BranchID              uuid.UUID
-	CheckID               *uuid.UUID
-	OrderChannel          OrderChannel
-	DeliveryIntegratorID  *uuid.UUID
-	Status                OrderStatus
-	AcceptDeadlineAt      *time.Time
-	AcceptedAt            *time.Time
-	AcceptedBy            *uuid.UUID
-	RejectedAt            *time.Time
-	RejectedBy            *uuid.UUID
-	RejectionReason       string
-	Note                  string
-	Items                 []OrderItem
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                   uuid.UUID
+	TenantID             uuid.UUID
+	BranchID             uuid.UUID
+	CheckID              *uuid.UUID
+	OrderChannel         OrderChannel
+	DeliveryIntegratorID *uuid.UUID
+	Status               OrderStatus
+	AcceptDeadlineAt     *time.Time
+	AcceptedAt           *time.Time
+	AcceptedBy           *uuid.UUID
+	RejectedAt           *time.Time
+	RejectedBy           *uuid.UUID
+	RejectionReason      string
+	Note                 string
+	Items                []OrderItem
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }

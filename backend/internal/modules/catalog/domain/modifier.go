@@ -9,16 +9,16 @@ import (
 // ModifierGroup is a logical grouping of options that can be applied to a product
 // (e.g. "Soslar", "Pişirme Şekli", "İçecek Boyutu").
 type ModifierGroup struct {
-	ID             uuid.UUID
-	TenantID       uuid.UUID
-	Name           string
-	SelectionType  SelectionType
-	MinSelections  int16
-	MaxSelections  *int16 // nil = unlimited
-	IsRequired     bool
-	SortOrder      int16
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	Name          string
+	SelectionType SelectionType
+	MinSelections int16
+	MaxSelections *int16 // nil = unlimited
+	IsRequired    bool
+	SortOrder     int16
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // SelectionType controls how many options a customer may pick from a group.

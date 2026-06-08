@@ -228,11 +228,11 @@ func (r *DocumentRepo) DeleteBranchDocument(ctx context.Context, tx pgx.Tx, tena
 
 func scanDocument(row rowScanner) (pub.Document, error) {
 	var (
-		d            pub.Document
-		docType      string
-		status       string
-		validFrom    *time.Time
-		validUntil   *time.Time
+		d          pub.Document
+		docType    string
+		status     string
+		validFrom  *time.Time
+		validUntil *time.Time
 	)
 
 	err := row.Scan(

@@ -22,12 +22,12 @@ const (
 //
 // BranchID == nil means a chain-wide membership (e.g. chain owner or chain auditor).
 type Membership struct {
-	ID       uuid.UUID
-	PersonID uuid.UUID
-	TenantID uuid.UUID
-	BranchID *uuid.UUID // nil = chain-wide
-	RoleID   uuid.UUID
-	Status   MembershipStatus
+	ID        uuid.UUID
+	PersonID  uuid.UUID
+	TenantID  uuid.UUID
+	BranchID  *uuid.UUID // nil = chain-wide
+	RoleID    uuid.UUID
+	Status    MembershipStatus
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

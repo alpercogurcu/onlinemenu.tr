@@ -14,14 +14,14 @@ import (
 )
 
 const (
-	contextTokenIssuer  = "onlinemenu"
-	contextTokenTTL     = 8 * time.Hour
-	contextTokenTyp     = "CTX"
+	contextTokenIssuer = "onlinemenu"
+	contextTokenTTL    = 8 * time.Hour
+	contextTokenTyp    = "CTX"
 )
 
 var (
-	ErrTokenExpired   = errors.New("auth: context token expired")
-	ErrTokenInvalid   = errors.New("auth: context token invalid")
+	ErrTokenExpired = errors.New("auth: context token expired")
+	ErrTokenInvalid = errors.New("auth: context token invalid")
 )
 
 // contextTokenHeader is the fixed header embedded in every context token.

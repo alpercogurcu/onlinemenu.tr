@@ -27,8 +27,8 @@ const (
 	// handler execution under normal load.
 	inFlightTTL = 30 * time.Second
 
-	idempotencyCachePrefix  = "idem:"
-	idempotencyLockSuffix   = ":lock"
+	idempotencyCachePrefix = "idem:"
+	idempotencyLockSuffix  = ":lock"
 )
 
 // idempotencyEntry is the cached response stored for a previously seen key.

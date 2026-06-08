@@ -16,7 +16,9 @@ import (
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
 
+	"onlinemenu.tr/internal/modules/catalog"
 	"onlinemenu.tr/internal/modules/identity"
+	"onlinemenu.tr/internal/modules/pos"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
@@ -56,6 +58,8 @@ func main() {
 		// Domain modules
 		identity.Module,
 		tenant.Module,
+		catalog.Module,
+		pos.Module,
 
 		// HTTP server
 		fx.Provide(newRouter),

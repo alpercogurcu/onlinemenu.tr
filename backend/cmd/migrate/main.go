@@ -25,6 +25,7 @@ var moduleOrder = []string{
 	"tenant",
 	"identity",
 	"catalog",
+	"pos",
 }
 
 func main() {

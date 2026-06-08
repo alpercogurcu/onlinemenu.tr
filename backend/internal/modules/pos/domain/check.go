@@ -1,0 +1,40 @@
+package domain
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// CheckStatus is the lifecycle state of a dine-in tab.
+type CheckStatus string
+
+const (
+	CheckStatusOpen      CheckStatus = "open"
+	CheckStatusClosed    CheckStatus = "closed"
+	CheckStatusCancelled CheckStatus = "cancelled"
+)
+
+func (s CheckStatus) Valid() bool {
+	switch s {
+	case CheckStatusOpen, CheckStatusClosed, CheckStatusCancelled:
+		return true
+	}
+	return false
+}
+
+// Check represents a dine-in table session (adisyon) that accumulates orders.
+type Check struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	BranchID   uuid.UUID
+	TableLabel string
+	Status     CheckStatus
+	OpenedBy   uuid.UUID
+	ClosedBy   *uuid.UUID
+	Note       string
+	OpenedAt   time.Time
+	ClosedAt   *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}

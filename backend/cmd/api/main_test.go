@@ -20,6 +20,7 @@ import (
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
 	platformotel "onlinemenu.tr/internal/platform/otel"
+	"onlinemenu.tr/internal/platform/outbox"
 	"onlinemenu.tr/internal/platform/vault"
 )
 
@@ -41,12 +42,14 @@ func TestFxGraphValidation(t *testing.T) {
 		fx.Provide(newCacheConfig),
 		fx.Provide(newOPAConfig),
 		fx.Provide(newHTTPConfig),
+		fx.Provide(newOutboxConfig),
 
 		db.Module,
 		eventbus.Module,
 		platformotel.Module,
 		vault.Module,
 		cache.Module,
+		outbox.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),

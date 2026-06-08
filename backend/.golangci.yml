@@ -72,6 +72,13 @@ issues:
       linters:
         - contextcheck
 
+    # The outbox dispatcher goroutine must outlive the startup context.
+    # context.WithCancel(context.Background()) is intentional — the goroutine
+    # runs for the app's full lifetime and is cancelled via OnStop.
+    - path: internal/platform/outbox/dispatcher\.go
+      linters:
+        - contextcheck
+
   # Maximum issues per linter before the run fails.
   max-issues-per-linter: 50
   max-same-issues: 10

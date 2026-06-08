@@ -112,6 +112,15 @@ func (b *Bus) Publish(ctx context.Context, subject string, payload []byte) error
 	return nil
 }
 
+// PublishMsg sends a nats.Msg to JetStream, preserving headers such as
+// Nats-Msg-Id for per-message deduplication.
+func (b *Bus) PublishMsg(ctx context.Context, msg *nats.Msg) error {
+	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
+		return fmt.Errorf("eventbus: publish msg to %q: %w", msg.Subject, err)
+	}
+	return nil
+}
+
 // Subscribe creates a durable push consumer filtered to subject and calls handler
 // for each message. The consumer is registered with the Bus so that OnStop can
 // shut it down cleanly even if ctx is never cancelled by the caller.

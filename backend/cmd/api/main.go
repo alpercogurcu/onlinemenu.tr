@@ -30,6 +30,7 @@ import (
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
 	platformotel "onlinemenu.tr/internal/platform/otel"
+	"onlinemenu.tr/internal/platform/outbox"
 	"onlinemenu.tr/internal/platform/vault"
 )
 
@@ -52,12 +53,14 @@ func main() {
 		fx.Provide(newCacheConfig),
 		fx.Provide(newOPAConfig),
 		fx.Provide(newHTTPConfig),
+		fx.Provide(newOutboxConfig),
 
 		db.Module,
 		eventbus.Module,
 		platformotel.Module,
 		vault.Module,
 		cache.Module,
+		outbox.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),
@@ -187,7 +190,7 @@ func newEventBusConfig() eventbus.Config {
 	return eventbus.Config{
 		URL:        mustEnv("NATS_URL"),
 		StreamName: "DOMAIN_EVENTS",
-		Subjects:   []string{"tenant.>", "identity.>", "pos.>", "inventory.>"},
+		Subjects:   []string{"tenant.>", "identity.>", "pos.>", "payment.>", "inventory.>"},
 	}
 }
 
@@ -230,6 +233,15 @@ func newHTTPConfig() httpConfig {
 	}
 }
 
+func newOutboxConfig() outbox.Config {
+	return outbox.Config{
+		DSN:          envOr("OUTBOX_MIGRATOR_DSN", ""),
+		PollInterval: 2 * time.Second,
+		BatchSize:    100,
+		MaxRetries:   10,
+	}
+}
+
 func newContextTokenSigner() (*auth.ContextTokenSigner, error) {
 	secret := envOr("CTX_TOKEN_SECRET", "")
 	if secret == "" {
@@ -262,7 +274,6 @@ func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.Keyclo
 	}
 	var claims struct {
 		Sub string `json:"sub"`
-		Exp int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return nil, fmt.Errorf("auth: unmarshal JWT claims: %w", err)

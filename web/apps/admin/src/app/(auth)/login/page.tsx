@@ -32,7 +32,9 @@ export default function LoginPage() {
   })
 
   const onSubmit = async (data: LoginFormValues) => {
-    console.log("Login attempt:", data)
+    // TODO: call api.post('/auth/login', data) and store the returned access
+    // token with setAccessToken() from @/lib/api. Never log credentials.
+    void data
   }
 
   return (

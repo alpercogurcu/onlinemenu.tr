@@ -70,6 +70,13 @@ components:
   billing_public:   { in: "internal/modules/billing/public/**" }
   billing_adapter:  { in: "internal/modules/billing/adapter/**" }
 
+  # Party
+  party_domain:    { in: "internal/modules/party/domain/**" }
+  party_repo:      { in: "internal/modules/party/repo/**" }
+  party_service:   { in: "internal/modules/party/service/**" }
+  party_http:      { in: "internal/modules/party/http/**" }
+  party_public:    { in: "internal/modules/party/public/**" }
+
   # Notification
   notification_public: { in: "internal/modules/notification/public/**" }
 
@@ -183,6 +190,18 @@ deps:
     mayDependOn: [platform, billing_domain, billing_service, billing_public]
   billing_public:
     mayDependOn: [platform, billing_domain]
+
+  # --- Party ---
+  party_domain:
+    mayDependOn: [platform, party_domain]
+  party_repo:
+    mayDependOn: [platform, party_domain, party_repo]
+  party_service:
+    mayDependOn: [platform, party_domain, party_repo, party_public]
+  party_http:
+    mayDependOn: [platform, party_domain, party_service, party_public]
+  party_public:
+    mayDependOn: [platform, party_domain]
 
   # --- Platform Integration ---
   platform_integration:

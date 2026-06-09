@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/identity"
+	"onlinemenu.tr/internal/modules/party"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
@@ -53,6 +54,7 @@ func main() {
 
 		identity.Module,
 		tenant.Module,
+		party.Module,
 
 		fx.Provide(newRouter),
 		fx.Invoke(startHTTP),

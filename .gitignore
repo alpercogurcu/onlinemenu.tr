@@ -76,3 +76,7 @@ web/apps/pos-desktop/build/bin/
 
 # Playwright MCP
 .playwright-mcp/
+
+# Test screenshots (root dizininde oluşturulanlar)
+/*.png
+/*.jpg

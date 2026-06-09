@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -85,12 +86,15 @@ func (r *PermissionRepo) DeleteFieldPolicy(ctx context.Context, tx pgx.Tx, roleI
 }
 
 func (r *PermissionRepo) loadPermissions(ctx context.Context, tx pgx.Tx, roleIDs []uuid.UUID) ([]domain.Permission, error) {
-	const q = `
+	if len(roleIDs) == 0 {
+		return nil, nil
+	}
+	q := fmt.Sprintf(`
 		SELECT role_id, resource, action
 		FROM role_permissions
-		WHERE role_id = ANY($1)`
+		WHERE role_id IN (%s)`, uuidInClause(len(roleIDs)))
 
-	rows, err := tx.Query(ctx, q, roleIDs)
+	rows, err := tx.Query(ctx, q, uuidArgs(roleIDs)...)
 	if err != nil {
 		return nil, fmt.Errorf("identity/repo/permission: load permissions: %w", err)
 	}
@@ -111,12 +115,15 @@ func (r *PermissionRepo) loadPermissions(ctx context.Context, tx pgx.Tx, roleIDs
 }
 
 func (r *PermissionRepo) loadFieldPolicies(ctx context.Context, tx pgx.Tx, roleIDs []uuid.UUID) ([]domain.FieldPolicy, error) {
-	const q = `
+	if len(roleIDs) == 0 {
+		return nil, nil
+	}
+	q := fmt.Sprintf(`
 		SELECT role_id, resource, field
 		FROM role_field_policies
-		WHERE role_id = ANY($1)`
+		WHERE role_id IN (%s)`, uuidInClause(len(roleIDs)))
 
-	rows, err := tx.Query(ctx, q, roleIDs)
+	rows, err := tx.Query(ctx, q, uuidArgs(roleIDs)...)
 	if err != nil {
 		return nil, fmt.Errorf("identity/repo/permission: load field policies: %w", err)
 	}
@@ -134,4 +141,23 @@ func (r *PermissionRepo) loadFieldPolicies(ctx context.Context, tx pgx.Tx, roleI
 		return nil, fmt.Errorf("identity/repo/permission: field policies rows: %w", err)
 	}
 	return policies, nil
+}
+
+// uuidInClause returns "$1,$2,...$n" for use in an IN (...) expression.
+// pgBouncer simple-protocol mode can't encode []uuid.UUID for ANY($1),
+// but individual UUID parameters work correctly.
+func uuidInClause(n int) string {
+	placeholders := make([]string, n)
+	for i := range n {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return strings.Join(placeholders, ",")
+}
+
+func uuidArgs(ids []uuid.UUID) []any {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return args
 }

@@ -58,6 +58,20 @@ allow if {
 	input.action in {"pos:order:read", "pos:order:item:update_status"}
 }
 
+# ── Inventory read ──────────────────────────────────────────────────────────────
+# Kitchen and bar staff can read stock levels (their DB role_permissions have inventory:read).
+# Shift manager can read and adjust stock within their branch.
+allow if {
+	input.principal.roles[_] in {"kitchen", "bar"}
+	input.action in {"inventory:level:read", "inventory:transaction:read"}
+}
+
+allow if {
+	"shift_manager" in input.principal.roles
+	input.action in {"inventory:level:read", "inventory:transaction:read",
+	                 "inventory:transaction:create"}
+}
+
 # ── Read-only scope for non-manager roles ────────────────────────────────────────
 # Non-admin, non-manager roles see only their own branch data.
 # The service layer is responsible for translating "own" scope into a WHERE branch_id = ?

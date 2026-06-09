@@ -16,6 +16,7 @@ import (
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
 
+	"onlinemenu.tr/internal/modules/billing"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
 	"onlinemenu.tr/internal/platform/db"
@@ -51,8 +52,8 @@ func main() {
 		vault.Module,
 		cache.Module,
 
-		// payment.Module,      (Faz 1)
-		// billing.Module,      (Faz 1)
+		// payment.Module,      (Faz 1 — api-pos'ta da expose edilebilir)
+		billing.Module,
 		// notification.Module, (Faz 1)
 
 		fx.Provide(newRouter),

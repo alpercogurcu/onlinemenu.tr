@@ -62,11 +62,22 @@ components:
   inventory_http:     { in: "internal/modules/inventory/http/**" }
   inventory_public:   { in: "internal/modules/inventory/public/**" }
 
+  # Billing
+  billing_domain:   { in: "internal/modules/billing/domain/**" }
+  billing_repo:     { in: "internal/modules/billing/repo/**" }
+  billing_service:  { in: "internal/modules/billing/service/**" }
+  billing_http:     { in: "internal/modules/billing/http/**" }
+  billing_public:   { in: "internal/modules/billing/public/**" }
+  billing_adapter:  { in: "internal/modules/billing/adapter/**" }
+
   # Notification
   notification_public: { in: "internal/modules/notification/public/**" }
 
   # Manufacturing
   manufacturing_public: { in: "internal/modules/manufacturing/public/**" }
+
+  # Platform integration
+  platform_integration: { in: "internal/platform/integration/**" }
 
 deps:
   # Platform is unrestricted — it is the foundation all modules build on.
@@ -156,4 +167,23 @@ deps:
   inventory_http:
     mayDependOn: [platform, inventory_domain, inventory_service, inventory_public]
   inventory_public:
+    mayDependOn: [platform]
+
+  # --- Billing ---
+  # billing adapters may use platform/integration for ProviderConfig scaffolding.
+  billing_domain:
+    mayDependOn: [platform, billing_domain]
+  billing_adapter:
+    mayDependOn: [platform, billing_domain, platform_integration]
+  billing_repo:
+    mayDependOn: [platform, billing_domain, billing_repo]
+  billing_service:
+    mayDependOn: [platform, billing_domain, billing_repo, billing_public]
+  billing_http:
+    mayDependOn: [platform, billing_domain, billing_service, billing_public]
+  billing_public:
+    mayDependOn: [platform, billing_domain]
+
+  # --- Platform Integration ---
+  platform_integration:
     mayDependOn: [platform]

@@ -12,18 +12,20 @@ interface AuthState {
   // Access token lives only in api.ts (in-memory), not here.
   // This store holds the non-sensitive user identity for UI rendering.
   user: User | null
-  setSession: (token: string, user: User) => void
+  tenantId: string | null
+  setSession: (token: string, user: User, tenantId: string) => void
   logout: () => void
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  setSession: (token, user) => {
+  tenantId: null,
+  setSession: (token, user, tenantId) => {
     setAccessToken(token)
-    set({ user })
+    set({ user, tenantId })
   },
   logout: () => {
     clearAccessToken()
-    set({ user: null })
+    set({ user: null, tenantId: null })
   },
 }))

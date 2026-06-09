@@ -27,4 +27,22 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// 401 interceptor: only redirect when a session token was present (expiry),
+// not on login failures. Also guarded against server-side execution.
+api.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (
+      typeof window !== "undefined" &&
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      inMemoryToken !== null
+    ) {
+      clearAccessToken()
+      window.location.href = "/login"
+    }
+    return Promise.reject(error)
+  },
+)
+
 export default api

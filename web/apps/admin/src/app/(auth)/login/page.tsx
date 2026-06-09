@@ -1,7 +1,10 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
+import axios from "axios"
+import { useRouter } from "next/navigation"
 import { useForm } from "react-hook-form"
+import { toast } from "sonner"
 import { z } from "zod"
 
 import { Button } from "@/components/ui/button"
@@ -14,15 +17,26 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import api from "@/lib/api"
+import { useAuthStore } from "@/store/auth-store"
 
 const loginSchema = z.object({
   email: z.string().email("Geçerli bir e-posta adresi girin"),
-  password: z.string().min(6, "Şifre en az 6 karakter olmalı"),
+  password: z.string().min(1, "Şifre gerekli"),
 })
 
 type LoginFormValues = z.infer<typeof loginSchema>
 
+interface DevLoginResponse {
+  token: string
+  tenant_id: string
+  user: { id: string; full_name: string; email: string }
+}
+
 export default function LoginPage() {
+  const router = useRouter()
+  const { setSession } = useAuthStore()
+
   const {
     register,
     handleSubmit,
@@ -32,9 +46,21 @@ export default function LoginPage() {
   })
 
   const onSubmit = async (data: LoginFormValues) => {
-    // TODO: call api.post('/auth/login', data) and store the returned access
-    // token with setAccessToken() from @/lib/api. Never log credentials.
-    void data
+    try {
+      const response = await api.post<DevLoginResponse>("/dev/login", {
+        email: data.email,
+      })
+      const { token, tenant_id, user } = response.data
+      setSession(token, { id: user.id, name: user.full_name, email: user.email }, tenant_id)
+      toast.success("Giriş başarılı")
+      router.push("/")
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        toast.error("E-posta veya şifre hatalı")
+      } else {
+        toast.error("Giriş yapılırken bir hata oluştu")
+      }
+    }
   }
 
   return (

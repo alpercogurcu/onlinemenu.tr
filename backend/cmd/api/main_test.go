@@ -12,6 +12,7 @@ import (
 
 	"onlinemenu.tr/internal/modules/catalog"
 	"onlinemenu.tr/internal/modules/identity"
+	"onlinemenu.tr/internal/modules/inventory"
 	"onlinemenu.tr/internal/modules/payment"
 	"onlinemenu.tr/internal/modules/pos"
 	"onlinemenu.tr/internal/modules/tenant"
@@ -59,6 +60,7 @@ func TestFxGraphValidation(t *testing.T) {
 		catalog.Module,
 		pos.Module,
 		payment.Module,
+		inventory.Module,
 
 		fx.Provide(newRouter),
 		fx.Invoke(registerHTTPServer),

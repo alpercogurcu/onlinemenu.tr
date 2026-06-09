@@ -80,7 +80,11 @@ func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, checks)
+	resp := make([]checkResponse, len(checks))
+	for i, c := range checks {
+		resp[i] = toCheckResponse(c)
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +116,7 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, c)
+	respondJSON(w, http.StatusCreated, toCheckResponse(c))
 }
 
 func (h *Handler) getCheck(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +134,7 @@ func (h *Handler) getCheck(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, c)
+	respondJSON(w, http.StatusOK, toCheckResponse(c))
 }
 
 func (h *Handler) closeCheck(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +152,7 @@ func (h *Handler) closeCheck(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, c)
+	respondJSON(w, http.StatusOK, toCheckResponse(c))
 }
 
 func (h *Handler) cancelCheck(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +170,7 @@ func (h *Handler) cancelCheck(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, c)
+	respondJSON(w, http.StatusOK, toCheckResponse(c))
 }
 
 func (h *Handler) listOrdersByCheck(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +188,11 @@ func (h *Handler) listOrdersByCheck(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, orders)
+	resp := make([]orderResponse, len(orders))
+	for i, o := range orders {
+		resp[i] = toOrderResponse(o)
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +256,7 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, o)
+	respondJSON(w, http.StatusCreated, toOrderResponse(o))
 }
 
 func (h *Handler) getOrder(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +274,7 @@ func (h *Handler) getOrder(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, o)
+	respondJSON(w, http.StatusOK, toOrderResponse(o))
 }
 
 func (h *Handler) acceptOrder(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +292,7 @@ func (h *Handler) acceptOrder(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, o)
+	respondJSON(w, http.StatusOK, toOrderResponse(o))
 }
 
 func (h *Handler) rejectOrder(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +317,7 @@ func (h *Handler) rejectOrder(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, o)
+	respondJSON(w, http.StatusOK, toOrderResponse(o))
 }
 
 func (h *Handler) advanceOrder(w http.ResponseWriter, r *http.Request) {
@@ -334,7 +342,83 @@ func (h *Handler) advanceOrder(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, o)
+	respondJSON(w, http.StatusOK, toOrderResponse(o))
+}
+
+// ---------------------------------------------------------------------------
+// Response DTOs
+// ---------------------------------------------------------------------------
+
+type checkResponse struct {
+	ID         uuid.UUID  `json:"id"`
+	TenantID   uuid.UUID  `json:"tenant_id"`
+	BranchID   uuid.UUID  `json:"branch_id"`
+	TableLabel string     `json:"table_label"`
+	Status     string     `json:"status"`
+	Note       string     `json:"note"`
+	OpenedAt   time.Time  `json:"opened_at"`
+	ClosedAt   *time.Time `json:"closed_at"`
+}
+
+func toCheckResponse(c domain.Check) checkResponse {
+	return checkResponse{
+		ID:         c.ID,
+		TenantID:   c.TenantID,
+		BranchID:   c.BranchID,
+		TableLabel: c.TableLabel,
+		Status:     string(c.Status),
+		Note:       c.Note,
+		OpenedAt:   c.OpenedAt,
+		ClosedAt:   c.ClosedAt,
+	}
+}
+
+type orderItemResponse struct {
+	ID              uuid.UUID `json:"id"`
+	ProductID       uuid.UUID `json:"product_id"`
+	ProductName     string    `json:"product_name"`
+	Quantity        int       `json:"quantity"`
+	UnitPriceAmount int64     `json:"unit_price_amount"`
+	Note            string    `json:"note"`
+}
+
+type orderResponse struct {
+	ID           uuid.UUID          `json:"id"`
+	TenantID     uuid.UUID          `json:"tenant_id"`
+	BranchID     uuid.UUID          `json:"branch_id"`
+	CheckID      *uuid.UUID         `json:"check_id"`
+	OrderChannel string             `json:"order_channel"`
+	Status       string             `json:"status"`
+	Note         string             `json:"note"`
+	Items        []orderItemResponse `json:"items"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+}
+
+func toOrderResponse(o domain.Order) orderResponse {
+	items := make([]orderItemResponse, len(o.Items))
+	for i, it := range o.Items {
+		items[i] = orderItemResponse{
+			ID:              it.ID,
+			ProductID:       it.ProductID,
+			ProductName:     it.ProductName,
+			Quantity:        it.Quantity,
+			UnitPriceAmount: it.UnitPriceAmount,
+			Note:            it.Note,
+		}
+	}
+	return orderResponse{
+		ID:           o.ID,
+		TenantID:     o.TenantID,
+		BranchID:     o.BranchID,
+		CheckID:      o.CheckID,
+		OrderChannel: string(o.OrderChannel),
+		Status:       string(o.Status),
+		Note:         o.Note,
+		Items:        items,
+		CreatedAt:    o.CreatedAt,
+		UpdatedAt:    o.UpdatedAt,
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -108,12 +108,11 @@ const (
 
 // Address represents a legal or billing address.
 type Address struct {
-	Line1      string
-	City       string
-	District   string
-	PostalCode string
-	// Country holds the ISO 3166-1 alpha-2 code; defaults to "TR".
-	Country string
+	Line1      string `json:"line1"`
+	City       string `json:"city"`
+	District   string `json:"district"`
+	PostalCode string `json:"postal_code"`
+	Country    string `json:"country"`
 }
 
 // SupplyRule specifies which warehouse supplies a branch and at what priority.
@@ -125,21 +124,21 @@ type SupplyRule struct {
 // Tenant is the read-only projection that other modules may reference.
 // It includes legal identity fields added in migration 000002.
 type Tenant struct {
-	ID             uuid.UUID
-	Name           string
-	LegalName      string
-	TradeName      string
-	Slug           string
-	Plan           Plan
-	EnabledModules []string
-	IdentityType   IdentityType
-	TaxNo          string
-	TaxOffice      string
-	MersisNo       string
-	Address        Address
-	Phone          string
-	ContactEmail   string
-	IsActive       bool
+	ID             uuid.UUID `json:"id"`
+	Name           string    `json:"name"`
+	LegalName      string    `json:"legal_name"`
+	TradeName      string    `json:"trade_name"`
+	Slug           string    `json:"slug"`
+	Plan           Plan      `json:"plan"`
+	EnabledModules []string  `json:"enabled_modules"`
+	IdentityType   IdentityType `json:"identity_type"`
+	TaxNo          string    `json:"tax_no"`
+	TaxOffice      string    `json:"tax_office"`
+	MersisNo       string    `json:"mersis_no"`
+	Address        Address   `json:"address"`
+	Phone          string    `json:"phone"`
+	ContactEmail   string    `json:"contact_email"`
+	IsActive       bool      `json:"is_active"`
 }
 
 // Branch is the read-only projection of a physical location belonging to a tenant.
@@ -148,23 +147,21 @@ type Tenant struct {
 // are used when the branch operates as an independent legal entity; if LegalName is
 // empty, tenant.LegalName is the authoritative value.
 type Branch struct {
-	ID            uuid.UUID
-	TenantID      uuid.UUID
-	Name          string
-	Slug          string
-	OwnershipType OwnershipType
-	OperationType OperationType
-	// SupplyRules is unmarshalled from the JSONB column on the branches table.
-	SupplyRules []SupplyRule
-	Phone       string
-	Address     Address
-	IsActive    bool
-	IBAN        string
-	// LegalName is the franchise legal name; when empty, tenant.LegalName applies.
-	LegalName    string
-	IdentityType IdentityType
-	TaxNo        string
-	TaxOffice    string
+	ID            uuid.UUID     `json:"id"`
+	TenantID      uuid.UUID     `json:"tenant_id"`
+	Name          string        `json:"name"`
+	Slug          string        `json:"slug"`
+	OwnershipType OwnershipType `json:"ownership_type"`
+	OperationType OperationType `json:"operation_type"`
+	SupplyRules   []SupplyRule  `json:"supply_rules"`
+	Phone         string        `json:"phone"`
+	Address       Address       `json:"address"`
+	IsActive      bool          `json:"is_active"`
+	IBAN          string        `json:"iban"`
+	LegalName     string        `json:"legal_name"`
+	IdentityType  IdentityType  `json:"identity_type"`
+	TaxNo         string        `json:"tax_no"`
+	TaxOffice     string        `json:"tax_office"`
 }
 
 // Document is the Go projection of the tenant_documents table.

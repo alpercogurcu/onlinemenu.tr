@@ -36,8 +36,12 @@ var Module = fx.Module("identity",
 	fx.Invoke(func(h *identityhttp.Handler, r *chi.Mux) {
 		h.RegisterRoutes(r)
 	}),
-	fx.Invoke(func(s *events.Subscriber) error {
-		return s.Register()
+	fx.Invoke(func(lc fx.Lifecycle, s *events.Subscriber) {
+		lc.Append(fx.Hook{
+			OnStart: func(ctx context.Context) error {
+				return s.Register()
+			},
+		})
 	}),
 )
 

@@ -15,6 +15,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
@@ -108,21 +110,29 @@ type httpConfig struct {
 	IdleTimeout  time.Duration
 }
 
-func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier) *chi.Mux {
+func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier, pool *db.Pool) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.StripSlashes)
 
-	// Auth middleware is applied to every path except /healthz.
+	isDev := envOr("APP_ENV", "") == "dev"
+
+	// In dev, allow cross-origin requests from the local admin panel.
+	if isDev {
+		r.Use(devCORSMiddleware)
+	}
+
+	// Auth middleware is applied to every path except /healthz and /dev/*.
 	// The middleware accepts both platform CTX tokens and Keycloak JWTs,
 	// so identity pre-context endpoints work without a separate auth chain.
 	authMW := auth.Middleware(verifier, signer)
 	r.Use(func(next http.Handler) http.Handler {
 		protected := authMW(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/healthz" {
+			p := r.URL.Path
+			if p == "/healthz" || (isDev && strings.HasPrefix(p, "/dev/")) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -134,7 +144,151 @@ func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier) *ch
 		w.WriteHeader(http.StatusOK)
 	})
 
+	if isDev {
+		r.Post("/dev/login", devLoginHandler(pool, signer))
+	}
+
 	return r
+}
+
+// devCORSMiddleware sets permissive CORS headers for local development only.
+// Never include this in production builds.
+func devCORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type,X-Request-Id,Idempotency-Key")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+type devLoginReq struct {
+	Email string `json:"email"`
+}
+
+type devLoginResp struct {
+	Token    string          `json:"token"`
+	TenantID string          `json:"tenant_id"`
+	User     devLoginRespUser `json:"user"`
+}
+
+type devLoginRespUser struct {
+	ID       string `json:"id"`
+	FullName string `json:"full_name"`
+	Email    string `json:"email"`
+}
+
+// devLoginHandler issues a CTX staff token for any active membership of the
+// given email address. Only registered when APP_ENV=dev.
+func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req devLoginReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" {
+			http.Error(w, `{"error":"email required"}`, http.StatusBadRequest)
+			return
+		}
+
+		ctx := r.Context()
+
+		var personID uuid.UUID
+		var fullName, email string
+
+		err := pool.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx,
+				`SELECT id, full_name, email FROM persons WHERE email = $1`, req.Email,
+			).Scan(&personID, &fullName, &email)
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, `{"error":"person not found"}`, http.StatusUnauthorized)
+				return
+			}
+			http.Error(w, `{"error":"db error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		// Find the first active membership (cross-tenant via uuid.Nil context).
+		var tenantID uuid.UUID
+		var branchID uuid.UUID // uuid.Nil means chain-wide
+		var membershipFound bool
+
+		err = pool.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+			var rawBranchID *uuid.UUID
+			err := tx.QueryRow(ctx,
+				`SELECT tenant_id, branch_id FROM memberships
+				 WHERE person_id = $1 AND status = 'active'
+				 ORDER BY created_at LIMIT 1`,
+				personID,
+			).Scan(&tenantID, &rawBranchID)
+			if err != nil {
+				return err
+			}
+			if rawBranchID != nil {
+				branchID = *rawBranchID
+			}
+			membershipFound = true
+			return nil
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				http.Error(w, `{"error":"no active membership"}`, http.StatusUnauthorized)
+				return
+			}
+			http.Error(w, `{"error":"db error"}`, http.StatusInternalServerError)
+			return
+		}
+		if !membershipFound {
+			http.Error(w, `{"error":"no active membership"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var roleIDs []uuid.UUID
+		err = pool.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx,
+				`SELECT role_id FROM memberships
+				 WHERE tenant_id = $1 AND person_id = $2 AND status = 'active'
+				   AND (branch_id = $3 OR branch_id IS NULL)`,
+				tenantID, personID, branchID,
+			)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id uuid.UUID
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				roleIDs = append(roleIDs, id)
+			}
+			return rows.Err()
+		})
+		if err != nil {
+			http.Error(w, `{"error":"db error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		token, err := signer.IssueStaff(personID, tenantID, branchID, roleIDs)
+		if err != nil {
+			http.Error(w, `{"error":"token issue failed"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(devLoginResp{
+			Token:    token,
+			TenantID: tenantID.String(),
+			User:     devLoginRespUser{ID: personID.String(), FullName: fullName, Email: email},
+		})
+	}
 }
 
 func registerHTTPServer(lc fx.Lifecycle, cfg httpConfig, router *chi.Mux, logger *zap.Logger) {

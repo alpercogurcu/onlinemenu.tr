@@ -21,13 +21,18 @@ func NewBranchRepo() *BranchRepo {
 }
 
 // GetBranch fetches a single branch by tenant and branch IDs.
+// branchCols is the canonical column list for all branch SELECT/RETURNING queries.
+// COALESCE wraps every nullable TEXT column so scanBranch always receives a string.
+const branchCols = `
+	id, tenant_id, name,
+	COALESCE(slug, ''), ownership_type, operation_type, supply_rules,
+	COALESCE(phone, ''), COALESCE(address, ''), COALESCE(city, ''),
+	COALESCE(district, ''), COALESCE(postal_code, ''),
+	COALESCE(iban, ''), COALESCE(legal_name, ''), identity_type,
+	COALESCE(tax_no, ''), COALESCE(tax_office, ''), is_active`
+
 func (r *BranchRepo) GetBranch(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID) (pub.Branch, error) {
-	const q = `
-		SELECT id, tenant_id, name, slug, ownership_type, operation_type, supply_rules,
-		       phone, address, city, district, postal_code,
-		       iban, legal_name, identity_type, tax_no, tax_office, is_active
-		FROM branches
-		WHERE tenant_id = $1 AND id = $2`
+	q := `SELECT ` + branchCols + ` FROM branches WHERE tenant_id = $1 AND id = $2`
 
 	row := tx.QueryRow(ctx, q, tenantID, branchID)
 	b, err := scanBranch(row)
@@ -42,13 +47,7 @@ func (r *BranchRepo) GetBranch(ctx context.Context, tx pgx.Tx, tenantID, branchI
 
 // ListBranches returns all active branches belonging to a tenant.
 func (r *BranchRepo) ListBranches(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]pub.Branch, error) {
-	const q = `
-		SELECT id, tenant_id, name, slug, ownership_type, operation_type, supply_rules,
-		       phone, address, city, district, postal_code,
-		       iban, legal_name, identity_type, tax_no, tax_office, is_active
-		FROM branches
-		WHERE tenant_id = $1 AND is_active = true
-		ORDER BY name`
+	q := `SELECT ` + branchCols + ` FROM branches WHERE tenant_id = $1 AND is_active = true ORDER BY name`
 
 	rows, err := tx.Query(ctx, q, tenantID)
 	if err != nil {
@@ -90,9 +89,7 @@ func (r *BranchRepo) CreateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 			$7, $8, $9, $10, $11,
 			$12, $13, $14, $15, $16, $17
 		)
-		RETURNING id, tenant_id, name, slug, ownership_type, operation_type, supply_rules,
-		          phone, address, city, district, postal_code,
-		          iban, legal_name, identity_type, tax_no, tax_office, is_active`
+		RETURNING ` + branchCols
 
 	row := tx.QueryRow(ctx, q,
 		b.TenantID, b.Name, b.Slug, string(b.OwnershipType), string(b.OperationType), string(supplyJSON),
@@ -122,9 +119,7 @@ func (r *BranchRepo) UpdateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 			identity_type = $13, tax_no = $14, tax_office = $15, is_active = $16,
 			updated_at = NOW()
 		WHERE tenant_id = $17 AND id = $18
-		RETURNING id, tenant_id, name, slug, ownership_type, operation_type, supply_rules,
-		          phone, address, city, district, postal_code,
-		          iban, legal_name, identity_type, tax_no, tax_office, is_active`
+		RETURNING ` + branchCols
 
 	row := tx.QueryRow(ctx, q,
 		b.Name, b.Slug, string(b.OwnershipType), string(b.OperationType),

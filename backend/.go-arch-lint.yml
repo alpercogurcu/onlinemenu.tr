@@ -93,6 +93,14 @@ components:
   # Platform integration
   platform_integration: { in: "internal/platform/integration/**" }
 
+  # Edge SQLite platform helper
+  edgedb: { in: "internal/platform/edgedb/**" }
+
+  # Edge-sync module (local server — no cloud imports allowed)
+  edgesync_domain:  { in: "internal/modules/edge-sync/domain/**" }
+  edgesync_outbox:  { in: "internal/modules/edge-sync/outbox/**" }
+  edgesync_sync:    { in: "internal/modules/edge-sync/sync/**" }
+
 deps:
   # Platform is unrestricted — it is the foundation all modules build on.
   platform:
@@ -225,3 +233,18 @@ deps:
   # --- Platform Integration ---
   platform_integration:
     mayDependOn: [platform]
+
+  # --- Edge SQLite ---
+  # edgedb is a platform-level helper; no cloud module imports allowed.
+  edgedb:
+    mayDependOn: [platform]
+
+  # --- Edge-Sync ---
+  # edge-sync packages must NOT import any cloud module (postgres, vault, OPA, etc.).
+  # They may import edgedb and each other's lower layers.
+  edgesync_domain:
+    mayDependOn: []
+  edgesync_outbox:
+    mayDependOn: [edgesync_domain]
+  edgesync_sync:
+    mayDependOn: [edgesync_domain, edgesync_outbox]

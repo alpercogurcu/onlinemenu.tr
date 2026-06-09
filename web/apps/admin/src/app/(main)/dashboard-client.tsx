@@ -17,6 +17,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useProducts } from "@/hooks/use-catalog"
+import { useChecks } from "@/hooks/use-pos"
 
 const mockSalesData = [
   { day: "Pzt", satis: 4200 },
@@ -28,30 +31,13 @@ const mockSalesData = [
   { day: "Paz", satis: 7100 },
 ]
 
-const statsCards = [
-  {
-    title: "Bugünkü Satış",
-    value: "₺12.450",
-    description: "Son 24 saat",
-  },
-  {
-    title: "Aktif Adisyon",
-    value: "8",
-    description: "Şu anda açık",
-  },
-  {
-    title: "Bekleyen Sipariş",
-    value: "23",
-    description: "Mutfakta hazırlanıyor",
-  },
-  {
-    title: "Toplam Müşteri",
-    value: "1.284",
-    description: "Bu ay",
-  },
-]
-
 export default function DashboardClient() {
+  const openChecks = useChecks({ status: "open", limit: 100 })
+  const allProducts = useProducts({ limit: 5 })
+
+  const openCheckCount = openChecks.data?.length ?? 0
+  const productCount = allProducts.data?.length ?? 0
+
   return (
     <div className="space-y-6">
       <div>
@@ -62,17 +48,53 @@ export default function DashboardClient() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {statsCards.map((card) => (
-          <Card key={card.title}>
-            <CardHeader>
-              <CardDescription>{card.title}</CardDescription>
-              <CardTitle className="text-3xl">{card.value}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground">{card.description}</p>
-            </CardContent>
-          </Card>
-        ))}
+        <Card>
+          <CardHeader>
+            <CardDescription>Açık Adisyon</CardDescription>
+            {openChecks.isLoading ? (
+              <Skeleton className="h-9 w-16" />
+            ) : (
+              <CardTitle className="text-3xl">{openCheckCount}</CardTitle>
+            )}
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">Şu anda açık</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardDescription>Toplam Ürün</CardDescription>
+            {allProducts.isLoading ? (
+              <Skeleton className="h-9 w-16" />
+            ) : (
+              <CardTitle className="text-3xl">{productCount}</CardTitle>
+            )}
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">Katalogdaki ürünler</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardDescription>Günlük Sipariş</CardDescription>
+            <CardTitle className="text-3xl text-muted-foreground">—</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">Yakında</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardDescription>Stok Uyarısı</CardDescription>
+            <CardTitle className="text-3xl text-muted-foreground">—</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">Yakında</p>
+          </CardContent>
+        </Card>
       </div>
 
       <Card>

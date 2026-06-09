@@ -34,14 +34,14 @@ import type { Branch } from "@/types"
 
 interface FormState {
   name: string
-  branch_type: string
+  operation_type: string
   ownership_type: string
 }
 
 const defaultForm: FormState = {
   name: "",
-  branch_type: "dine_in",
-  ownership_type: "owned",
+  operation_type: "restoran",
+  ownership_type: "sube",
 }
 
 function useCreateBranch(tenantId: string) {
@@ -72,7 +72,7 @@ export default function BranchesPage() {
     try {
       await createBranch.mutateAsync({
         name: form.name.trim(),
-        branch_type: form.branch_type,
+        operation_type: form.operation_type,
         ownership_type: form.ownership_type,
         is_active: true,
       })
@@ -124,18 +124,17 @@ export default function BranchesPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Ad</TableHead>
-                  <TableHead>Tip</TableHead>
+                  <TableHead>Operasyon Tipi</TableHead>
                   <TableHead>Sahiplik</TableHead>
                   <TableHead>Durum</TableHead>
-                  <TableHead>Oluşturulma</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {branches.map((branch) => (
                   <TableRow key={branch.id}>
                     <TableCell className="font-medium">{branch.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{branch.branch_type}</TableCell>
-                    <TableCell className="text-muted-foreground">{branch.ownership_type}</TableCell>
+                    <TableCell className="text-muted-foreground">{branch.operation_type || "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{branch.ownership_type || "—"}</TableCell>
                     <TableCell>
                       <Badge
                         variant="outline"
@@ -147,9 +146,6 @@ export default function BranchesPage() {
                       >
                         {branch.is_active ? "Aktif" : "Pasif"}
                       </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">
-                      {new Date(branch.created_at).toLocaleDateString("tr-TR")}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -176,16 +172,16 @@ export default function BranchesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="branch-type">Şube Tipi</Label>
+              <Label htmlFor="operation-type">Operasyon Tipi</Label>
               <Select
-                id="branch-type"
-                value={form.branch_type}
-                onChange={(e) => setForm((f) => ({ ...f, branch_type: e.target.value }))}
+                id="operation-type"
+                value={form.operation_type}
+                onChange={(e) => setForm((f) => ({ ...f, operation_type: e.target.value }))}
               >
-                <option value="dine_in">Restoran (İç Mekan)</option>
-                <option value="takeaway">Paket Servis</option>
-                <option value="delivery">Teslimat</option>
-                <option value="cloud_kitchen">Bulut Mutfak</option>
+                <option value="restoran">Restoran</option>
+                <option value="kafe">Kafe</option>
+                <option value="fastfood">Fast Food</option>
+                <option value="bulut_mutfak">Bulut Mutfak</option>
               </Select>
             </div>
             <div className="space-y-2">
@@ -195,9 +191,9 @@ export default function BranchesPage() {
                 value={form.ownership_type}
                 onChange={(e) => setForm((f) => ({ ...f, ownership_type: e.target.value }))}
               >
-                <option value="owned">Mülk Sahibi</option>
-                <option value="franchised">Franchise</option>
-                <option value="licensed">Lisanslı</option>
+                <option value="sube">Şube</option>
+                <option value="franchise">Franchise</option>
+                <option value="lisansli">Lisanslı</option>
               </Select>
             </div>
             <Button type="submit" className="w-full" disabled={createBranch.isPending}>

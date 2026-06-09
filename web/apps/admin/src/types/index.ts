@@ -197,10 +197,13 @@ export interface Branch {
   id: string
   tenant_id: string
   name: string
-  branch_type: string
+  slug: string
   ownership_type: string
+  operation_type: string
   is_active: boolean
-  created_at: string
+  phone: string
+  legal_name: string
+  tax_no: string
 }
 export interface Tenant {
   id: string

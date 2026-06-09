@@ -14,12 +14,9 @@ const nextConfig: NextConfig = {
 
     return [
       {
+        // Strip /api/core prefix and forward to backend root
         source: "/api/core/:path*",
-        destination: `${apiCoreUrl}/api/core/:path*`,
-      },
-      {
-        source: "/api/pos/:path*",
-        destination: `${apiCoreUrl}/api/pos/:path*`,
+        destination: `${apiCoreUrl}/:path*`,
       },
     ]
   },

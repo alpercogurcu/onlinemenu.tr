@@ -70,6 +70,13 @@ components:
   billing_public:   { in: "internal/modules/billing/public/**" }
   billing_adapter:  { in: "internal/modules/billing/adapter/**" }
 
+  # HR-Core
+  hrcore_domain:   { in: "internal/modules/hr-core/domain/**" }
+  hrcore_repo:     { in: "internal/modules/hr-core/repo/**" }
+  hrcore_service:  { in: "internal/modules/hr-core/service/**" }
+  hrcore_http:     { in: "internal/modules/hr-core/http/**" }
+  hrcore_public:   { in: "internal/modules/hr-core/public/**" }
+
   # Party
   party_domain:    { in: "internal/modules/party/domain/**" }
   party_repo:      { in: "internal/modules/party/repo/**" }
@@ -190,6 +197,18 @@ deps:
     mayDependOn: [platform, billing_domain, billing_service, billing_public]
   billing_public:
     mayDependOn: [platform, billing_domain]
+
+  # --- HR-Core ---
+  hrcore_domain:
+    mayDependOn: [platform, hrcore_domain]
+  hrcore_repo:
+    mayDependOn: [platform, hrcore_domain, hrcore_repo]
+  hrcore_service:
+    mayDependOn: [platform, hrcore_domain, hrcore_repo, hrcore_public]
+  hrcore_http:
+    mayDependOn: [platform, hrcore_domain, hrcore_service, hrcore_public]
+  hrcore_public:
+    mayDependOn: [platform]
 
   # --- Party ---
   party_domain:

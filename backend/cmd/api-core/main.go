@@ -16,6 +16,7 @@ import (
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/zap"
 
+	hrcore "onlinemenu.tr/internal/modules/hr-core"
 	"onlinemenu.tr/internal/modules/identity"
 	"onlinemenu.tr/internal/modules/party"
 	"onlinemenu.tr/internal/modules/tenant"
@@ -55,6 +56,7 @@ func main() {
 		identity.Module,
 		tenant.Module,
 		party.Module,
+		hrcore.Module,
 
 		fx.Provide(newRouter),
 		fx.Invoke(startHTTP),

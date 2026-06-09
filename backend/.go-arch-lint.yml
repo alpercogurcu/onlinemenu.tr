@@ -10,6 +10,7 @@ allow:
 excludeFiles:
   - "cmd/.*"
   - "internal/modules/[^/]+/module\\.go"
+  - "internal/e2e/.*"
 
 # Sub-layer granularity enforces cross-module boundary: modules may only import
 # the public/ interface of other modules, never domain/, repo/, or service/.

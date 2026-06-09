@@ -70,3 +70,9 @@ web/apps/pos-desktop/build/bin/
 # testcontainers ryuk
 .testcontainers.properties
 .superpowers/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Playwright MCP
+.playwright-mcp/

@@ -22,6 +22,7 @@ import (
 
 	"onlinemenu.tr/internal/modules/catalog"
 	"onlinemenu.tr/internal/modules/identity"
+	"onlinemenu.tr/internal/modules/inventory"
 	"onlinemenu.tr/internal/modules/payment"
 	"onlinemenu.tr/internal/modules/pos"
 	"onlinemenu.tr/internal/modules/tenant"
@@ -71,6 +72,7 @@ func main() {
 		catalog.Module,
 		pos.Module,
 		payment.Module,
+		inventory.Module,
 
 		// HTTP server
 		fx.Provide(newRouter),

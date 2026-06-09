@@ -20,13 +20,14 @@ import (
 )
 
 // moduleOrder defines the sequence in which module migrations are applied.
-// tenant → identity → catalog (catalog products reference no other module tables directly)
+// tenant → identity → catalog → pos → payment → inventory
 var moduleOrder = []string{
 	"tenant",
 	"identity",
 	"catalog",
 	"pos",
 	"payment",
+	"inventory",
 }
 
 func main() {

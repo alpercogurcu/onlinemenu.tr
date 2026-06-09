@@ -54,6 +54,13 @@ components:
   payment_http:     { in: "internal/modules/payment/http/**" }
   payment_public:   { in: "internal/modules/payment/public/**" }
 
+  # Inventory
+  inventory_domain:   { in: "internal/modules/inventory/domain/**" }
+  inventory_repo:     { in: "internal/modules/inventory/repo/**" }
+  inventory_service:  { in: "internal/modules/inventory/service/**" }
+  inventory_http:     { in: "internal/modules/inventory/http/**" }
+  inventory_public:   { in: "internal/modules/inventory/public/**" }
+
   # Notification
   notification_public: { in: "internal/modules/notification/public/**" }
 
@@ -135,4 +142,17 @@ deps:
   payment_http:
     mayDependOn: [platform, payment_domain, payment_service, payment_public]
   payment_public:
+    mayDependOn: [platform]
+
+  # --- Inventory ---
+  # inventory is independent; other modules may consume inventory_public (e.g. pos for stock checks).
+  inventory_domain:
+    mayDependOn: [platform, inventory_domain]
+  inventory_repo:
+    mayDependOn: [platform, inventory_domain, inventory_repo]
+  inventory_service:
+    mayDependOn: [platform, inventory_domain, inventory_repo, inventory_public]
+  inventory_http:
+    mayDependOn: [platform, inventory_domain, inventory_service, inventory_public]
+  inventory_public:
     mayDependOn: [platform]

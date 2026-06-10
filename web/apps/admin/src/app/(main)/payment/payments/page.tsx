@@ -17,12 +17,14 @@ import { useQuery } from "@tanstack/react-query"
 import api from "@/lib/api"
 import type { Payment, PaymentMethod } from "@/types"
 
+interface PaymentListResponse { payments: Payment[] }
+
 function usePayments(params?: { limit?: number; offset?: number }) {
   return useQuery({
     queryKey: ["payments", params],
     queryFn: async () => {
-      const { data } = await api.get<Payment[]>("/api/v1/payments/", { params })
-      return data ?? []
+      const { data } = await api.get<PaymentListResponse>("/api/v1/payments/", { params })
+      return data?.payments ?? []
     },
   })
 }
@@ -31,18 +33,15 @@ function methodBadgeClass(method: PaymentMethod): string {
   switch (method) {
     case "cash":
       return "bg-green-100 text-green-700 border-green-200"
-    case "card":
+    case "terminal":
       return "bg-blue-100 text-blue-700 border-blue-200"
-    case "online":
-      return "bg-purple-100 text-purple-700 border-purple-200"
   }
 }
 
 function methodLabel(method: PaymentMethod): string {
   const labels: Record<PaymentMethod, string> = {
     cash: "Nakit",
-    card: "Kart",
-    online: "Online",
+    terminal: "Terminal",
   }
   return labels[method]
 }
@@ -51,7 +50,7 @@ export default function PaymentsPage() {
   const { data, isLoading } = usePayments({ limit: 50 })
 
   const payments = data ?? []
-  const totalAmount = payments.reduce((sum, p) => sum + p.amount, 0)
+  const totalAmount = payments.reduce((sum, p) => sum + p.amount_total, 0)
 
   return (
     <div className="space-y-6">
@@ -64,7 +63,7 @@ export default function PaymentsPage() {
           <div className="text-right">
             <p className="text-sm text-muted-foreground">Toplam</p>
             <p className="text-lg font-bold">
-              {totalAmount.toLocaleString("tr-TR", { style: "currency", currency: "TRY" })}
+              {(totalAmount / 100).toLocaleString("tr-TR", { style: "currency", currency: "TRY" })}
             </p>
           </div>
         )}
@@ -103,12 +102,12 @@ export default function PaymentsPage() {
                 {payments.map((payment) => (
                   <TableRow key={payment.id}>
                     <TableCell className="font-mono text-xs text-muted-foreground">
-                      {payment.check_id.slice(0, 8)}…
+                      {payment.check_id ? payment.check_id.slice(0, 8) + "…" : "—"}
                     </TableCell>
                     <TableCell className="font-semibold">
-                      {payment.amount.toLocaleString("tr-TR", {
+                      {(payment.amount_total / 100).toLocaleString("tr-TR", {
                         style: "currency",
-                        currency: "TRY",
+                        currency: payment.currency || "TRY",
                       })}
                     </TableCell>
                     <TableCell>

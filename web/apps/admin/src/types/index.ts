@@ -92,14 +92,16 @@ export interface Order {
 }
 
 // Payment
-export type PaymentMethod = "cash" | "card" | "online"
+export type PaymentMethod = "cash" | "terminal"
 export interface Payment {
   id: string
-  check_id: string
+  check_id: string | null
   tenant_id: string
-  amount: number
+  branch_id: string
   method: PaymentMethod
   status: string
+  amount_total: number
+  currency: string
   created_at: string
 }
 

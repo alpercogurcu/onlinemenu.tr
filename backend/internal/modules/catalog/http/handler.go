@@ -119,7 +119,11 @@ func (h *Handler) listCategories(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, cats)
+	out := make([]categoryResponse, len(cats))
+	for i, c := range cats {
+		out[i] = toCategoryResponse(c)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) getCategory(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +141,7 @@ func (h *Handler) getCategory(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, cat)
+	respondJSON(w, http.StatusOK, toCategoryResponse(cat))
 }
 
 func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +175,7 @@ func (h *Handler) createCategory(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, cat)
+	respondJSON(w, http.StatusCreated, toCategoryResponse(cat))
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +192,11 @@ func (h *Handler) listProducts(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, products)
+	out := make([]productResponse, len(products))
+	for i, p := range products {
+		out[i] = toProductResponse(p)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) getProduct(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +214,7 @@ func (h *Handler) getProduct(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, p)
+	respondJSON(w, http.StatusOK, toProductResponse(p))
 }
 
 func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +266,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, p)
+	respondJSON(w, http.StatusCreated, toProductResponse(p))
 }
 
 func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
@@ -272,19 +280,43 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req domain.Product
+	var req struct {
+		CategoryID           *uuid.UUID `json:"category_id"`
+		Name                 string     `json:"name"`
+		Description          string     `json:"description"`
+		PriceAmount          int64      `json:"price_amount"`
+		Currency             string     `json:"currency"`
+		Unit                 string     `json:"unit"`
+		TaxRateBPS           int        `json:"tax_rate_bps"`
+		IsActive             bool       `json:"is_active"`
+		AutoCloseOnZeroStock bool       `json:"auto_close_on_zero_stock"`
+		StockQuantity        *int       `json:"stock_quantity"`
+		SortOrder            int16      `json:"sort_order"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	req.ID = id
 
-	updated, err := h.products.Update(r.Context(), tenantID, req)
+	updated, err := h.products.Update(r.Context(), tenantID, domain.Product{
+		ID:                   id,
+		CategoryID:           req.CategoryID,
+		Name:                 req.Name,
+		Description:          req.Description,
+		PriceAmount:          req.PriceAmount,
+		Currency:             req.Currency,
+		Unit:                 req.Unit,
+		TaxRateBPS:           req.TaxRateBPS,
+		IsActive:             req.IsActive,
+		AutoCloseOnZeroStock: req.AutoCloseOnZeroStock,
+		StockQuantity:        req.StockQuantity,
+		SortOrder:            req.SortOrder,
+	})
 	if err != nil {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, updated)
+	respondJSON(w, http.StatusOK, toProductResponse(updated))
 }
 
 func (h *Handler) deleteProduct(w http.ResponseWriter, r *http.Request) {
@@ -319,7 +351,11 @@ func (h *Handler) listByCategory(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, products)
+	out := make([]productResponse, len(products))
+	for i, p := range products {
+		out[i] = toProductResponse(p)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +416,7 @@ func (h *Handler) createModifierGroup(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, g)
+	respondJSON(w, http.StatusCreated, toModifierGroupResponse(g))
 }
 
 func (h *Handler) listModifierGroups(w http.ResponseWriter, r *http.Request) {
@@ -393,7 +429,11 @@ func (h *Handler) listModifierGroups(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, groups)
+	out := make([]modifierGroupResponse, len(groups))
+	for i, g := range groups {
+		out[i] = toModifierGroupResponse(g)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) getModifierGroup(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +451,7 @@ func (h *Handler) getModifierGroup(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, g)
+	respondJSON(w, http.StatusOK, toModifierGroupResponse(g))
 }
 
 func (h *Handler) updateModifierGroup(w http.ResponseWriter, r *http.Request) {
@@ -449,7 +489,7 @@ func (h *Handler) updateModifierGroup(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, updated)
+	respondJSON(w, http.StatusOK, toModifierGroupResponse(updated))
 }
 
 func (h *Handler) deleteModifierGroup(w http.ResponseWriter, r *http.Request) {
@@ -504,7 +544,7 @@ func (h *Handler) createModifier(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, m)
+	respondJSON(w, http.StatusCreated, toModifierResponse(m))
 }
 
 func (h *Handler) listModifiers(w http.ResponseWriter, r *http.Request) {
@@ -522,7 +562,11 @@ func (h *Handler) listModifiers(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, modifiers)
+	out := make([]modifierResponse, len(modifiers))
+	for i, mod := range modifiers {
+		out[i] = toModifierResponse(mod)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) updateModifier(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +600,7 @@ func (h *Handler) updateModifier(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, updated)
+	respondJSON(w, http.StatusOK, toModifierResponse(updated))
 }
 
 func (h *Handler) deleteModifier(w http.ResponseWriter, r *http.Request) {
@@ -682,7 +726,7 @@ func (h *Handler) createMenu(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusCreated, m)
+	respondJSON(w, http.StatusCreated, toMenuResponse(m))
 }
 
 func (h *Handler) listMenus(w http.ResponseWriter, r *http.Request) {
@@ -695,7 +739,11 @@ func (h *Handler) listMenus(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, menus)
+	out := make([]menuResponse, len(menus))
+	for i, menu := range menus {
+		out[i] = toMenuResponse(menu)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) getMenu(w http.ResponseWriter, r *http.Request) {
@@ -713,7 +761,7 @@ func (h *Handler) getMenu(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, m)
+	respondJSON(w, http.StatusOK, toMenuResponse(m))
 }
 
 func (h *Handler) updateMenu(w http.ResponseWriter, r *http.Request) {
@@ -747,7 +795,7 @@ func (h *Handler) updateMenu(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, updated)
+	respondJSON(w, http.StatusOK, toMenuResponse(updated))
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +854,11 @@ func (h *Handler) listMenuItems(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, items)
+	out := make([]menuItemResponse, len(items))
+	for i, item := range items {
+		out[i] = toMenuItemResponse(item)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) removeMenuItem(w http.ResponseWriter, r *http.Request) {

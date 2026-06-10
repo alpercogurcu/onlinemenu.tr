@@ -69,6 +69,7 @@ func (r *ProductRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Product, er
 		       tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		       sort_order, created_at, updated_at
 		FROM products
+		WHERE is_active = true
 		ORDER BY sort_order, name`
 
 	rows, err := tx.Query(ctx, q)

@@ -14,9 +14,14 @@ export interface Product {
   category_id: string | null
   name: string
   description: string
-  base_price: number
+  image_key: string
+  price_amount: number
+  currency: string
+  sku: string
+  unit: string
+  tax_rate_bps: number
   is_active: boolean
-  image_url: string
+  sort_order: number
   created_at: string
   updated_at: string
 }

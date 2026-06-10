@@ -42,14 +42,14 @@ import {
 interface ProductFormState {
   name: string
   description: string
-  base_price: string
+  price_tl: string
   is_active: boolean
 }
 
 const defaultForm: ProductFormState = {
   name: "",
   description: "",
-  base_price: "",
+  price_tl: "",
   is_active: true,
 }
 
@@ -73,8 +73,8 @@ export default function ProductsPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const price = parseFloat(form.base_price)
-    if (!form.name.trim() || isNaN(price)) {
+    const priceTL = parseFloat(form.price_tl)
+    if (!form.name.trim() || isNaN(priceTL)) {
       toast.error("Ad ve fiyat alanları zorunludur")
       return
     }
@@ -82,7 +82,8 @@ export default function ProductsPage() {
       await createProduct.mutateAsync({
         name: form.name.trim(),
         description: form.description.trim(),
-        base_price: price,
+        price_amount: Math.round(priceTL * 100),
+        currency: "TRY",
         is_active: form.is_active,
       })
       toast.success("Ürün eklendi")
@@ -161,9 +162,9 @@ export default function ProductsPage() {
                         : "—"}
                     </TableCell>
                     <TableCell>
-                      {product.base_price.toLocaleString("tr-TR", {
+                      {(product.price_amount / 100).toLocaleString("tr-TR", {
                         style: "currency",
-                        currency: "TRY",
+                        currency: product.currency || "TRY",
                       })}
                     </TableCell>
                     <TableCell>
@@ -234,9 +235,9 @@ export default function ProductsPage() {
                 min="0"
                 step="0.01"
                 placeholder="0.00"
-                value={form.base_price}
+                value={form.price_tl}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, base_price: e.target.value }))
+                  setForm((f) => ({ ...f, price_tl: e.target.value }))
                 }
               />
             </div>

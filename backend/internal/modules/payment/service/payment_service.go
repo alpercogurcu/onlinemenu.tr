@@ -154,6 +154,20 @@ func (s *PaymentService) GetByID(ctx context.Context, tenantID, id uuid.UUID) (d
 	return p, nil
 }
 
+// ListByTenant returns paginated payments for a tenant.
+func (s *PaymentService) ListByTenant(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]domain.Payment, error) {
+	var payments []domain.Payment
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		payments, err = s.paymentRepo.ListByTenant(ctx, tx, tenantID, limit, offset)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: list by tenant: %w", err)
+	}
+	return payments, nil
+}
+
 // TotalPaidForCheck returns the sum of completed payments for a check.
 func (s *PaymentService) TotalPaidForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
 	var total int64

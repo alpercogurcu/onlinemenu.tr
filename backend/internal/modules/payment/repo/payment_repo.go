@@ -114,6 +114,33 @@ func (r *PaymentRepo) InsertFiscalReceipt(ctx context.Context, tx pgx.Tx, rec do
 	return id, nil
 }
 
+// ListByTenant returns payments for a tenant ordered by created_at desc.
+func (r *PaymentRepo) ListByTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, limit, offset int) ([]domain.Payment, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
+		       method, status, amount_total, currency, fiscal_receipt_id,
+		       created_at, completed_at
+		FROM payments
+		WHERE tenant_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+	`, tenantID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: list by tenant: %w", err)
+	}
+	defer rows.Close()
+
+	var payments []domain.Payment
+	for rows.Next() {
+		p, err := scanPayment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("payment/repo: scan: %w", err)
+		}
+		payments = append(payments, p)
+	}
+	return payments, rows.Err()
+}
+
 // TotalPaidForCheck returns the sum of completed payments for a check.
 func (r *PaymentRepo) TotalPaidForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
 	var total int64

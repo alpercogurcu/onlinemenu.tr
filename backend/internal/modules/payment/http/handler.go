@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -52,6 +53,7 @@ func NewHandler(p Params) *HandlerWithCache {
 // POST /api/v1/payments requires Idempotency-Key (ADR-SEC-003).
 func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/payments", func(r chi.Router) {
+		r.Get("/", hwc.h.listPayments)
 		r.With(httpx.Idempotency(hwc.cache)).Post("/", hwc.h.registerSale)
 		r.Get("/{id}", hwc.h.getPayment)
 	})
@@ -65,6 +67,62 @@ func requirePrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, b
 		return auth.Principal{}, false
 	}
 	return p, true
+}
+
+type paymentResponse struct {
+	ID          uuid.UUID  `json:"id"`
+	TenantID    uuid.UUID  `json:"tenant_id"`
+	BranchID    uuid.UUID  `json:"branch_id"`
+	CheckID     *uuid.UUID `json:"check_id"`
+	Method      string     `json:"method"`
+	Status      string     `json:"status"`
+	AmountTotal int64      `json:"amount_total"`
+	Currency    string     `json:"currency"`
+	CreatedAt   string     `json:"created_at"`
+}
+
+func toPaymentResponse(p domain.Payment) paymentResponse {
+	return paymentResponse{
+		ID:          p.ID,
+		TenantID:    p.TenantID,
+		BranchID:    p.BranchID,
+		CheckID:     p.CheckID,
+		Method:      string(p.Method),
+		Status:      string(p.Status),
+		AmountTotal: p.AmountTotal,
+		Currency:    p.Currency,
+		CreatedAt:   p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	limit := 50
+	offset := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	payments, err := h.payments.ListByTenant(r.Context(), p.TenantID, limit, offset)
+	if err != nil {
+		h.logger.Error("payment: list", zap.Error(err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	out := make([]paymentResponse, len(payments))
+	for i, pay := range payments {
+		out[i] = toPaymentResponse(pay)
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"payments": out})
 }
 
 func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {

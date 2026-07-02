@@ -1,5 +1,7 @@
 version: '3'
 
+dotenv: ['backend/.env']
+
 includes:
   backend:
     taskfile: ./backend/Taskfile.yml

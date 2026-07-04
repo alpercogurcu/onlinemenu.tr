@@ -74,7 +74,7 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 
 	var payment domain.Payment
 	err := s.db.WithTenantTx(ctx, req.TenantID, func(tx pgx.Tx) error {
-		// Idempotency: return the existing payment if the key was already used.
+		// Idempotency fast path: return the existing payment if the key was already used.
 		existing, err := s.paymentRepo.GetByIdempotencyKey(ctx, tx, req.TenantID, req.IdempotencyKey)
 		if err == nil {
 			payment = existing
@@ -94,6 +94,10 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 			Currency:       req.Currency,
 		})
 		if err != nil {
+			// Race: a concurrent request with the same key won the insert between
+			// our pre-check and this Create. Postgres aborts this transaction on
+			// the unique violation, so we cannot re-query inside it; the caller
+			// below re-fetches in a fresh transaction once this one rolls back.
 			return fmt.Errorf("payment/service: create payment: %w", err)
 		}
 
@@ -131,8 +135,30 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 			"currency":     req.Currency,
 		})
 	})
+	if errors.Is(err, repo.ErrDuplicateIdempotencyKey) {
+		// The pre-check missed a concurrent winner; by the time Postgres reported
+		// the unique violation, the winning transaction had already committed
+		// (Postgres blocks the losing INSERT until the winner commits or rolls
+		// back). A fresh read is therefore guaranteed to find the completed row.
+		return s.fetchExistingByIdempotencyKey(ctx, req.TenantID, req.IdempotencyKey)
+	}
 	if err != nil {
 		return domain.Payment{}, fmt.Errorf("payment/service: register sale: %w", err)
+	}
+	return payment, nil
+}
+
+// fetchExistingByIdempotencyKey re-reads a payment in a fresh transaction after
+// a concurrent duplicate-key conflict aborted the original write transaction.
+func (s *PaymentService) fetchExistingByIdempotencyKey(ctx context.Context, tenantID uuid.UUID, key string) (domain.Payment, error) {
+	var payment domain.Payment
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		payment, err = s.paymentRepo.GetByIdempotencyKey(ctx, tx, tenantID, key)
+		return err
+	})
+	if err != nil {
+		return domain.Payment{}, fmt.Errorf("payment/service: register sale: fetch after conflict: %w", err)
 	}
 	return payment, nil
 }

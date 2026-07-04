@@ -4,10 +4,13 @@ on:
   pull_request:
     paths:
       - 'backend/migrations/**'
+      - 'deploy/postgres/**'
+      - '.github/workflows/migration-check.yml'
 
 env:
-  GO_VERSION: '1.24'
-  DATABASE_URL: postgres://postgres:postgres@localhost:5432/onlinemenu_test?sslmode=disable
+  # Migrations run as app_migrator (table owner) to mirror production
+  # (ADR-SEC-002). Roles are bootstrapped in the "Bootstrap roles" step.
+  MIGRATOR_URL: postgres://app_migrator:migrator_ci_password@localhost:5432/onlinemenu_test?sslmode=disable
 
 jobs:
   migration-dry-run:
@@ -33,13 +36,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: backend/go.sum
-
       - name: Install golang-migrate CLI
         run: |
           MIGRATE_VERSION="v4.18.1"
@@ -48,12 +44,48 @@ jobs:
             | tar -xz -C /usr/local/bin migrate
           migrate -version
 
-      - name: Migration dry-run — tenant (up + down)
+      - name: Bootstrap roles (ADR-SEC-002 parity)
+        env:
+          PGPASSWORD: postgres
         run: |
-          migrate -path backend/migrations/tenant -database "$DATABASE_URL" up
-          migrate -path backend/migrations/tenant -database "$DATABASE_URL" down 1
+          psql -h localhost -U postgres -d onlinemenu_test <<'SQL'
+          CREATE ROLE app_migrator WITH LOGIN PASSWORD 'migrator_ci_password' CREATEDB BYPASSRLS;
+          CREATE ROLE app_runtime  WITH LOGIN PASSWORD 'runtime_ci_password';
+          GRANT CONNECT ON DATABASE onlinemenu_test TO app_migrator;
+          GRANT CONNECT ON DATABASE onlinemenu_test TO app_runtime;
+          GRANT USAGE, CREATE ON SCHEMA public TO app_migrator;
+          GRANT USAGE ON SCHEMA public TO app_runtime;
+          ALTER DEFAULT PRIVILEGES FOR ROLE app_migrator IN SCHEMA public
+              GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_runtime;
+          ALTER DEFAULT PRIVILEGES FOR ROLE app_migrator IN SCHEMA public
+              GRANT USAGE ON SEQUENCES TO app_runtime;
+          SQL
 
-      - name: Migration dry-run — identity (up + down)
+      - name: Migration dry-run — all modules (up, then down+up where possible)
         run: |
-          migrate -path backend/migrations/identity -database "$DATABASE_URL" up
-          migrate -path backend/migrations/identity -database "$DATABASE_URL" down 1
+          set -euo pipefail
+          # Dependency order per docs/db-schema.md "Modül — Migration Eşlemesi".
+          MODULES="tenant identity hr-core catalog party inventory pos payment billing"
+          for mod in $MODULES; do
+            path="backend/migrations/$mod"
+            [ -d "$path" ] || { echo "::error::missing migration dir $path"; exit 1; }
+            # Each module gets its own version table; sharing the default
+            # schema_migrations table makes version numbers collide across
+            # modules and silently skips migrations.
+            table="schema_migrations_$(echo "$mod" | tr '-' '_')"
+            url="$MIGRATOR_URL&x-migrations-table=$table"
+            echo "=== $mod: up ==="
+            migrate -path "$path" -database "$url" up
+
+            # down+up round-trip only for the head migration, and only when it
+            # actually ships a .down.sql (early migrations predate the
+            # down-file convention).
+            head_version=$(ls "$path"/*.up.sql | sed -E 's/.*\/([0-9]+)_.*/\1/' | sort -n | tail -1)
+            if ls "$path/${head_version}"_*.down.sql >/dev/null 2>&1; then
+              echo "=== $mod: down 1 + re-up (head $head_version) ==="
+              migrate -path "$path" -database "$url" down 1
+              migrate -path "$path" -database "$url" up
+            else
+              echo "=== $mod: head $head_version has no down file, skipping round-trip ==="
+            fi
+          done

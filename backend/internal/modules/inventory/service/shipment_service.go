@@ -14,6 +14,7 @@ import (
 	"onlinemenu.tr/internal/modules/inventory/domain"
 	pub "onlinemenu.tr/internal/modules/inventory/public"
 	"onlinemenu.tr/internal/modules/inventory/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -31,6 +32,7 @@ type ShipmentService struct {
 	mvRepo       *repo.StockMovementRepo
 	transferRepo *repo.TransferOrderRepo
 	transferItem *repo.TransferOrderItemRepo
+	whRepo       *repo.WarehouseRepo
 	logger       *zap.Logger
 }
 
@@ -45,6 +47,7 @@ type ShipmentParams struct {
 	MvRepo       *repo.StockMovementRepo
 	TransferRepo *repo.TransferOrderRepo
 	TransferItem *repo.TransferOrderItemRepo
+	WhRepo       *repo.WarehouseRepo
 	Logger       *zap.Logger
 }
 
@@ -58,6 +61,7 @@ func NewShipmentService(p ShipmentParams) *ShipmentService {
 		mvRepo:       p.MvRepo,
 		transferRepo: p.TransferRepo,
 		transferItem: p.TransferItem,
+		whRepo:       p.WhRepo,
 		logger:       p.Logger,
 	}
 }
@@ -82,8 +86,10 @@ type CreateShipmentRequest struct {
 	Items           []CreateShipmentItemRequest
 }
 
-// Create persists a new shipment in draft status with its line items.
-func (s *ShipmentService) Create(ctx context.Context, tenantID uuid.UUID, req CreateShipmentRequest) (domain.Shipment, []domain.ShipmentItem, error) {
+// Create persists a new shipment in draft status with its line items. The
+// acting principal must belong to from_warehouse_id's branch (ADR-DATA-006 /
+// security sprint: shipment create is a source-warehouse-branch action).
+func (s *ShipmentService) Create(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, req CreateShipmentRequest) (domain.Shipment, []domain.ShipmentItem, error) {
 	if req.Priority == "" {
 		req.Priority = domain.PriorityNormal
 	}
@@ -94,7 +100,14 @@ func (s *ShipmentService) Create(ctx context.Context, tenantID uuid.UUID, req Cr
 	var shipment domain.Shipment
 	var items []domain.ShipmentItem
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
+		fromWH, err := s.whRepo.GetByID(ctx, tx, req.FromWarehouseID)
+		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, fromWH.BranchID); err != nil {
+			return err
+		}
+
 		shipment, err = s.repo.Create(ctx, tx, domain.Shipment{
 			TenantID:        tenantID,
 			FromWarehouseID: req.FromWarehouseID,
@@ -125,7 +138,7 @@ func (s *ShipmentService) Create(ctx context.Context, tenantID uuid.UUID, req Cr
 		return nil
 	})
 	if err != nil {
-		return domain.Shipment{}, nil, fmt.Errorf("inventory/service: create shipment: %w", err)
+		return domain.Shipment{}, nil, wrapErr(err, "inventory/service: create shipment: %w")
 	}
 	return shipment, items, nil
 }
@@ -172,12 +185,26 @@ func (s *ShipmentService) ListByWarehouse(ctx context.Context, tenantID, warehou
 	return out, nil
 }
 
+// requireFromWarehouseBranch checks that principal belongs to the branch
+// that owns sh.FromWarehouseID (ADR-DATA-006 / security sprint: shipment
+// approve/advance/cancel are source-warehouse-branch actions).
+func (s *ShipmentService) requireFromWarehouseBranch(ctx context.Context, tx pgx.Tx, principal auth.Principal, sh domain.Shipment) error {
+	wh, err := s.whRepo.GetByID(ctx, tx, sh.FromWarehouseID)
+	if err != nil {
+		return err
+	}
+	return requireBranch(ctx, principal, wh.BranchID)
+}
+
 // Approve transitions a shipment from draft to approved.
-func (s *ShipmentService) Approve(ctx context.Context, tenantID, id uuid.UUID) (domain.Shipment, error) {
+func (s *ShipmentService) Approve(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.Shipment, error) {
 	var updated domain.Shipment
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		sh, err := s.repo.GetByID(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := s.requireFromWarehouseBranch(ctx, tx, principal, sh); err != nil {
 			return err
 		}
 		if err := domain.TransitionShipmentStatus(sh.Status, domain.ShipmentStatusApproved); err != nil {
@@ -196,11 +223,14 @@ func (s *ShipmentService) Approve(ctx context.Context, tenantID, id uuid.UUID) (
 // item, the full requested_qty is shipped (recorded as an 'out' stock
 // movement from the source warehouse and denormalized onto the linked BTO's
 // shipped_qty, if any). This is a single atomic transaction.
-func (s *ShipmentService) Advance(ctx context.Context, tenantID, id uuid.UUID) (domain.Shipment, error) {
+func (s *ShipmentService) Advance(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.Shipment, error) {
 	var updated domain.Shipment
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		sh, err := s.repo.GetByID(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := s.requireFromWarehouseBranch(ctx, tx, principal, sh); err != nil {
 			return err
 		}
 		if err := domain.TransitionShipmentStatus(sh.Status, domain.ShipmentStatusInTransit); err != nil {
@@ -290,7 +320,7 @@ func (s *ShipmentService) Advance(ctx context.Context, tenantID, id uuid.UUID) (
 // every item of the linked BTO is now fully received, the BTO auto-closes
 // (received -> closed). All of this — status guard, stock movements, BTO
 // denormalization and auto-close — commits in a single WithTenantTx.
-func (s *ShipmentService) Receive(ctx context.Context, tenantID, id, toWarehouseID uuid.UUID) (domain.Shipment, error) {
+func (s *ShipmentService) Receive(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id, toWarehouseID uuid.UUID) (domain.Shipment, error) {
 	if toWarehouseID == uuid.Nil {
 		return domain.Shipment{}, &pub.ValidationError{Msg: "to_warehouse_id is required"}
 	}
@@ -299,6 +329,13 @@ func (s *ShipmentService) Receive(ctx context.Context, tenantID, id, toWarehouse
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		sh, err := s.repo.GetByID(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		toWH, err := s.whRepo.GetByID(ctx, tx, toWarehouseID)
+		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, toWH.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionShipmentStatus(sh.Status, domain.ShipmentStatusReceived); err != nil {
@@ -370,11 +407,14 @@ func (s *ShipmentService) Receive(ctx context.Context, tenantID, id, toWarehouse
 }
 
 // Cancel transitions a shipment to cancelled (only reachable from draft/approved).
-func (s *ShipmentService) Cancel(ctx context.Context, tenantID, id uuid.UUID) (domain.Shipment, error) {
+func (s *ShipmentService) Cancel(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.Shipment, error) {
 	var updated domain.Shipment
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		sh, err := s.repo.GetByID(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := s.requireFromWarehouseBranch(ctx, tx, principal, sh); err != nil {
 			return err
 		}
 		if err := domain.TransitionShipmentStatus(sh.Status, domain.ShipmentStatusCancelled); err != nil {

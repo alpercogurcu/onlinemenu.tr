@@ -47,3 +47,17 @@ func (e *ValidationError) Error() string { return "inventory: " + e.Msg }
 type TransitionError struct{ Msg string }
 
 func (e *TransitionError) Error() string { return "inventory: " + e.Msg }
+
+// ErrBranchForbidden is returned when the acting principal attempts a
+// branch-scoped action (ADR-DATA-006: BTO submit/approve/reject/cancel/
+// fulfil, shipment create/approve/advance/cancel/receive, stock movement
+// create, warehouse update/delete) on a resource belonging to a branch it
+// does not have access to (ADR-AUTH-001, layer 3). Tenant-wide principals
+// (OPA scope "tenant", e.g. manager) are exempt. The resource is already
+// known to be tenant-visible (RLS, layer 1, already passed) so this is not
+// treated as a not-found — the HTTP layer maps it to 403 Forbidden.
+var ErrBranchForbidden = inventoryBranchForbiddenError{}
+
+type inventoryBranchForbiddenError struct{}
+
+func (inventoryBranchForbiddenError) Error() string { return "inventory: forbidden for this branch" }

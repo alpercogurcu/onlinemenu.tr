@@ -24,6 +24,7 @@ import (
 	pub "onlinemenu.tr/internal/modules/inventory/public"
 	"onlinemenu.tr/internal/modules/inventory/repo"
 	"onlinemenu.tr/internal/modules/inventory/service"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -199,7 +200,8 @@ func newStockItemService() *service.StockItemService {
 
 func newInventoryService() *service.InventoryService {
 	return service.NewInventoryService(service.Params{
-		DB: sharedPool, LvlRepo: repo.NewStockLevelRepo(), MvRepo: repo.NewStockMovementRepo(), Logger: zap.NewNop(),
+		DB: sharedPool, LvlRepo: repo.NewStockLevelRepo(), MvRepo: repo.NewStockMovementRepo(),
+		WhRepo: repo.NewWarehouseRepo(), Logger: zap.NewNop(),
 	})
 }
 
@@ -218,8 +220,26 @@ func newShipmentService() *service.ShipmentService {
 		MvRepo:       repo.NewStockMovementRepo(),
 		TransferRepo: repo.NewTransferOrderRepo(),
 		TransferItem: repo.NewTransferOrderItemRepo(),
+		WhRepo:       repo.NewWarehouseRepo(),
 		Logger:       zap.NewNop(),
 	})
+}
+
+// chainWidePrincipal returns a staff principal with no single-branch scope
+// (BranchID == uuid.Nil), matching a chain-wide membership (ADR-AUTH-001 /
+// identity domain.Membership: "nil = chain-wide"). Used by lifecycle tests
+// that exercise both requesting-branch and source-branch actions in one
+// flow; auth.Principal.HasBranchAccess treats it as authorized for any
+// branch. Branch-scoped authz enforcement itself is covered by the
+// dedicated tests in branch_authz_test.go.
+func chainWidePrincipal() auth.Principal {
+	return auth.Principal{
+		PersonID: uuid.New(),
+		Ctx:      auth.ContextStaff,
+		TenantID: tenantA,
+		BranchID: uuid.Nil,
+		RoleIDs:  []uuid.UUID{uuid.New()},
+	}
 }
 
 func createTestWarehouse(t *testing.T, ctx context.Context, tenantID, branchID uuid.UUID) domain.Warehouse {
@@ -253,7 +273,7 @@ func createTestStockItem(t *testing.T, ctx context.Context, tenantID uuid.UUID) 
 func seedSourceStock(t *testing.T, ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID, qty float64, unit string) {
 	t.Helper()
 	inv := newInventoryService()
-	_, _, err := inv.RecordMovement(ctx, tenantID, service.RecordMovementRequest{
+	_, _, err := inv.RecordMovement(ctx, tenantID, chainWidePrincipal(), service.RecordMovementRequest{
 		WarehouseID: warehouseID,
 		StockItemID: stockItemID,
 		Type:        domain.MovementTypeIn,
@@ -292,24 +312,24 @@ func TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive(t *testing.T
 	assert.Equal(t, domain.BTOStatusDraft, bto.Status)
 
 	// 2. Submit.
-	bto, err = toSvc.Submit(ctx, tenantA, bto.ID)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.BTOStatusSubmitted, bto.Status)
 
 	// 3. Source branch approves the full requested quantity.
-	bto, err = toSvc.Approve(ctx, tenantA, bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, domain.BTOStatusApproved, bto.Status)
 
 	// 4. Source branch begins fulfilling.
-	bto, err = toSvc.Fulfil(ctx, tenantA, bto.ID)
+	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.BTOStatusFulfilling, bto.Status)
 
 	// 5. A shipment is created against the BTO and approved.
-	shipment, _, err := shSvc.Create(ctx, tenantA, service.CreateShipmentRequest{
+	shipment, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		TransferOrderID: &bto.ID,
@@ -319,13 +339,13 @@ func TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive(t *testing.T
 		},
 	})
 	require.NoError(t, err)
-	shipment, err = shSvc.Approve(ctx, tenantA, shipment.ID)
+	shipment, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ShipmentStatusApproved, shipment.Status)
 
 	// 6. Advance to in_transit: source warehouse loses 40kg, BTO -> shipped,
 	// shipped_qty denormalized onto the BTO item.
-	shipment, err = shSvc.Advance(ctx, tenantA, shipment.ID)
+	shipment, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ShipmentStatusInTransit, shipment.Status)
 
@@ -345,7 +365,7 @@ func TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive(t *testing.T
 
 	// 7. Receive into the destination warehouse: destination gains 40kg, BTO
 	// -> received -> auto-closed (single item, fully received), atomically.
-	shipment, err = shSvc.Receive(ctx, tenantA, shipment.ID, destWH.ID)
+	shipment, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ShipmentStatusReceived, shipment.Status)
 
@@ -384,7 +404,7 @@ func TestShipmentReceive_RejectsWrongStatus(t *testing.T) {
 	shSvc := newShipmentService()
 	invSvc := newInventoryService()
 
-	shipment, _, err := shSvc.Create(ctx, tenantA, service.CreateShipmentRequest{
+	shipment, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		Priority:        domain.PriorityNormal,
@@ -396,7 +416,7 @@ func TestShipmentReceive_RejectsWrongStatus(t *testing.T) {
 	assert.Equal(t, domain.ShipmentStatusDraft, shipment.Status)
 
 	// Still draft: receive must be rejected, and must not touch stock at all.
-	_, err = shSvc.Receive(ctx, tenantA, shipment.ID, destWH.ID)
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
 	require.Error(t, err)
 	var te *pub.TransitionError
 	assert.ErrorAs(t, err, &te)
@@ -452,17 +472,17 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, bto.ID)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
-	bto, err = toSvc.Approve(ctx, tenantA, bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Fulfil(ctx, tenantA, bto.ID)
+	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	createAndAdvance := func(qty float64) domain.Shipment {
-		sh, _, err := shSvc.Create(ctx, tenantA, service.CreateShipmentRequest{
+		sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 			FromWarehouseID: sourceWH.ID,
 			ToBranchID:      branchReq,
 			TransferOrderID: &bto.ID,
@@ -471,9 +491,9 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 			},
 		})
 		require.NoError(t, err)
-		sh, err = shSvc.Approve(ctx, tenantA, sh.ID)
+		sh, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
-		sh, err = shSvc.Advance(ctx, tenantA, sh.ID)
+		sh, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		return sh
 	}
@@ -498,7 +518,7 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 
 	// Receive shipment 1: partial receipt, BTO -> received, but NOT closed yet
 	// (shipment 2's 15kg has not arrived).
-	_, err = shSvc.Receive(ctx, tenantA, ship1.ID, destWH.ID)
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
 	require.NoError(t, err)
 	afterReceive1, err := toSvc.Get(ctx, tenantA, bto.ID)
 	require.NoError(t, err)
@@ -510,7 +530,7 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 	assert.InDelta(t, 25.0, btoItemsAfterReceive1[0].ReceivedQty, 0.001)
 
 	// Receive shipment 2: completes the total (25+15=40) -> auto-close.
-	_, err = shSvc.Receive(ctx, tenantA, ship2.ID, destWH.ID)
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
 	require.NoError(t, err)
 	afterReceive2, err := toSvc.Get(ctx, tenantA, bto.ID)
 	require.NoError(t, err)
@@ -534,7 +554,7 @@ func TestShipmentAdvance_RejectsInsufficientStock(t *testing.T) {
 	shSvc := newShipmentService()
 	invSvc := newInventoryService()
 
-	sh, _, err := shSvc.Create(ctx, tenantA, service.CreateShipmentRequest{
+	sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		Items: []service.CreateShipmentItemRequest{
@@ -542,10 +562,10 @@ func TestShipmentAdvance_RejectsInsufficientStock(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	sh, err = shSvc.Approve(ctx, tenantA, sh.ID)
+	sh, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
 	require.NoError(t, err)
 
-	_, err = shSvc.Advance(ctx, tenantA, sh.ID)
+	_, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
 	require.Error(t, err)
 	var ve *pub.ValidationError
 	assert.ErrorAs(t, err, &ve)

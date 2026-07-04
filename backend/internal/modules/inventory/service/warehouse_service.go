@@ -12,6 +12,7 @@ import (
 	"onlinemenu.tr/internal/modules/inventory/domain"
 	pub "onlinemenu.tr/internal/modules/inventory/public"
 	"onlinemenu.tr/internal/modules/inventory/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -104,15 +105,25 @@ type UpdateWarehouseRequest struct {
 	IsActive      bool
 }
 
-// Update persists mutable warehouse field changes.
-func (s *WarehouseService) Update(ctx context.Context, tenantID uuid.UUID, req UpdateWarehouseRequest) (domain.Warehouse, error) {
+// Update persists mutable warehouse field changes. The acting principal must
+// belong to the warehouse's PERSISTED branch (not the branch_id in the
+// request body — a request could otherwise name a branch the caller
+// legitimately belongs to while targeting a warehouse that actually lives in
+// a different branch; ADR-AUTH-001 layer 3 / security sprint).
+func (s *WarehouseService) Update(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, req UpdateWarehouseRequest) (domain.Warehouse, error) {
 	if err := validateWarehouse(CreateWarehouseRequest{BranchID: req.BranchID, Name: req.Name, WarehouseType: req.WarehouseType}); err != nil {
 		return domain.Warehouse{}, err
 	}
 
 	var updated domain.Warehouse
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
+		existing, err := s.repo.GetByID(ctx, tx, req.ID)
+		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, existing.BranchID); err != nil {
+			return err
+		}
 		updated, err = s.repo.Update(ctx, tx, domain.Warehouse{
 			ID:            req.ID,
 			BranchID:      req.BranchID,
@@ -128,9 +139,17 @@ func (s *WarehouseService) Update(ctx context.Context, tenantID uuid.UUID, req U
 	return updated, nil
 }
 
-// Delete soft-deletes (deactivates) a warehouse.
-func (s *WarehouseService) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
+// Delete soft-deletes (deactivates) a warehouse. The acting principal must
+// belong to the warehouse's persisted branch (see Update).
+func (s *WarehouseService) Delete(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) error {
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		existing, err := s.repo.GetByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, existing.BranchID); err != nil {
+			return err
+		}
 		return s.repo.Delete(ctx, tx, id)
 	})
 	if err != nil {

@@ -79,7 +79,7 @@ func (h *Handler) createShipment(w http.ResponseWriter, r *http.Request) {
 		createdBy = &id
 	}
 
-	sh, shItems, err := h.shipments.Create(r.Context(), p.TenantID, service.CreateShipmentRequest{
+	sh, shItems, err := h.shipments.Create(r.Context(), p.TenantID, p, service.CreateShipmentRequest{
 		FromWarehouseID: req.FromWarehouseID,
 		ToBranchID:      req.ToBranchID,
 		TransferOrderID: req.TransferOrderID,
@@ -152,7 +152,7 @@ func (h *Handler) approveShipment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	sh, err := h.shipments.Approve(r.Context(), p.TenantID, id)
+	sh, err := h.shipments.Approve(r.Context(), p.TenantID, p, id)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -170,7 +170,7 @@ func (h *Handler) advanceShipment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	sh, err := h.shipments.Advance(r.Context(), p.TenantID, id)
+	sh, err := h.shipments.Advance(r.Context(), p.TenantID, p, id)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -195,7 +195,7 @@ func (h *Handler) receiveShipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sh, err := h.shipments.Receive(r.Context(), p.TenantID, id, req.ToWarehouseID)
+	sh, err := h.shipments.Receive(r.Context(), p.TenantID, p, id, req.ToWarehouseID)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -213,7 +213,7 @@ func (h *Handler) cancelShipment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	sh, err := h.shipments.Cancel(r.Context(), p.TenantID, id)
+	sh, err := h.shipments.Cancel(r.Context(), p.TenantID, p, id)
 	if err != nil {
 		h.logError(w, r, err)
 		return

@@ -13,6 +13,7 @@ import (
 	"onlinemenu.tr/internal/modules/inventory/domain"
 	pub "onlinemenu.tr/internal/modules/inventory/public"
 	"onlinemenu.tr/internal/modules/inventory/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -21,6 +22,7 @@ type InventoryService struct {
 	db      *db.Pool
 	lvlRepo *repo.StockLevelRepo
 	mvRepo  *repo.StockMovementRepo
+	whRepo  *repo.WarehouseRepo
 	logger  *zap.Logger
 }
 
@@ -31,6 +33,7 @@ type Params struct {
 	DB      *db.Pool
 	LvlRepo *repo.StockLevelRepo
 	MvRepo  *repo.StockMovementRepo
+	WhRepo  *repo.WarehouseRepo
 	Logger  *zap.Logger
 }
 
@@ -40,6 +43,7 @@ func NewInventoryService(p Params) *InventoryService {
 		db:      p.DB,
 		lvlRepo: p.LvlRepo,
 		mvRepo:  p.MvRepo,
+		whRepo:  p.WhRepo,
 		logger:  p.Logger,
 	}
 }
@@ -59,8 +63,10 @@ type RecordMovementRequest struct {
 
 // RecordMovement records a stock movement and updates the materialized level
 // atomically. in/out/adjust/transfer affect on_hand; reserve/release affect
-// reserved only (ADR-DATA-005 / migrations/inventory/000003).
-func (s *InventoryService) RecordMovement(ctx context.Context, tenantID uuid.UUID, req RecordMovementRequest) (domain.StockMovement, domain.StockLevel, error) {
+// reserved only (ADR-DATA-005 / migrations/inventory/000003). The acting
+// principal must belong to the movement's warehouse's branch (ADR-AUTH-001
+// layer 3 / security sprint), unless tenant-wide exempt.
+func (s *InventoryService) RecordMovement(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, req RecordMovementRequest) (domain.StockMovement, domain.StockLevel, error) {
 	if err := validateMovement(req); err != nil {
 		return domain.StockMovement{}, domain.StockLevel{}, err
 	}
@@ -69,6 +75,14 @@ func (s *InventoryService) RecordMovement(ctx context.Context, tenantID uuid.UUI
 	var lvl domain.StockLevel
 
 	err := s.db.WithTenantTx(ctx, tenantID, func(pgTx pgx.Tx) error {
+		wh, err := s.whRepo.GetByID(ctx, pgTx, req.WarehouseID)
+		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, wh.BranchID); err != nil {
+			return err
+		}
+
 		m := domain.StockMovement{
 			TenantID:      tenantID,
 			WarehouseID:   req.WarehouseID,
@@ -80,7 +94,6 @@ func (s *InventoryService) RecordMovement(ctx context.Context, tenantID uuid.UUI
 			Notes:         req.Notes,
 			CreatedBy:     req.CreatedBy,
 		}
-		var err error
 		mv, err = s.mvRepo.Create(ctx, pgTx, m)
 		if err != nil {
 			return fmt.Errorf("record movement: %w", err)
@@ -98,7 +111,7 @@ func (s *InventoryService) RecordMovement(ctx context.Context, tenantID uuid.UUI
 		return nil
 	})
 	if err != nil {
-		return domain.StockMovement{}, domain.StockLevel{}, fmt.Errorf("inventory/service: record movement: %w", err)
+		return domain.StockMovement{}, domain.StockLevel{}, wrapErr(err, "inventory/service: record movement: %w")
 	}
 	return mv, lvl, nil
 }

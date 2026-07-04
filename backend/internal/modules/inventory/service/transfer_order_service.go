@@ -13,6 +13,7 @@ import (
 	"onlinemenu.tr/internal/modules/inventory/domain"
 	pub "onlinemenu.tr/internal/modules/inventory/public"
 	"onlinemenu.tr/internal/modules/inventory/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -170,8 +171,8 @@ func (s *TransferOrderService) ListBySourceBranch(ctx context.Context, tenantID,
 }
 
 // Submit transitions a BTO from draft to submitted (requesting branch action).
-func (s *TransferOrderService) Submit(ctx context.Context, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-	return s.transition(ctx, tenantID, id, domain.BTOStatusSubmitted, transitionOpts{setSubmittedAt: true})
+func (s *TransferOrderService) Submit(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+	return s.transition(ctx, tenantID, principal, id, domain.BTOStatusSubmitted, requestingBranchOf, transitionOpts{setSubmittedAt: true})
 }
 
 // ApprovalItem carries the approved quantity for one BTO line item.
@@ -182,11 +183,14 @@ type ApprovalItem struct {
 
 // Approve transitions a BTO from submitted to approved (source branch action),
 // recording per-item approved quantities (partial approval supported).
-func (s *TransferOrderService) Approve(ctx context.Context, tenantID, id uuid.UUID, approvedBy uuid.UUID, approvals []ApprovalItem) (domain.BranchTransferOrder, error) {
+func (s *TransferOrderService) Approve(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id, approvedBy uuid.UUID, approvals []ApprovalItem) (domain.BranchTransferOrder, error) {
 	var updated domain.BranchTransferOrder
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		order, err := s.repo.GetByID(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, order.SourceBranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionBTOStatus(order.Status, domain.BTOStatusApproved); err != nil {
@@ -225,31 +229,76 @@ func (s *TransferOrderService) Approve(ctx context.Context, tenantID, id uuid.UU
 }
 
 // Reject transitions a BTO from submitted to rejected (source branch action).
-func (s *TransferOrderService) Reject(ctx context.Context, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-	return s.transition(ctx, tenantID, id, domain.BTOStatusRejected, transitionOpts{})
+func (s *TransferOrderService) Reject(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+	return s.transition(ctx, tenantID, principal, id, domain.BTOStatusRejected, sourceBranchOf, transitionOpts{})
 }
 
-// Cancel transitions a BTO to cancelled (requesting or source branch action,
-// only reachable from draft/submitted/approved per the state machine).
-func (s *TransferOrderService) Cancel(ctx context.Context, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-	return s.transition(ctx, tenantID, id, domain.BTOStatusCancelled, transitionOpts{})
+// Cancel transitions a BTO to cancelled. Branch ownership of this action
+// depends on the BTO's CURRENT status per ADR-DATA-006's state table:
+// draft/submitted -> cancelled is a requesting-branch action ("iptal" /
+// "geri çek"); approved -> cancelled is a source-branch action ("iptal,
+// henüz sevk yok" — the source branch withdraws before shipping anything).
+//
+// PROVISIONAL: the security-sprint task matrix that motivated this change
+// states "cancel -> yalnızca requesting_branch" without this status split.
+// This implementation instead follows the ADR literally, because collapsing
+// to requesting-only would silently remove the source branch's documented
+// approved-cancel capability. Flagged for team-lead confirmation in the
+// sprint report; if the matrix's simpler rule is actually intended, only the
+// branch selection below needs to change (single `if` removed), the
+// requireBranch/transition plumbing stays the same.
+func (s *TransferOrderService) Cancel(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+	var updated domain.BranchTransferOrder
+	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		order, err := s.repo.GetByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		branchOf := requestingBranchOf
+		if order.Status == domain.BTOStatusApproved {
+			branchOf = sourceBranchOf
+		}
+		if err := requireBranch(ctx, principal, branchOf(order)); err != nil {
+			return err
+		}
+		if err := domain.TransitionBTOStatus(order.Status, domain.BTOStatusCancelled); err != nil {
+			return &pub.TransitionError{Msg: err.Error()}
+		}
+		updated, err = s.repo.UpdateStatus(ctx, tx, id, domain.BTOStatusCancelled, nil, nil, nil)
+		if err != nil {
+			return fmt.Errorf("update status: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.BranchTransferOrder{}, wrapErr(err, "inventory/service: cancel transfer order: %w")
+	}
+	return updated, nil
 }
 
 // Fulfil transitions a BTO from approved to fulfilling (source branch begins
 // preparation/production).
-func (s *TransferOrderService) Fulfil(ctx context.Context, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-	return s.transition(ctx, tenantID, id, domain.BTOStatusFulfilling, transitionOpts{})
+func (s *TransferOrderService) Fulfil(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+	return s.transition(ctx, tenantID, principal, id, domain.BTOStatusFulfilling, sourceBranchOf, transitionOpts{})
 }
 
 type transitionOpts struct {
 	setSubmittedAt bool
 }
 
-func (s *TransferOrderService) transition(ctx context.Context, tenantID, id uuid.UUID, to domain.BTOStatus, opts transitionOpts) (domain.BranchTransferOrder, error) {
+// requestingBranchOf and sourceBranchOf select the branch that must own a
+// BTO transition, for use with transition's branchOf parameter.
+func requestingBranchOf(o domain.BranchTransferOrder) uuid.UUID { return o.RequestingBranchID }
+func sourceBranchOf(o domain.BranchTransferOrder) uuid.UUID     { return o.SourceBranchID }
+
+func (s *TransferOrderService) transition(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID, to domain.BTOStatus, branchOf func(domain.BranchTransferOrder) uuid.UUID, opts transitionOpts) (domain.BranchTransferOrder, error) {
 	var updated domain.BranchTransferOrder
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		order, err := s.repo.GetByID(ctx, tx, id)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, branchOf(order)); err != nil {
 			return err
 		}
 		if err := domain.TransitionBTOStatus(order.Status, to); err != nil {

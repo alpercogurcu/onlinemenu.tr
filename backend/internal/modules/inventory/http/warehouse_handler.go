@@ -129,7 +129,7 @@ func (h *Handler) updateWarehouse(w http.ResponseWriter, r *http.Request) {
 		isActive = *req.IsActive
 	}
 
-	wh, err := h.warehouses.Update(r.Context(), p.TenantID, service.UpdateWarehouseRequest{
+	wh, err := h.warehouses.Update(r.Context(), p.TenantID, p, service.UpdateWarehouseRequest{
 		ID:            id,
 		BranchID:      branchID,
 		Name:          req.Name,
@@ -154,7 +154,7 @@ func (h *Handler) deleteWarehouse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.warehouses.Delete(r.Context(), p.TenantID, id); err != nil {
+	if err := h.warehouses.Delete(r.Context(), p.TenantID, p, id); err != nil {
 		h.logError(w, r, err)
 		return
 	}

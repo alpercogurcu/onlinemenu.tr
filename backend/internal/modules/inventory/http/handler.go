@@ -235,7 +235,7 @@ func (h *Handler) recordMovement(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:     createdBy,
 	}
 
-	mv, lvl, err := h.svc.RecordMovement(r.Context(), p.TenantID, svcReq)
+	mv, lvl, err := h.svc.RecordMovement(r.Context(), p.TenantID, p, svcReq)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -305,6 +305,10 @@ func requirePrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, b
 func (h *Handler) logError(w http.ResponseWriter, _ *http.Request, err error) {
 	if errors.Is(err, pub.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var ve *pub.ValidationError

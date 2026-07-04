@@ -9,6 +9,7 @@ import (
 
 	"onlinemenu.tr/internal/modules/inventory/domain"
 	"onlinemenu.tr/internal/modules/inventory/service"
+	"onlinemenu.tr/internal/platform/auth"
 )
 
 type transferOrderItemRequest struct {
@@ -178,26 +179,26 @@ func (h *Handler) getTransferOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) submitTransferOrder(w http.ResponseWriter, r *http.Request) {
-	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-		return h.transfers.Submit(hr.Context(), tenantID, id)
+	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+		return h.transfers.Submit(hr.Context(), tenantID, principal, id)
 	})
 }
 
 func (h *Handler) rejectTransferOrder(w http.ResponseWriter, r *http.Request) {
-	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-		return h.transfers.Reject(hr.Context(), tenantID, id)
+	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+		return h.transfers.Reject(hr.Context(), tenantID, principal, id)
 	})
 }
 
 func (h *Handler) cancelTransferOrder(w http.ResponseWriter, r *http.Request) {
-	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-		return h.transfers.Cancel(hr.Context(), tenantID, id)
+	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+		return h.transfers.Cancel(hr.Context(), tenantID, principal, id)
 	})
 }
 
 func (h *Handler) fulfilTransferOrder(w http.ResponseWriter, r *http.Request) {
-	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID, id uuid.UUID) (domain.BranchTransferOrder, error) {
-		return h.transfers.Fulfil(hr.Context(), tenantID, id)
+	h.transferOrderTransition(w, r, func(hr *http.Request, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
+		return h.transfers.Fulfil(hr.Context(), tenantID, principal, id)
 	})
 }
 
@@ -227,7 +228,7 @@ func (h *Handler) approveTransferOrder(w http.ResponseWriter, r *http.Request) {
 		approvals[i] = service.ApprovalItem{StockItemID: it.StockItemID, ApprovedQty: it.ApprovedQty}
 	}
 
-	order, err := h.transfers.Approve(r.Context(), p.TenantID, id, approvedBy, approvals)
+	order, err := h.transfers.Approve(r.Context(), p.TenantID, p, id, approvedBy, approvals)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -235,7 +236,7 @@ func (h *Handler) approveTransferOrder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toTransferOrderResponse(order, nil))
 }
 
-func (h *Handler) transferOrderTransition(w http.ResponseWriter, r *http.Request, fn func(*http.Request, uuid.UUID, uuid.UUID) (domain.BranchTransferOrder, error)) {
+func (h *Handler) transferOrderTransition(w http.ResponseWriter, r *http.Request, fn func(*http.Request, uuid.UUID, auth.Principal, uuid.UUID) (domain.BranchTransferOrder, error)) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
 		return
@@ -246,7 +247,7 @@ func (h *Handler) transferOrderTransition(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	order, err := fn(r, p.TenantID, id)
+	order, err := fn(r, p.TenantID, p, id)
 	if err != nil {
 		h.logError(w, r, err)
 		return

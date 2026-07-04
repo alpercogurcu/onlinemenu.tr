@@ -194,7 +194,7 @@ jobs:
         run: go build -o /dev/null ./cmd/api-finance
 
   web-lint:
-    name: Web Lint
+    name: Web Lint & Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -219,3 +219,7 @@ jobs:
       - name: Lint
         working-directory: web
         run: pnpm run lint
+
+      - name: Test
+        working-directory: web
+        run: pnpm --filter @onlinemenu/admin test:run

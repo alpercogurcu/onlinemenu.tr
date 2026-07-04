@@ -33,7 +33,7 @@ export default function IntegrationsPage() {
             </CardHeader>
             <CardContent>
               <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full">
-                {integration.phase}'de aktif
+                {integration.phase}&apos;de aktif
               </span>
             </CardContent>
           </Card>

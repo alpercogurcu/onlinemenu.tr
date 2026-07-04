@@ -22,7 +22,7 @@ export default function BillingSettingsPage() {
             <Settings className="size-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold">Yakında</h3>
             <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-              e-Fatura ve e-Arşiv sağlayıcı yapılandırması Faz 2'de aktif olacak.
+              e-Fatura ve e-Arşiv sağlayıcı yapılandırması Faz 2&apos;de aktif olacak.
               Şu an mock sağlayıcı üzerinden faturalar oluşturulmaktadır.
             </p>
           </div>

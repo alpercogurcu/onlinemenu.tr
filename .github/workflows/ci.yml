@@ -215,11 +215,7 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
-        # web-lint aktif olur — pnpm-lock.yaml henüz commit edilmeden bu step fail edebilir.
-        # Frontend iskelet kurulumu tamamlanınca --frozen-lockfile kaldırılır.
-        continue-on-error: true
 
       - name: Lint
         working-directory: web
         run: pnpm run lint
-        continue-on-error: true

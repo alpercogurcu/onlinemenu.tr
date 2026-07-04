@@ -324,6 +324,52 @@ func TestProductRepo_CreateAndGet(t *testing.T) {
 	assert.Equal(t, cat.ID, *fetched.CategoryID)
 }
 
+// TestProductRepo_SourceStockItemID proves the ADR-DATA-005 catalog<->inventory
+// link column round-trips through Create/Get/Update, and defaults to NULL for
+// products with no stock backing (pure service/combo products).
+func TestProductRepo_SourceStockItemID(t *testing.T) {
+	ctx := context.Background()
+	pr := repo.NewProductRepo()
+	tid := uuid.New()
+	stockItemID := uuid.New() // no FK: cross-module reference (migrations/catalog/000002)
+
+	p := domain.Product{
+		TenantID:    tid,
+		Name:        "Şubede Üretilen Köfte Paketi",
+		PriceAmount: 9000,
+		Currency:    "TRY",
+		Unit:        "adet",
+		IsActive:    true,
+	}
+
+	var created domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		created, err = pr.Create(ctx, tx, p)
+		return err
+	}))
+	assert.Nil(t, created.SourceStockItemID, "products default to no stock backing")
+
+	created.SourceStockItemID = &stockItemID
+	var updated domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		updated, err = pr.Update(ctx, tx, created)
+		return err
+	}))
+	require.NotNil(t, updated.SourceStockItemID)
+	assert.Equal(t, stockItemID, *updated.SourceStockItemID)
+
+	var fetched domain.Product
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = pr.GetByID(ctx, tx, created.ID)
+		return err
+	}))
+	require.NotNil(t, fetched.SourceStockItemID)
+	assert.Equal(t, stockItemID, *fetched.SourceStockItemID)
+}
+
 func TestProductRepo_TenantIsolation(t *testing.T) {
 	ctx := context.Background()
 	pr := repo.NewProductRepo()

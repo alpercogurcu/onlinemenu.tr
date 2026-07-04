@@ -241,6 +241,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock bool       `json:"auto_close_on_zero_stock"`
 		StockQuantity        *int       `json:"stock_quantity"`
 		SortOrder            int16      `json:"sort_order"`
+		SourceStockItemID    *uuid.UUID `json:"source_stock_item_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -269,6 +270,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock: req.AutoCloseOnZeroStock,
 		StockQuantity:        req.StockQuantity,
 		SortOrder:            req.SortOrder,
+		SourceStockItemID:    req.SourceStockItemID,
 	})
 	if err != nil {
 		h.error(w, r, err)
@@ -300,6 +302,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock bool       `json:"auto_close_on_zero_stock"`
 		StockQuantity        *int       `json:"stock_quantity"`
 		SortOrder            int16      `json:"sort_order"`
+		SourceStockItemID    *uuid.UUID `json:"source_stock_item_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -319,6 +322,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock: req.AutoCloseOnZeroStock,
 		StockQuantity:        req.StockQuantity,
 		SortOrder:            req.SortOrder,
+		SourceStockItemID:    req.SourceStockItemID,
 	})
 	if err != nil {
 		h.error(w, r, err)

@@ -30,6 +30,7 @@ import (
 	posdomain "onlinemenu.tr/internal/modules/pos/domain"
 	posrepo "onlinemenu.tr/internal/modules/pos/repo"
 	possvc "onlinemenu.tr/internal/modules/pos/service"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -41,6 +42,19 @@ var (
 	staffID  = uuid.MustParse("cccccccc-0000-0000-0000-000000000001")
 	prodID   = uuid.MustParse("dddddddd-0000-0000-0000-000000000001")
 )
+
+// staffPrincipal is a branch-scoped staff principal for branchID, used to
+// satisfy the pos module's ADR-AUTH-001 layer 3 branch-scope checks
+// (docs/lessons-from-b2b.md item 6) in this cross-module spine test.
+func staffPrincipal() auth.Principal {
+	return auth.Principal{
+		PersonID: staffID,
+		Ctx:      auth.ContextStaff,
+		TenantID: tenantID,
+		BranchID: branchID,
+		RoleIDs:  []uuid.UUID{uuid.New()},
+	}
+}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -235,7 +249,7 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 	checkSvc, orderSvc, paySvc := buildServices()
 
 	// 1. Open a check.
-	check, err := checkSvc.Open(ctx, tenantID, posdomain.Check{
+	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T1",
 		OpenedBy:   staffID,
@@ -245,7 +259,7 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 	assert.Equal(t, "T1", check.TableLabel)
 
 	// 2. Place an order linked to the check (2 items, 1500 + 500 kuruş = 2000 kuruş).
-	order, err := orderSvc.Place(ctx, tenantID, posdomain.Order{
+	order, err := orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
 		BranchID:     branchID,
 		CheckID:      &check.ID,
 		OrderChannel: posdomain.OrderChannelDineIn,
@@ -294,7 +308,7 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 	assert.Equal(t, int64(2000), total)
 
 	// 5. Close the check — payment total covers the order total, should succeed.
-	closed, err := checkSvc.Close(ctx, tenantID, check.ID, staffID)
+	closed, err := checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
 	require.NoError(t, err)
 	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
 	assert.NotNil(t, closed.ClosedBy)
@@ -306,7 +320,7 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 	checkSvc, orderSvc, paySvc := buildServices()
 
 	// Open a check.
-	check, err := checkSvc.Open(ctx, tenantID, posdomain.Check{
+	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T2",
 		OpenedBy:   staffID,
@@ -314,7 +328,7 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 	require.NoError(t, err)
 
 	// Place an order totalling 3000 kuruş.
-	_, err = orderSvc.Place(ctx, tenantID, posdomain.Order{
+	_, err = orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
 		BranchID:     branchID,
 		CheckID:      &check.ID,
 		OrderChannel: posdomain.OrderChannelDineIn,
@@ -343,7 +357,7 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close must fail with ErrInsufficientPayment.
-	_, err = checkSvc.Close(ctx, tenantID, check.ID, staffID)
+	_, err = checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
 	require.ErrorIs(t, err, possvc.ErrInsufficientPayment)
 }
 
@@ -351,7 +365,7 @@ func TestPOSSpine_IdempotentPayment(t *testing.T) {
 	ctx := context.Background()
 	checkSvc, _, paySvc := buildServices()
 
-	check, err := checkSvc.Open(ctx, tenantID, posdomain.Check{
+	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T3",
 		OpenedBy:   staffID,

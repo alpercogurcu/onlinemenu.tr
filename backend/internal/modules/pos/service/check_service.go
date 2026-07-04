@@ -14,6 +14,7 @@ import (
 	"onlinemenu.tr/internal/modules/pos/domain"
 	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -47,7 +48,14 @@ func NewCheckService(p CheckParams) *CheckService {
 	}
 }
 
-func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, c domain.Check) (domain.Check, error) {
+// Open creates a new check for the given branch. The acting principal must
+// belong to the requested branch_id (ADR-AUTH-001 layer 3 / security
+// sprint); there is no persisted entity yet at this point, so the
+// client-supplied branch_id is what gets validated.
+func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, c domain.Check) (domain.Check, error) {
+	if err := requireBranch(ctx, principal, c.BranchID); err != nil {
+		return domain.Check{}, err
+	}
 	c.TenantID = tenantID
 	c.Status = domain.CheckStatusOpen
 	var created domain.Check
@@ -110,7 +118,12 @@ func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID) ([]domain.C
 // via SaleReader in a separate transaction before the lock is acquired, so a
 // payment arriving between that read and the lock is not reflected in this
 // Close call. This addresses double-close, not that TOCTOU window.
-func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uuid.UUID) (domain.Check, error) {
+//
+// The acting principal must belong to the check's branch (ADR-AUTH-001 layer
+// 3 / security sprint) — checked right after the row is locked and loaded,
+// but BEFORE the status/transition check, so a branch-forbidden caller gets
+// 403 rather than a 409 that would otherwise leak the check's current status.
+func (s *CheckService) Close(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, checkID, closedBy uuid.UUID) (domain.Check, error) {
 	// SaleReader manages its own transaction; call outside the write tx.
 	paid, err := s.saleReader.TotalPaidForCheck(ctx, tenantID, checkID)
 	if err != nil {
@@ -121,6 +134,9 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := s.checkRepo.GetForUpdate(ctx, tx, checkID)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if current.Status != domain.CheckStatusOpen {
@@ -153,11 +169,17 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 
 // Cancel cancels an open check. Like Close, the row lock (GetForUpdate) is
 // what serializes concurrent Cancel/Close attempts against the same check.
-func (s *CheckService) Cancel(ctx context.Context, tenantID, checkID, cancelledBy uuid.UUID) (domain.Check, error) {
+// The acting principal must belong to the check's branch (ADR-AUTH-001 layer
+// 3 / security sprint) — checked right after loading, before the
+// status/transition check (see Close for the 403-vs-409 rationale).
+func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, checkID, cancelledBy uuid.UUID) (domain.Check, error) {
 	var cancelled domain.Check
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := s.checkRepo.GetForUpdate(ctx, tx, checkID)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if current.Status != domain.CheckStatusOpen {

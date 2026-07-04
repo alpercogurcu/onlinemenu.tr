@@ -138,7 +138,7 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.checks.Open(r.Context(), p.TenantID, domain.Check{
+	c, err := h.checks.Open(r.Context(), p.TenantID, p, domain.Check{
 		BranchID:   req.BranchID,
 		TableLabel: req.TableLabel,
 		Note:       req.Note,
@@ -179,7 +179,7 @@ func (h *Handler) closeCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	c, err := h.checks.Close(r.Context(), p.TenantID, id, p.PersonID)
+	c, err := h.checks.Close(r.Context(), p.TenantID, p, id, p.PersonID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -197,7 +197,7 @@ func (h *Handler) cancelCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	c, err := h.checks.Cancel(r.Context(), p.TenantID, id, p.PersonID)
+	c, err := h.checks.Cancel(r.Context(), p.TenantID, p, id, p.PersonID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -275,7 +275,7 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	o, err := h.orders.Place(r.Context(), p.TenantID, domain.Order{
+	o, err := h.orders.Place(r.Context(), p.TenantID, p, domain.Order{
 		BranchID:             req.BranchID,
 		CheckID:              req.CheckID,
 		OrderChannel:         domain.OrderChannel(req.OrderChannel),
@@ -319,7 +319,7 @@ func (h *Handler) acceptOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	o, err := h.orders.Accept(r.Context(), p.TenantID, id, p.PersonID)
+	o, err := h.orders.Accept(r.Context(), p.TenantID, p, id, p.PersonID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -344,7 +344,7 @@ func (h *Handler) rejectOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	o, err := h.orders.Reject(r.Context(), p.TenantID, id, p.PersonID, req.Reason)
+	o, err := h.orders.Reject(r.Context(), p.TenantID, p, id, p.PersonID, req.Reason)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -369,7 +369,7 @@ func (h *Handler) advanceOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	o, err := h.orders.AdvanceStatus(r.Context(), p.TenantID, id, domain.OrderStatus(req.Status))
+	o, err := h.orders.AdvanceStatus(r.Context(), p.TenantID, p, id, domain.OrderStatus(req.Status))
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -475,6 +475,10 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	}
 	if errors.Is(err, pub.ErrInvalidTransition) {
 		http.Error(w, "invalid status transition", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	h.logger.Error("pos handler error", zap.Error(err))

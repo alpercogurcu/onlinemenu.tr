@@ -11,6 +11,7 @@ import (
 
 	"onlinemenu.tr/internal/modules/pos/domain"
 	"onlinemenu.tr/internal/modules/pos/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -34,8 +35,14 @@ func NewOrderService(p OrderParams) *OrderService {
 	return &OrderService{db: p.DB, orderRepo: p.OrderRepo, logger: p.Logger}
 }
 
-// Place creates a new order (with items).
-func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, o domain.Order) (domain.Order, error) {
+// Place creates a new order (with items). The acting principal must belong
+// to the requested branch_id (ADR-AUTH-001 layer 3 / security sprint); there
+// is no persisted entity yet at this point, so the client-supplied
+// branch_id is what gets validated.
+func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, o domain.Order) (domain.Order, error) {
+	if err := requireBranch(ctx, principal, o.BranchID); err != nil {
+		return domain.Order{}, err
+	}
 	if !o.OrderChannel.Valid() {
 		return domain.Order{}, fmt.Errorf("pos/service/order: invalid channel %q", o.OrderChannel)
 	}
@@ -95,12 +102,19 @@ func (s *OrderService) ListByCheck(ctx context.Context, tenantID, checkID uuid.U
 // Accept marks an order as accepted by staff.
 // The current status is read with a row lock (GetForUpdate) so the
 // transition check and the guarded UPDATE are race-free against any other
-// concurrent transition attempt on the same order.
-func (s *OrderService) Accept(ctx context.Context, tenantID, orderID, acceptedBy uuid.UUID) (domain.Order, error) {
+// concurrent transition attempt on the same order. The acting principal
+// must belong to the order's branch (ADR-AUTH-001 layer 3 / security
+// sprint) — checked right after loading, before the transition check, so a
+// branch-forbidden caller gets 403 rather than a 409 that would otherwise
+// leak the order's current status.
+func (s *OrderService) Accept(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID, acceptedBy uuid.UUID) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionOrderStatus(current.Status, domain.OrderStatusAccepted); err != nil {
@@ -123,12 +137,17 @@ func (s *OrderService) Accept(ctx context.Context, tenantID, orderID, acceptedBy
 	return o, nil
 }
 
-// Reject marks an order as rejected with a reason.
-func (s *OrderService) Reject(ctx context.Context, tenantID, orderID, rejectedBy uuid.UUID, reason string) (domain.Order, error) {
+// Reject marks an order as rejected with a reason. The acting principal
+// must belong to the order's branch (ADR-AUTH-001 layer 3 / security
+// sprint) — checked before the transition check, per Accept's rationale.
+func (s *OrderService) Reject(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID, rejectedBy uuid.UUID, reason string) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionOrderStatus(current.Status, domain.OrderStatusRejected); err != nil {
@@ -154,7 +173,10 @@ func (s *OrderService) Reject(ctx context.Context, tenantID, orderID, rejectedBy
 
 // AdvanceStatus transitions an accepted order through preparing → ready → delivered
 // (or cancels it), validating the move against the order status machine.
-func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID, orderID uuid.UUID, status domain.OrderStatus) (domain.Order, error) {
+// The acting principal must belong to the order's branch (ADR-AUTH-001
+// layer 3 / security sprint) — checked before the transition check, per
+// Accept's rationale.
+func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID uuid.UUID, status domain.OrderStatus) (domain.Order, error) {
 	if !status.Valid() {
 		return domain.Order{}, fmt.Errorf("pos/service/order: invalid status %q", status)
 	}
@@ -162,6 +184,9 @@ func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID, orderID uuid
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
 		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionOrderStatus(current.Status, status); err != nil {

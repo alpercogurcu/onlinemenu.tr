@@ -205,7 +205,7 @@ func newCheckService() *service.CheckService {
 
 func openTestCheck(t *testing.T, ctx context.Context, svc *service.CheckService) domain.Check {
 	t.Helper()
-	c, err := svc.Open(ctx, tenantA, domain.Check{
+	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableLabel: "Masa Concurrency",
 		OpenedBy:   staffA,
@@ -223,10 +223,10 @@ func TestCheckService_Close_Idempotent_SecondCallConflicts(t *testing.T) {
 	svc := newCheckService()
 	c := openTestCheck(t, ctx, svc)
 
-	_, err := svc.Close(ctx, tenantA, c.ID, staffA)
+	_, err := svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
 	require.NoError(t, err)
 
-	_, err = svc.Close(ctx, tenantA, c.ID, staffA)
+	_, err = svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition, "closing an already-closed check must be rejected")
 }
 
@@ -248,7 +248,7 @@ func TestCheckService_ConcurrentClose_EmitsExactlyOneEvent(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			_, err := svc.Close(ctx, tenantA, c.ID, staffA)
+			_, err := svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
 			switch {
 			case err == nil:
 				successCount.Add(1)
@@ -281,9 +281,9 @@ func TestCheckService_CloseThenCancel_SecondCallConflicts(t *testing.T) {
 	svc := newCheckService()
 	c := openTestCheck(t, ctx, svc)
 
-	_, err := svc.Close(ctx, tenantA, c.ID, staffA)
+	_, err := svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
 	require.NoError(t, err)
 
-	_, err = svc.Cancel(ctx, tenantA, c.ID, staffA)
+	_, err = svc.Cancel(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition, "cancelling an already-closed check must be rejected")
 }

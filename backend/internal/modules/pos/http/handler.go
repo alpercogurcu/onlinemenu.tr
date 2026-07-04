@@ -26,6 +26,7 @@ type Handler struct {
 	checks *service.CheckService
 	orders *service.OrderService
 	logger *zap.Logger
+	engine *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -36,6 +37,7 @@ type Params struct {
 	Orders *service.OrderService
 	Logger *zap.Logger
 	Cache  *redis.Client
+	Engine *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client needed for the
@@ -47,9 +49,14 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{checks: p.Checks, orders: p.Orders, logger: p.Logger},
+		h:     &Handler{checks: p.Checks, orders: p.Orders, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts POS endpoints on the provided router.
@@ -60,20 +67,24 @@ func NewHandler(p Params) *HandlerWithCache {
 // are already guarded by the status-transition machine (a retry lands on an
 // already-transitioned row and gets a 409, not a duplicate side effect), and
 // open-check has no equivalent natural dedup key from the client today.
+//
+// Every route also carries auth.RequirePermission (ADR-AUTH-001, layer 2). Where
+// a route combines both, RequirePermission is listed first in r.With so a
+// caller without permission never reaches the idempotency reservation logic.
 func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/pos", func(r chi.Router) {
-		r.Get("/checks", hwc.h.listChecks)
-		r.Post("/checks", hwc.h.openCheck)
-		r.Get("/checks/{id}", hwc.h.getCheck)
-		r.With(httpx.Idempotency(hwc.cache)).Post("/checks/{id}/close", hwc.h.closeCheck)
-		r.Post("/checks/{id}/cancel", hwc.h.cancelCheck)
-		r.Get("/checks/{id}/orders", hwc.h.listOrdersByCheck)
+		r.With(hwc.h.permit("pos.check.read")).Get("/checks", hwc.h.listChecks)
+		r.With(hwc.h.permit("pos.check.open")).Post("/checks", hwc.h.openCheck)
+		r.With(hwc.h.permit("pos.check.read")).Get("/checks/{id}", hwc.h.getCheck)
+		r.With(hwc.h.permit("pos.check.close"), httpx.Idempotency(hwc.cache)).Post("/checks/{id}/close", hwc.h.closeCheck)
+		r.With(hwc.h.permit("pos.check.cancel")).Post("/checks/{id}/cancel", hwc.h.cancelCheck)
+		r.With(hwc.h.permit("pos.order.read")).Get("/checks/{id}/orders", hwc.h.listOrdersByCheck)
 
-		r.With(httpx.Idempotency(hwc.cache)).Post("/orders", hwc.h.placeOrder)
-		r.Get("/orders/{id}", hwc.h.getOrder)
-		r.Post("/orders/{id}/accept", hwc.h.acceptOrder)
-		r.Post("/orders/{id}/reject", hwc.h.rejectOrder)
-		r.Post("/orders/{id}/advance", hwc.h.advanceOrder)
+		r.With(hwc.h.permit("pos.order.place"), httpx.Idempotency(hwc.cache)).Post("/orders", hwc.h.placeOrder)
+		r.With(hwc.h.permit("pos.order.read")).Get("/orders/{id}", hwc.h.getOrder)
+		r.With(hwc.h.permit("pos.order.accept")).Post("/orders/{id}/accept", hwc.h.acceptOrder)
+		r.With(hwc.h.permit("pos.order.reject")).Post("/orders/{id}/reject", hwc.h.rejectOrder)
+		r.With(hwc.h.permit("pos.order.advance")).Post("/orders/{id}/advance", hwc.h.advanceOrder)
 	})
 }
 

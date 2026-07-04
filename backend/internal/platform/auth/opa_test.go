@@ -76,6 +76,8 @@ func TestEngine_Decide_NoRoles_DeniesByDefault(t *testing.T) {
 		"hrcore.employee.read",
 		"billing.invoice.read",
 		"inventory.level.read",
+		"pos.check.open",
+		"payment.sale.register",
 	} {
 		d, err := eng.Decide(context.Background(), action, p)
 		require.NoError(t, err)
@@ -128,4 +130,68 @@ func TestEngine_Decide_ShiftManager_InventoryWrite(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, d.Allow)
+}
+
+func TestEngine_Decide_Cashier_PosAndPaymentAccess(t *testing.T) {
+	eng := newTestEngine(t)
+	p := Principal{
+		PersonID: uuid.New(),
+		Ctx:      ContextStaff,
+		TenantID: uuid.New(),
+		BranchID: uuid.New(),
+		RoleIDs:  []uuid.UUID{systemRoleUUID(t, "cashier")},
+	}
+
+	d, err := eng.Decide(context.Background(), "pos.check.open", p)
+	require.NoError(t, err)
+	require.True(t, d.Allow)
+	require.Equal(t, "branch", d.Scope)
+
+	d, err = eng.Decide(context.Background(), "payment.sale.register", p)
+	require.NoError(t, err)
+	require.True(t, d.Allow)
+
+	// Cashier registers sales but does not browse payment history — that is
+	// reserved for shift_manager/manager reconciliation.
+	d, err = eng.Decide(context.Background(), "payment.payment.read", p)
+	require.NoError(t, err)
+	require.False(t, d.Allow)
+}
+
+func TestEngine_Decide_Kitchen_OrderAdvanceOnly(t *testing.T) {
+	eng := newTestEngine(t)
+	p := Principal{
+		PersonID: uuid.New(),
+		Ctx:      ContextStaff,
+		TenantID: uuid.New(),
+		BranchID: uuid.New(),
+		RoleIDs:  []uuid.UUID{systemRoleUUID(t, "kitchen")},
+	}
+
+	d, err := eng.Decide(context.Background(), "pos.order.advance", p)
+	require.NoError(t, err)
+	require.True(t, d.Allow)
+	require.Equal(t, "branch", d.Scope)
+
+	// Kitchen reads/advances tickets but never opens/closes checks — that
+	// stays with the counter roles (cashier/shift_manager).
+	d, err = eng.Decide(context.Background(), "pos.check.open", p)
+	require.NoError(t, err)
+	require.False(t, d.Allow)
+}
+
+func TestEngine_Decide_ShiftManager_PaymentRead(t *testing.T) {
+	eng := newTestEngine(t)
+	p := Principal{
+		PersonID: uuid.New(),
+		Ctx:      ContextStaff,
+		TenantID: uuid.New(),
+		BranchID: uuid.New(),
+		RoleIDs:  []uuid.UUID{systemRoleUUID(t, "shift_manager")},
+	}
+
+	d, err := eng.Decide(context.Background(), "payment.payment.read", p)
+	require.NoError(t, err)
+	require.True(t, d.Allow)
+	require.Equal(t, "branch", d.Scope)
 }

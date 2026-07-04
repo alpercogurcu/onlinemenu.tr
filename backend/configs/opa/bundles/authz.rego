@@ -89,6 +89,53 @@ allow if {
 	has_role("shift_manager")
 }
 
+# -- POS: check lifecycle (open/close/cancel) and order intake (place/accept/
+# reject) are counter-facing actions, owned by cashier/shift_manager (mirrors
+# role_permissions seed: checks/orders create+read+update for both).
+pos_counter_actions := {
+	"pos.check.read",
+	"pos.check.open",
+	"pos.check.close",
+	"pos.check.cancel",
+	"pos.order.read",
+	"pos.order.place",
+	"pos.order.accept",
+	"pos.order.reject",
+	"pos.order.advance",
+}
+
+allow if {
+	input.action in pos_counter_actions
+	any_role({"cashier", "shift_manager"})
+}
+
+# -- Kitchen/bar: read tickets and advance them through preparing/ready; they
+# never open/close checks or accept/reject intake — that stays with the
+# counter roles above (mirrors role_permissions seed: orders read+update only).
+pos_kitchen_actions := {
+	"pos.order.read",
+	"pos.order.advance",
+}
+
+allow if {
+	input.action in pos_kitchen_actions
+	any_role({"kitchen", "bar"})
+}
+
+# -- Payment: cashier/shift_manager register sales at the counter (mirrors
+# role_permissions seed: payment.create for both). Listing/reading past
+# payments is reserved for shift reconciliation (shift_manager) and manager
+# (wildcard, covered above).
+allow if {
+	input.action == "payment.sale.register"
+	any_role({"cashier", "shift_manager"})
+}
+
+allow if {
+	input.action == "payment.payment.read"
+	has_role("shift_manager")
+}
+
 # -- Scope resolution for non-manager allows above: branch-scoped, since cashier/
 # shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {

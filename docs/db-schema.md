@@ -628,6 +628,8 @@ erDiagram
         numeric shipped_qty "SHIPMENTS'ten türetilir"
         numeric received_qty "SHIPMENTS'ten türetilir"
         text unit
+        numeric unit_price "transfer fiyatı — ADR-DATA-007"
+        text currency
         text note
     }
 ```
@@ -635,6 +637,66 @@ erDiagram
 > **SHIPMENTS bağı:** `shipments.transfer_order_id → branch_transfer_orders(id)` (nullable) eklenir. Onaylı BTO → bir/çok SHIPMENT. `shipment.status → in_transit` BTO'yu `shipped`'e, `shipment.status → received` `received_qty`'yi ve tüm kalemler tamsa `closed`'a taşır. BTO kendi başına `received` set etmez.
 >
 > **Yönlendirme:** `BRANCHES.supply_rules` (jsonb) `source_branch_id`'yi çözer — kalem `category`/`kind` override + `default_source_branch_id`.
+>
+> **Transfer fiyatı (ADR-DATA-007):** `branch_transfer_order_items` ve `shipment_items`'a `unit_price numeric(18,4) NULL` + `currency` eklenir. `exclusive_hq` kalemlerde franchise maliyeti = bu transfer fiyatıdır; ileride HQ→franchise faturalamasının temeli.
+
+---
+
+## TEDARİK POLİTİKASI & ŞUBE-YEREL MALİYET (Öneri — ADR-DATA-007)
+
+> ⚠️ **Durum: Öneri (Proposed).** [ADR-DATA-007](adr/DATA-007-supply-policy.md). Görünürlük ve maliyet, kalemin `kind`'ından değil **tedarik politikasından** türetilir (DATA-005 İlke 4 revizyonu). Politika `stock_items` üstünde **bayrak değil**, ayrı zaman-eksenli tablodadır (b2b `BranchStockTracking` tekrarından kaçınılır). Görünürlük filtresi AUTH-001 **Layer 3** (service) deseninde.
+
+```mermaid
+erDiagram
+
+    STOCK_ITEMS ||--o{ SUPPLY_POLICIES : "governed_by"
+    SUPPLIERS ||--o{ SUPPLY_POLICIES : "approved_in"
+    BRANCHES ||--o{ PURCHASE_RECEIPTS : "receives"
+    WAREHOUSES ||--o{ PURCHASE_RECEIPTS : "into"
+    SUPPLIERS ||--o{ PURCHASE_RECEIPTS : "from"
+    PURCHASE_RECEIPTS ||--o{ PURCHASE_RECEIPT_ITEMS : "contains"
+    STOCK_ITEMS ||--o{ PURCHASE_RECEIPT_ITEMS : "received_as"
+
+    SUPPLY_POLICIES {
+        uuid id PK
+        uuid tenant_id FK
+        uuid branch_id FK "NULL=tenant geneli; dolu=franchise override (öneri, Açık Karar #1)"
+        text scope "stock_item|category|tenant_default"
+        uuid ref_id "stock_item_id / kategori ref / NULL"
+        text mode "exclusive_hq|approved_suppliers|free"
+        jsonb approved_supplier_ids "party.suppliers id listesi"
+        timestamptz effective_from "zaman-eksenli; en güncel <= now etkin"
+        uuid created_by FK
+    }
+
+    PURCHASE_RECEIPTS {
+        uuid id PK
+        uuid tenant_id FK
+        uuid branch_id FK
+        uuid warehouse_id FK
+        uuid supplier_ref FK "pazar/serbest için NULL"
+        text supplier_name_text "cari değilse serbest metin"
+        text document_type "elden_fis|makbuz|fatura_disi"
+        numeric total_amount
+        text currency
+        timestamptz received_at "son alım maliyeti bunu kullanır"
+        text note
+        uuid created_by FK
+    }
+
+    PURCHASE_RECEIPT_ITEMS {
+        uuid id PK
+        uuid receipt_id FK
+        uuid stock_item_id FK
+        text brand "marka çeşitliliği (BBQ sos) — satır bilgisi, ayrı kalem değil"
+        numeric quantity
+        text unit
+        numeric unit_cost "şube-yerel maliyet kaynağı"
+        numeric line_amount
+    }
+```
+
+> **Belge tipi, ürün bayrağı değil:** Faturasız (elden fiş) alım, b2b'deki `NoInvoice` ürün bayrağının doğru halidir — `purchase_receipts` **belgesi** ile modellenir. Hem `purchase_orders` (faturalı) hem `purchase_receipts` (fişli) `stock_movements(in)` + gider kaydı üretir. Maliyet `(warehouse, stock_item)` çiftine bağlıdır; kaynak = en güncel `received_at` taşıyan alım satırı.
 
 ---
 

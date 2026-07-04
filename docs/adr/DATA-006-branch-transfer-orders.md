@@ -51,9 +51,13 @@ Franchise/şube **talep eder** (requesting), imalat/depo **karşılar** (source)
 | shipped_qty | numeric(18,3) | SHIPMENTS'ten denormalize (sahibi shipment) |
 | received_qty | numeric(18,3) | SHIPMENTS'ten denormalize (sahibi shipment) |
 | unit | text | stock_item.canonical_unit |
+| unit_price | numeric(18,4) NULL | imalathane→franchise transfer (satış) fiyatı — bkz. aşağıdaki not |
+| currency | char(3) | |
 | note | text | |
 
 `shipped_qty` ve `received_qty` **türetilmiş** alanlardır; kaynağı `SHIPMENTS`'tir (aşağıdaki sahiplik kuralı).
+
+> ➕ **Eklenti (ADR-DATA-007):** `unit_price` kolonu hem `branch_transfer_order_items`'a hem de `shipment_items`'a eklenir. `exclusive_hq` politikalı bir kalemde franchise'ın maliyeti = imalathane/HQ'nun uyguladığı **transfer fiyatı**dır (kalemi yerelden alamadığı için son-alım maliyeti yoktur). Bu fiyat sevkiyat satırında dondurulur ve ileride **franchise faturalamasının** (HQ → franchise satışı) temelini oluşturur. `approved_suppliers`/`free` kalemlerde şube maliyeti yerel alım belgesinden gelir (DATA-007 §şube-yerel maliyet), transfer fiyatından değil. `shipment_items.unit_price numeric(18,4) NULL` + `currency` de aynı gerekçeyle eklenir.
 
 ---
 

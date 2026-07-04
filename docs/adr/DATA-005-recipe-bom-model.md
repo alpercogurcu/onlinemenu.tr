@@ -124,6 +124,12 @@ CREATE TABLE unit_conversions (      -- tenant-bağımsız seed (kg↔g, l↔ml,
 - Şube rolleri (`cashier`, `waiter`, `kitchen`) bu route'lara **OPA permission'ı taşımaz** → veriyi hiç göremez. `BranchStockTracking` benzeri satır-bazlı opt-in bayrağı **yoktur**.
 - Görünürlük "alan yokluğu" ile sağlanır (lessons-from-b2b): route erişimi yoksa, veri yoktur. Depo/imalat şubesinin `manager`/`warehouse` rolü ilgili permission'ı alır.
 
+> 🔄 **Revizyon (ADR-DATA-007):** Gerçek franchise senaryosu, "hammaddeyi şube **asla** göremez" varsayımının fazla mutlak olduğunu gösterdi. Bazı franchisor sözleşmeleri şubenin belirli hammaddeleri yerelden (pazar/market/serbest tedarikçi) almasına izin verir; bu kalemleri şube görmeli ve **kendi maliyetini** yönetmelidir (ör. marul: bir şube pazardan, diğeri marketten alır → şubeye özel maliyet). Bu nedenle görünürlük artık `kind`'dan değil **tedarik politikasından** (`supply_policies`) türetilir:
+> - `exclusive_hq` → şube kalemi yalnızca BTO kataloğunda görür (sipariş verebilir; maliyet/tedarikçi detayı görmez).
+> - `approved_suppliers` / `free` → şube kalemi tam görür, yerel satın alma yapar, kendi maliyetini görür.
+>
+> OPA permission'ları değişmez; politika filtrelemesi **service katmanında** (AUTH-001 Layer 3 deseni) uygulanır. Bu bir satır-bayrağı değildir — politika kalemin kimliğinde (`stock_items`) değil, ayrı `supply_policies` tablosunda (ticari sözleşme) yaşar. Ayrıntı: [ADR-DATA-007](DATA-007-supply-policy.md).
+
 ---
 
 ## Şema (öneri)

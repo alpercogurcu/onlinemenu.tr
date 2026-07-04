@@ -239,14 +239,9 @@ func (s *TransferOrderService) Reject(ctx context.Context, tenantID uuid.UUID, p
 // "geri çek"); approved -> cancelled is a source-branch action ("iptal,
 // henüz sevk yok" — the source branch withdraws before shipping anything).
 //
-// PROVISIONAL: the security-sprint task matrix that motivated this change
-// states "cancel -> yalnızca requesting_branch" without this status split.
-// This implementation instead follows the ADR literally, because collapsing
-// to requesting-only would silently remove the source branch's documented
-// approved-cancel capability. Flagged for team-lead confirmation in the
-// sprint report; if the matrix's simpler rule is actually intended, only the
-// branch selection below needs to change (single `if` removed), the
-// requireBranch/transition plumbing stays the same.
+// Ratified (2026-07-04 sprint review): the status-aware split follows
+// ADR-DATA-006's state table; the flat "requesting-only" rule in the sprint
+// task matrix was a simplification and is superseded by the ADR.
 func (s *TransferOrderService) Cancel(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id uuid.UUID) (domain.BranchTransferOrder, error) {
 	var updated domain.BranchTransferOrder
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {

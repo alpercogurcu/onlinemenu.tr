@@ -184,12 +184,10 @@ func TestTransferOrderAuthz_Fulfil(t *testing.T) {
 	})
 }
 
-// TestTransferOrderAuthz_Cancel is PROVISIONAL: it encodes the status-aware
-// ownership rule from ADR-DATA-006's state table (draft/submitted ->
-// requesting_branch, approved -> source_branch), which differs from the
-// simpler "cancel -> requesting_branch only" stated in the security sprint
-// task matrix. Flagged for team-lead confirmation in the sprint report; if
-// the matrix's simpler rule is what's actually wanted, only the
+// TestTransferOrderAuthz_Cancel encodes the status-aware ownership rule from
+// ADR-DATA-006's state table (draft/submitted -> requesting_branch,
+// approved -> source_branch), ratified in the 2026-07-04 sprint review over
+// the flat "requesting-only" simplification. If the rule ever changes, only the
 // "approved: ..." subtests below need to flip expectations (the production
 // code's `branchOf` selection in TransferOrderService.Cancel would also
 // change to always use requestingBranchOf).

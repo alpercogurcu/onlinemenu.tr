@@ -484,6 +484,160 @@ erDiagram
 
 ---
 
+## İMALAT & REÇETE (Öneri — ADR-DATA-005)
+
+> ⚠️ **Durum: Öneri (Proposed).** Bu bölüm [ADR-DATA-005](adr/DATA-005-recipe-bom-model.md) ile önerilmiştir; henüz kabul edilmemiştir. `catalog.products` (satılabilir) ile `stock_items` (stoklanan) **ayrı varlıklardır** — `product_type` gibi tek-tablo discriminator'ı yoktur (b2b post-mortem'i, bkz. ADR).
+
+### Yeniden anahtarlama (re-key) — mevcut tablolar
+
+`stock_items` kanonik "stoklanan varlık" olduğunda, bugün `products`'a bakan **dört** referans `stock_items`'a taşınır (yarısını taşımak şemayı çelişkiye düşürür):
+
+| Tablo | Eski | Yeni |
+|---|---|---|
+| `stock_levels` | `product_id` | `stock_item_id` |
+| `stock_movements` | `product_id` | `stock_item_id` |
+| `shipment_items` | `product_id` | `stock_item_id` |
+| `purchase_order_items` | `product_id` | `stock_item_id` |
+
+Stok-takipli **satılabilir** ürün, `catalog.products.source_stock_item_id → stock_items(id)` ile bağlanır (yalnızca mamullerde dolu). Stok modülü aktifken `stock_levels` tek gerçek kaynaktır; `products.stock_quantity` yalnızca Stok modülü olmayan basit POS kurulumunda kullanılır (iki paralel stok sistemi yasak).
+
+```mermaid
+erDiagram
+
+    STOCK_ITEMS ||--o{ RECIPES : "produced_by"
+    STOCK_ITEMS ||--o{ RECIPE_ITEMS : "component_of"
+    RECIPES ||--o{ RECIPE_ITEMS : "contains"
+    RECIPES ||--o{ WORK_ORDERS : "executed_as"
+    WORK_ORDERS ||--o{ WORK_ORDER_ITEMS : "consumes"
+    WORK_ORDERS ||--o{ WORK_ORDER_COSTS : "snapshots"
+    STOCK_ITEMS ||--o{ WORK_ORDER_COSTS : "costed_as"
+    PRODUCTS }o--|| STOCK_ITEMS : "source_stock_item"
+
+    STOCK_ITEMS {
+        uuid id PK
+        uuid tenant_id FK
+        text sku UK
+        text name
+        text kind "raw|intermediate|packaging|finished — düz sınıflandırma"
+        text canonical_unit "TEK birim, paralel alan yok"
+        text category
+        bool is_active
+    }
+
+    RECIPES {
+        uuid id PK
+        uuid tenant_id FK
+        uuid output_stock_item_id FK "kind in intermediate|finished"
+        int version "değişiklik = yeni versiyon (immutable)"
+        numeric yield_qty
+        text yield_unit
+        bool is_active
+        timestamptz effective_from
+        text notes
+    }
+
+    RECIPE_ITEMS {
+        uuid id PK
+        uuid recipe_id FK
+        uuid component_stock_item_id FK "intermediate olabilir → nested BOM"
+        numeric quantity "component.canonical_unit cinsinden"
+        numeric waste_pct "opsiyonel"
+        int sort_order
+    }
+
+    WORK_ORDERS {
+        uuid id PK
+        uuid tenant_id FK
+        uuid branch_id FK "imalat şubesi"
+        uuid warehouse_id FK "warehouse_type=imalat"
+        uuid recipe_id FK
+        int recipe_version "dondurulmuş"
+        numeric planned_qty
+        numeric produced_qty
+        text status "draft|released|in_progress|completed|cancelled"
+        uuid created_by FK
+        timestamptz released_at
+        timestamptz completed_at
+    }
+
+    WORK_ORDER_ITEMS {
+        uuid work_order_id FK
+        uuid component_stock_item_id FK
+        numeric planned_qty
+        numeric consumed_qty
+        text unit
+    }
+
+    WORK_ORDER_COSTS {
+        uuid id PK
+        uuid work_order_id FK
+        uuid component_stock_item_id FK
+        numeric unit_cost_snapshot "DONDURULMUŞ — cascade yok"
+        numeric quantity
+        numeric line_cost
+        text cost_basis "last_purchase|moving_avg"
+        text currency
+        timestamptz snapshotted_at
+    }
+
+    UNIT_CONVERSIONS {
+        text from_unit PK
+        text to_unit PK
+        numeric factor "1 from = factor × to (write-time)"
+    }
+```
+
+> **Maliyet stratejisi:** `stock_items` maliyet kolonu taşımaz → cascade şemada imkânsız. Maliyet yalnızca iş emri tamamlanınca `work_order_costs`'a dondurulur; iç içe BOM'da her seviye kendi iş emrinde donar, ağaç yukarı yeniden hesaplanmaz.
+
+---
+
+## ŞUBELER ARASI SİPARİŞ (Öneri — ADR-DATA-006)
+
+> ⚠️ **Durum: Öneri (Proposed).** [ADR-DATA-006](adr/DATA-006-branch-transfer-orders.md). Franchise/şube **talep eder**, imalat/depo **karşılar**; fiziksel hareketi mevcut `SHIPMENTS` yürütür. Durum makinesi tek `allowedTransitions` tablosunda; "received" sahibi **yalnızca** SHIPMENT'tir.
+
+```mermaid
+erDiagram
+
+    BRANCHES ||--o{ BRANCH_TRANSFER_ORDERS : "requests"
+    BRANCHES ||--o{ BRANCH_TRANSFER_ORDERS : "fulfills"
+    BRANCH_TRANSFER_ORDERS ||--o{ BRANCH_TRANSFER_ORDER_ITEMS : "contains"
+    STOCK_ITEMS ||--o{ BRANCH_TRANSFER_ORDER_ITEMS : "requested_as"
+    BRANCH_TRANSFER_ORDERS ||--o{ SHIPMENTS : "fulfilled_by"
+
+    BRANCH_TRANSFER_ORDERS {
+        uuid id PK
+        uuid tenant_id FK
+        uuid requesting_branch_id FK "franchise/şube"
+        uuid source_branch_id FK "operation_type imalat|depo"
+        text status "draft|submitted|approved|fulfilling|shipped|received|closed|rejected|cancelled"
+        text priority "normal|urgent"
+        date requested_delivery_date
+        text note
+        uuid created_by FK
+        timestamptz submitted_at
+        timestamptz approved_at
+        uuid approved_by FK
+    }
+
+    BRANCH_TRANSFER_ORDER_ITEMS {
+        uuid id PK
+        uuid transfer_order_id FK
+        uuid stock_item_id FK "satılabilir ürün değil"
+        numeric requested_qty
+        numeric approved_qty
+        numeric shipped_qty "SHIPMENTS'ten türetilir"
+        numeric received_qty "SHIPMENTS'ten türetilir"
+        text unit
+        text note
+    }
+```
+
+> **SHIPMENTS bağı:** `shipments.transfer_order_id → branch_transfer_orders(id)` (nullable) eklenir. Onaylı BTO → bir/çok SHIPMENT. `shipment.status → in_transit` BTO'yu `shipped`'e, `shipment.status → received` `received_qty`'yi ve tüm kalemler tamsa `closed`'a taşır. BTO kendi başına `received` set etmez.
+>
+> **Yönlendirme:** `BRANCHES.supply_rules` (jsonb) `source_branch_id`'yi çözer — kalem `category`/`kind` override + `default_source_branch_id`.
+
+---
+
 ## Önemli Index'ler
 
 ```sql

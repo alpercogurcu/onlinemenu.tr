@@ -31,6 +31,8 @@ Mimari Karar Kayıtları (Architecture Decision Records). Her karar kendi dosyas
 | [DATA-002](DATA-002-event-immutability.md) | Event Immutability Kuralı | ✅ Kabul Edildi |
 | [DATA-003](DATA-003-timezone-business-day.md) | Timezone ve Business Day Hesaplama | 📝 Taslak |
 | [DATA-004](DATA-004-catalog-delta-sync.md) | Catalog Delta Sync | 📝 Taslak |
+| [DATA-005](DATA-005-recipe-bom-model.md) | Reçete / BOM ve Stok Kalemi Modeli | 📝 Taslak |
+| [DATA-006](DATA-006-branch-transfer-orders.md) | Şubeler Arası Sipariş (Branch Transfer Orders) | 📝 Taslak |
 
 ### Mimari (ARCH)
 | Kod | Başlık | Durum |

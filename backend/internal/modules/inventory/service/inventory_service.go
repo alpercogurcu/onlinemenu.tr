@@ -16,11 +16,11 @@ import (
 	"onlinemenu.tr/internal/platform/db"
 )
 
-// InventoryService manages stock levels and transaction recording.
+// InventoryService manages warehouse-scoped stock levels and movement recording.
 type InventoryService struct {
 	db      *db.Pool
-	lvlRepo *repo.InventoryLevelRepo
-	txRepo  *repo.InventoryTransactionRepo
+	lvlRepo *repo.StockLevelRepo
+	mvRepo  *repo.StockMovementRepo
 	logger  *zap.Logger
 }
 
@@ -29,8 +29,8 @@ type Params struct {
 	fx.In
 
 	DB      *db.Pool
-	LvlRepo *repo.InventoryLevelRepo
-	TxRepo  *repo.InventoryTransactionRepo
+	LvlRepo *repo.StockLevelRepo
+	MvRepo  *repo.StockMovementRepo
 	Logger  *zap.Logger
 }
 
@@ -39,83 +39,110 @@ func NewInventoryService(p Params) *InventoryService {
 	return &InventoryService{
 		db:      p.DB,
 		lvlRepo: p.LvlRepo,
-		txRepo:  p.TxRepo,
+		mvRepo:  p.MvRepo,
 		logger:  p.Logger,
 	}
 }
 
-// RecordAdjustmentRequest carries the parameters for a stock adjustment.
-type RecordAdjustmentRequest struct {
-	BranchID      uuid.UUID
-	ProductID     uuid.UUID
-	Type          domain.TransactionType
-	QuantityDelta float64
+// RecordMovementRequest carries the parameters for recording a stock movement.
+type RecordMovementRequest struct {
+	WarehouseID   uuid.UUID
+	StockItemID   uuid.UUID
+	Type          domain.MovementType
+	Quantity      float64 // positive magnitude, except for MovementTypeAdjust which may be signed
+	Unit          string
 	ReferenceID   *uuid.UUID
 	ReferenceType *string
 	Notes         *string
 	CreatedBy     *uuid.UUID
 }
 
-// RecordAdjustment records a stock movement and updates the materialized level atomically.
-// For consumption/waste (negative delta), stock is clamped to zero rather than going negative.
-func (s *InventoryService) RecordAdjustment(ctx context.Context, tenantID uuid.UUID, req RecordAdjustmentRequest) (domain.InventoryTransaction, domain.InventoryLevel, error) {
-	if err := validateAdjustment(req); err != nil {
-		return domain.InventoryTransaction{}, domain.InventoryLevel{}, err
+// RecordMovement records a stock movement and updates the materialized level
+// atomically. in/out/adjust/transfer affect on_hand; reserve/release affect
+// reserved only (ADR-DATA-005 / migrations/inventory/000003).
+func (s *InventoryService) RecordMovement(ctx context.Context, tenantID uuid.UUID, req RecordMovementRequest) (domain.StockMovement, domain.StockLevel, error) {
+	if err := validateMovement(req); err != nil {
+		return domain.StockMovement{}, domain.StockLevel{}, err
 	}
 
-	var tx domain.InventoryTransaction
-	var lvl domain.InventoryLevel
+	var mv domain.StockMovement
+	var lvl domain.StockLevel
 
 	err := s.db.WithTenantTx(ctx, tenantID, func(pgTx pgx.Tx) error {
-		t := domain.InventoryTransaction{
+		m := domain.StockMovement{
 			TenantID:      tenantID,
-			BranchID:      req.BranchID,
-			ProductID:     req.ProductID,
+			WarehouseID:   req.WarehouseID,
+			StockItemID:   req.StockItemID,
 			Type:          req.Type,
-			QuantityDelta: req.QuantityDelta,
+			Quantity:      req.Quantity,
 			ReferenceID:   req.ReferenceID,
 			ReferenceType: req.ReferenceType,
 			Notes:         req.Notes,
 			CreatedBy:     req.CreatedBy,
 		}
 		var err error
-		tx, err = s.txRepo.Create(ctx, pgTx, t)
+		mv, err = s.mvRepo.Create(ctx, pgTx, m)
 		if err != nil {
-			return fmt.Errorf("record transaction: %w", err)
+			return fmt.Errorf("record movement: %w", err)
 		}
-		lvl, err = s.lvlRepo.AdjustQuantity(ctx, pgTx, tenantID, req.BranchID, req.ProductID, req.QuantityDelta)
+
+		delta := signedDelta(req.Type, req.Quantity)
+		if req.Type.AffectsOnHand() {
+			lvl, err = s.lvlRepo.AdjustOnHand(ctx, pgTx, tenantID, req.WarehouseID, req.StockItemID, delta, req.Unit)
+		} else {
+			lvl, err = s.lvlRepo.AdjustReserved(ctx, pgTx, tenantID, req.WarehouseID, req.StockItemID, delta, req.Unit)
+		}
 		if err != nil {
 			return fmt.Errorf("adjust level: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
-		return domain.InventoryTransaction{}, domain.InventoryLevel{}, fmt.Errorf("inventory/service: record adjustment: %w", err)
+		return domain.StockMovement{}, domain.StockLevel{}, fmt.Errorf("inventory/service: record movement: %w", err)
 	}
-	return tx, lvl, nil
+	return mv, lvl, nil
 }
 
-// GetLevel returns the current stock level for a product in a branch.
+// signedDelta converts a movement's (type, magnitude) into a signed delta
+// applied to the affected column. in/release/reserve increase their column;
+// out decreases it; adjust is already signed; transfer decreases the source
+// warehouse's on_hand (Faz 1 callers only ever use in/out for warehouse-to-
+// warehouse moves via shipments — see ADR-DATA-006 — so `transfer` behaves
+// like `out` here and is reserved for future direct-transfer call sites).
+func signedDelta(t domain.MovementType, quantity float64) float64 {
+	switch t {
+	case domain.MovementTypeIn, domain.MovementTypeRelease:
+		return quantity
+	case domain.MovementTypeOut, domain.MovementTypeReserve, domain.MovementTypeTransfer:
+		return -quantity
+	case domain.MovementTypeAdjust:
+		return quantity
+	default:
+		return quantity
+	}
+}
+
+// GetLevel returns the current stock level for a stock item in a warehouse.
 // Returns pub.ErrNotFound if no level record exists (no stock ever recorded).
-func (s *InventoryService) GetLevel(ctx context.Context, tenantID, branchID, productID uuid.UUID) (domain.InventoryLevel, error) {
-	var lvl domain.InventoryLevel
+func (s *InventoryService) GetLevel(ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID) (domain.StockLevel, error) {
+	var lvl domain.StockLevel
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		lvl, err = s.lvlRepo.GetByProduct(ctx, tx, branchID, productID)
+		lvl, err = s.lvlRepo.GetByStockItem(ctx, tx, warehouseID, stockItemID)
 		return err
 	})
 	if err != nil {
-		return domain.InventoryLevel{}, wrapErr(err, "inventory/service: get level: %w")
+		return domain.StockLevel{}, wrapErr(err, "inventory/service: get level: %w")
 	}
 	return lvl, nil
 }
 
-// ListLevelsByBranch returns all stock levels for a branch.
-func (s *InventoryService) ListLevelsByBranch(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.InventoryLevel, error) {
-	var levels []domain.InventoryLevel
+// ListLevelsByWarehouse returns all stock levels for a warehouse.
+func (s *InventoryService) ListLevelsByWarehouse(ctx context.Context, tenantID, warehouseID uuid.UUID) ([]domain.StockLevel, error) {
+	var levels []domain.StockLevel
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		levels, err = s.lvlRepo.ListByBranch(ctx, tx, branchID)
+		levels, err = s.lvlRepo.ListByWarehouse(ctx, tx, warehouseID)
 		return err
 	})
 	if err != nil {
@@ -124,32 +151,32 @@ func (s *InventoryService) ListLevelsByBranch(ctx context.Context, tenantID, bra
 	return levels, nil
 }
 
-// ListTransactionsByProduct returns recent transactions for a product in a branch.
-func (s *InventoryService) ListTransactionsByProduct(ctx context.Context, tenantID, branchID, productID uuid.UUID, limit int) ([]domain.InventoryTransaction, error) {
-	var txs []domain.InventoryTransaction
+// ListMovementsByStockItem returns recent movements for a stock item in a warehouse.
+func (s *InventoryService) ListMovementsByStockItem(ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID, limit int) ([]domain.StockMovement, error) {
+	var mvs []domain.StockMovement
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		txs, err = s.txRepo.ListByProduct(ctx, tx, branchID, productID, limit)
+		mvs, err = s.mvRepo.ListByStockItem(ctx, tx, warehouseID, stockItemID, limit)
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("inventory/service: list transactions by product: %w", err)
+		return nil, fmt.Errorf("inventory/service: list movements by stock item: %w", err)
 	}
-	return txs, nil
+	return mvs, nil
 }
 
-// ListTransactionsByBranch returns recent transactions for an entire branch.
-func (s *InventoryService) ListTransactionsByBranch(ctx context.Context, tenantID, branchID uuid.UUID, limit int) ([]domain.InventoryTransaction, error) {
-	var txs []domain.InventoryTransaction
+// ListMovementsByWarehouse returns recent movements for an entire warehouse.
+func (s *InventoryService) ListMovementsByWarehouse(ctx context.Context, tenantID, warehouseID uuid.UUID, limit int) ([]domain.StockMovement, error) {
+	var mvs []domain.StockMovement
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		txs, err = s.txRepo.ListByBranch(ctx, tx, branchID, limit)
+		mvs, err = s.mvRepo.ListByWarehouse(ctx, tx, warehouseID, limit)
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("inventory/service: list transactions by branch: %w", err)
+		return nil, fmt.Errorf("inventory/service: list movements by warehouse: %w", err)
 	}
-	return txs, nil
+	return mvs, nil
 }
 
 // stockReaderAdapter satisfies pub.StockReader using InventoryService.
@@ -159,37 +186,35 @@ func NewStockReader(svc *InventoryService) *stockReaderAdapter {
 	return &stockReaderAdapter{svc: svc}
 }
 
-func (a *stockReaderAdapter) GetLevel(ctx context.Context, tenantID, branchID, productID uuid.UUID) (pub.StockLevel, error) {
-	lvl, err := a.svc.GetLevel(ctx, tenantID, branchID, productID)
+func (a *stockReaderAdapter) GetLevel(ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID) (pub.StockLevel, error) {
+	lvl, err := a.svc.GetLevel(ctx, tenantID, warehouseID, stockItemID)
 	if err != nil {
 		return pub.StockLevel{}, err
 	}
 	return pub.StockLevel{
-		ProductID: lvl.ProductID,
-		BranchID:  lvl.BranchID,
-		Quantity:  lvl.Quantity,
-		UpdatedAt: lvl.UpdatedAt,
+		StockItemID: lvl.StockItemID,
+		WarehouseID: lvl.WarehouseID,
+		OnHand:      lvl.OnHand,
+		Available:   lvl.Available,
+		UpdatedAt:   lvl.UpdatedAt,
 	}, nil
 }
 
-func validateAdjustment(req RecordAdjustmentRequest) error {
+func validateMovement(req RecordMovementRequest) error {
 	if !req.Type.Valid() {
-		return &pub.ValidationError{Msg: fmt.Sprintf("invalid transaction type %q", req.Type)}
+		return &pub.ValidationError{Msg: fmt.Sprintf("invalid movement type %q", req.Type)}
 	}
-	if req.QuantityDelta == 0 {
-		return &pub.ValidationError{Msg: "quantity_delta must not be zero"}
+	if req.WarehouseID == uuid.Nil {
+		return &pub.ValidationError{Msg: "warehouse_id is required"}
 	}
-	switch req.Type {
-	case domain.TransactionTypeRestock:
-		if req.QuantityDelta <= 0 {
-			return &pub.ValidationError{Msg: "restock must have positive quantity_delta"}
-		}
-	case domain.TransactionTypeConsumption, domain.TransactionTypeWaste:
-		if req.QuantityDelta >= 0 {
-			return &pub.ValidationError{Msg: string(req.Type) + " must have negative quantity_delta"}
-		}
-	case domain.TransactionTypeAdjustment:
-		// adjustment allows any non-zero delta (already checked above)
+	if req.StockItemID == uuid.Nil {
+		return &pub.ValidationError{Msg: "stock_item_id is required"}
+	}
+	if req.Quantity == 0 {
+		return &pub.ValidationError{Msg: "quantity must not be zero"}
+	}
+	if req.Type != domain.MovementTypeAdjust && req.Quantity < 0 {
+		return &pub.ValidationError{Msg: string(req.Type) + " requires a positive quantity magnitude"}
 	}
 	return nil
 }

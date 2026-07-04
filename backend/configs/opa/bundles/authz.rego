@@ -28,6 +28,16 @@ system_roles := {
 	"kitchen": "00000001-0000-0000-0000-000000000004",
 	"bar": "00000001-0000-0000-0000-000000000005",
 	"manager": "00000001-0000-0000-0000-000000000006",
+	# "warehouse" is forward-declared here (ADR-DATA-005 İlke 4: depo/imalat
+	# şubesinin manager/warehouse rolü inventory permission'ı alır) but is NOT
+	# yet seeded in identity/000006_seed_system_roles.up.sql — that migration
+	# is outside this task's file scope (backend/internal/modules/identity is
+	# not touched here). Until the identity module seeds role id ...0007 with
+	# system_key='warehouse', no principal can actually hold this role, so the
+	# rules below are inert-but-correct: they take effect the moment identity
+	# seeds the role, with no further rego change required. Flagged as a
+	# required identity-module follow-up in the sprint report.
+	"warehouse": "00000001-0000-0000-0000-000000000007",
 }
 
 has_role(name) if {
@@ -71,22 +81,64 @@ allow if {
 	any_role({"cashier", "shift_manager", "kitchen", "bar"})
 }
 
-# -- Inventory: kitchen/bar/shift_manager may read stock levels and transactions;
-# shift_manager may additionally record adjustments (mirrors the pre-existing
-# role_permissions seed intent for stock corrections during a shift).
-inventory_read_actions := {
-	"inventory.level.read",
-	"inventory.transaction.read",
-}
-
+# -- Inventory (legacy, pre-ADR-DATA-005 branch-scoped model): ORPHANED.
+# inventory_levels/inventory_transactions were re-keyed to warehouse-scoped
+# stock_levels/stock_movements (migrations/inventory/000003); no live endpoint
+# is wired to "inventory.transaction.*" any more (the HTTP layer now uses
+# "inventory.level.read" and "inventory.movement.*", both governed by
+# inventory_management_actions below, manager/warehouse only per ADR-DATA-005
+# İlke 4). This block is left in place, unused, only because
+# internal/platform/auth/opa_test.go asserts it directly by action string
+# (TestEngine_Decide_ShiftManager_InventoryWrite) and that file is outside
+# this task's scope to edit — removing it would break that test without a
+# corresponding code change to fix it. Do not wire any new endpoint to
+# "inventory.transaction.*"; it is dead policy, kept only for that test.
 allow if {
-	input.action in inventory_read_actions
+	input.action == "inventory.transaction.read"
 	any_role({"kitchen", "bar", "shift_manager"})
 }
 
 allow if {
 	input.action == "inventory.transaction.create"
 	has_role("shift_manager")
+}
+
+# -- Inventory management (ADR-DATA-005 İlke 4): stock items, warehouses,
+# stock movements, branch transfer orders and shipments are manager/warehouse
+# only. Counter-facing roles (cashier/waiter) and kitchen/bar get NONE of
+# these actions — visibility is route/permission absence, never a row-level
+# opt-in flag (this is exactly the discipline the b2b post-mortem in
+# ADR-DATA-005 says was missing: "BranchStockTracking" was a per-row bayrak,
+# not a module boundary).
+inventory_management_actions := {
+	"inventory.level.read",
+	"inventory.stock_item.read",
+	"inventory.stock_item.create",
+	"inventory.stock_item.update",
+	"inventory.stock_item.delete",
+	"inventory.warehouse.read",
+	"inventory.warehouse.create",
+	"inventory.warehouse.update",
+	"inventory.warehouse.delete",
+	"inventory.movement.read",
+	"inventory.movement.create",
+	"inventory.transfer_order.read",
+	"inventory.transfer_order.create",
+	"inventory.transfer_order.submit",
+	"inventory.transfer_order.approve",
+	"inventory.transfer_order.reject",
+	"inventory.transfer_order.cancel",
+	"inventory.transfer_order.fulfil",
+	"inventory.shipment.read",
+	"inventory.shipment.create",
+	"inventory.shipment.advance",
+	"inventory.shipment.receive",
+	"inventory.shipment.cancel",
+}
+
+allow if {
+	input.action in inventory_management_actions
+	has_role("warehouse")
 }
 
 # -- POS: check lifecycle (open/close/cancel) and order intake (place/accept/
@@ -140,5 +192,5 @@ allow if {
 # shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {
 	not has_role("manager")
-	any_role({"cashier", "shift_manager", "driver", "kitchen", "bar"})
+	any_role({"cashier", "shift_manager", "driver", "kitchen", "bar", "warehouse"})
 }

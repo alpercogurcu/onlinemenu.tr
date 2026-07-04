@@ -11,17 +11,20 @@ import (
 )
 
 // StockLevel is the read-only projection other modules may use to check stock.
+// Stock is warehouse-scoped (ADR-DATA-005): callers resolve a warehouse_id
+// (e.g. from the branch's default warehouse) before querying.
 type StockLevel struct {
-	ProductID uuid.UUID
-	BranchID  uuid.UUID
-	Quantity  float64
-	UpdatedAt time.Time
+	StockItemID uuid.UUID
+	WarehouseID uuid.UUID
+	OnHand      float64
+	Available   float64
+	UpdatedAt   time.Time
 }
 
 // StockReader allows other modules (e.g. pos) to query current stock levels
 // without importing inventory internals.
 type StockReader interface {
-	GetLevel(ctx context.Context, tenantID, branchID, productID uuid.UUID) (StockLevel, error)
+	GetLevel(ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID) (StockLevel, error)
 }
 
 // ErrNotFound is returned when a requested inventory resource does not exist.
@@ -36,3 +39,11 @@ func (inventoryNotFoundError) Error() string { return "inventory: not found" }
 type ValidationError struct{ Msg string }
 
 func (e *ValidationError) Error() string { return "inventory: " + e.Msg }
+
+// TransitionError is returned when a status transition is not allowed from
+// the resource's current status (BranchTransferOrder / Shipment state
+// machines). The HTTP layer checks for it with errors.As and returns 409
+// Conflict.
+type TransitionError struct{ Msg string }
+
+func (e *TransitionError) Error() string { return "inventory: " + e.Msg }

@@ -9,6 +9,7 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 - Offline sync: `docs/offline-sync.md`
 - Mimari kararlar: `docs/adr/` (17 ADR, kategorili)
 - Delta direktifleri: `delta-v2.md` (baseline üzerinde tüm kararlar)
+- b2b denetim dersleri: `docs/lessons-from-b2b.md` (kardeş repo denetiminden aktarılan güvenlik/enforcement iş listesi — **oku ve uygula**)
 
 ---
 

@@ -59,6 +59,7 @@ type tableSpec struct {
 var tables = []tableSpec{
 	{table: "pos_outbox", module: "pos"},
 	{table: "payment_outbox", module: "payment"},
+	{table: "billing_outbox", module: "billing"},
 }
 
 // outboxRow is a row fetched from any outbox table.

@@ -104,7 +104,7 @@ func runMigrations(superDSN string) error {
 		cfg.ConnConfig.Database,
 	)
 
-	for _, mod := range []string{"tenant", "identity", "catalog", "pos", "payment"} {
+	for _, mod := range []string{"tenant", "identity", "catalog", "pos", "payment", "party", "billing"} {
 		absPath := filepath.Join(migrationsBase(), mod)
 		src := fmt.Sprintf("file://%s", absPath)
 		dsn := fmt.Sprintf("%s&x-migrations-table=schema_migrations_%s", migratorDSN, mod)
@@ -276,6 +276,32 @@ func TestDispatchTable_PublishSuccess_MarksProcessed(t *testing.T) {
 	require.Equal(t, 1, pub.count())
 	assert.Equal(t, eventID.String(), pub.received[0].Header.Get("Nats-Msg-Id"),
 		"Nats-Msg-Id header must carry the event id for JetStream dedup")
+}
+
+// TestDispatchTable_BillingOutbox proves billing_outbox is schema-compatible
+// with the shared dispatcher path (billing/000002 aligned it with pos/payment;
+// billing's aggregate_id is UUID-typed, the others are TEXT — the scan must
+// tolerate both).
+func TestDispatchTable_BillingOutbox_PublishSuccess(t *testing.T) {
+	ctx := context.Background()
+	eventID := uuid.New()
+	_, err := sharedPool.Exec(ctx, `
+		INSERT INTO billing_outbox (event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
+		VALUES ($1, $2, 'invoice', $3, 'invoice.issued', '{}')
+	`, eventID, uuid.New(), uuid.New())
+	require.NoError(t, err)
+
+	pub := &fakePublisher{}
+	d := newTestDispatcher(pub, Config{BatchSize: 10, MaxRetries: 3})
+
+	require.NoError(t, d.dispatchTable(ctx, tableSpec{table: "billing_outbox", module: "billing"}))
+
+	var processedAt *time.Time
+	require.NoError(t, sharedPool.QueryRow(ctx,
+		`SELECT processed_at FROM billing_outbox WHERE event_id = $1`, eventID).Scan(&processedAt))
+	assert.NotNil(t, processedAt, "expected billing row to be marked processed")
+	require.Equal(t, 1, pub.count())
+	assert.Contains(t, pub.received[0].Subject, "billing.")
 }
 
 func TestDispatchTable_PublishFailure_ReleasesClaimAndSchedulesRetry(t *testing.T) {

@@ -141,6 +141,13 @@ inventory_management_actions := {
 	# procurement contract itself (exclusive_hq / approved_suppliers / free)
 	# is a franchisor-level decision, not an operational depo/warehouse task.
 	"inventory.supply_policy.read",
+	# ADR-DATA-007 karar 3: purchase_receipt (elden fiş) create+read are both
+	# manager+warehouse, same as shipments/BTO — a depo/warehouse operator
+	# physically receiving a market/pazar purchase must be able to record it,
+	# unlike supply_policy.create (the commercial contract) which stays
+	# manager-only above.
+	"inventory.purchase_receipt.create",
+	"inventory.purchase_receipt.read",
 }
 
 allow if {

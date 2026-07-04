@@ -54,6 +54,8 @@ var inventoryManagementActions = []string{
 	"inventory.shipment.receive",
 	"inventory.shipment.cancel",
 	"inventory.supply_policy.read",
+	"inventory.purchase_receipt.create",
+	"inventory.purchase_receipt.read",
 }
 
 func TestAuthz_InventoryManagement_ManagerAllowed(t *testing.T) {

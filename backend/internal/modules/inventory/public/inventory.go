@@ -68,6 +68,17 @@ type TransitionError struct{ Msg string }
 
 func (e *TransitionError) Error() string { return "inventory: " + e.Msg }
 
+// ErrSupplyPolicyViolation is returned when a purchase_receipt line item
+// would violate the effective supply policy for its stock item at the
+// receiving branch (ADR-DATA-007 karar 3): the resolved SupplyMode is
+// exclusive_hq (the item may only be sourced via BTO/transfer, never a local
+// purchase), or the mode is approved_suppliers and the line's supplier is
+// missing or not in the approved list. The HTTP layer checks for it with
+// errors.As and returns 422 Unprocessable Entity, mirroring ValidationError.
+type ErrSupplyPolicyViolation struct{ Msg string }
+
+func (e *ErrSupplyPolicyViolation) Error() string { return "inventory: " + e.Msg }
+
 // ErrBranchForbidden is returned when the acting principal attempts a
 // branch-scoped action (ADR-DATA-006: BTO submit/approve/reject/cancel/
 // fulfil, shipment create/approve/advance/cancel/receive, stock movement

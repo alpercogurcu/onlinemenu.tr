@@ -226,6 +226,19 @@ func newShipmentService() *service.ShipmentService {
 	})
 }
 
+func newPurchaseReceiptService() *service.PurchaseReceiptService {
+	return service.NewPurchaseReceiptService(service.PurchaseReceiptParams{
+		DB:       sharedPool,
+		Repo:     repo.NewPurchaseReceiptRepo(),
+		ItemRepo: repo.NewPurchaseReceiptItemRepo(),
+		LvlRepo:  repo.NewStockLevelRepo(),
+		MvRepo:   repo.NewStockMovementRepo(),
+		WhRepo:   repo.NewWarehouseRepo(),
+		Resolver: service.NewSupplyPolicyResolver(newSupplyPolicyService()),
+		Logger:   zap.NewNop(),
+	})
+}
+
 // chainWidePrincipal returns a staff principal with no single-branch scope
 // (BranchID == uuid.Nil), matching a chain-wide membership (ADR-AUTH-001 /
 // identity domain.Membership: "nil = chain-wide"). Used by lifecycle tests

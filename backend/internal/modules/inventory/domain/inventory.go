@@ -41,10 +41,11 @@ func (t MovementType) AffectsOnHand() bool {
 }
 
 // CostSource classifies where StockLevel.LastUnitCost was recorded from
-// (ADR-DATA-007). Faz 1 only ever writes CostSourceTransfer (from a received
-// shipment's frozen unit price); CostSourcePurchaseOrder and
-// CostSourcePurchaseReceipt are reserved for the Faz 2 purchase-side cost
-// cascade (ADR-DATA-007 SS3, purchase_receipts).
+// (ADR-DATA-007). CostSourceTransfer is written from a received shipment's
+// frozen unit price (ShipmentService.Receive); CostSourcePurchaseReceipt is
+// written from a purchase_receipt line on create
+// (PurchaseReceiptService.Create, ADR-DATA-007 karar 3). CostSourcePurchaseOrder
+// remains reserved for the Faz 2 invoiced purchase-order path.
 type CostSource string
 
 const (
@@ -69,10 +70,11 @@ func (c CostSource) Valid() bool {
 //
 // LastUnitCost/LastCostCurrency/LastCostSource/LastCostAt are the
 // branch-local cost of this (warehouse, stock_item) pair (ADR-DATA-007).
-// Faz 1 only ever writes LastCostSource="transfer", from a received
-// shipment's frozen unit price (ShipmentService.Receive); "purchase_order"
-// and "purchase_receipt" are reserved for the Faz 2 purchase-side cost
-// cascade. All four fields are nil until a cost has been recorded.
+// LastCostSource is "transfer" from a received shipment's frozen unit price
+// (ShipmentService.Receive) or "purchase_receipt" from a purchase receipt
+// line (PurchaseReceiptService.Create); "purchase_order" remains reserved
+// for the Faz 2 invoiced purchase-order path. All four fields are nil until
+// a cost has been recorded.
 type StockLevel struct {
 	ID               uuid.UUID
 	TenantID         uuid.UUID

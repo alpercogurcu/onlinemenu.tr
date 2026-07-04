@@ -134,12 +134,27 @@ inventory_management_actions := {
 	"inventory.shipment.advance",
 	"inventory.shipment.receive",
 	"inventory.shipment.cancel",
+	# ADR-DATA-007: supply policy READ is manager+warehouse, same as every
+	# other inventory management resource. CREATE is deliberately NOT in this
+	# set — see the standalone rule below: it stays manager-only (via the
+	# wildcard at the top of this file), reflecting that the commercial
+	# procurement contract itself (exclusive_hq / approved_suppliers / free)
+	# is a franchisor-level decision, not an operational depo/warehouse task.
+	"inventory.supply_policy.read",
 }
 
 allow if {
 	input.action in inventory_management_actions
 	has_role("warehouse")
 }
+
+# -- Supply policy CREATE (ADR-DATA-007): manager-only. Deliberately absent
+# from inventory_management_actions above so that adding it there in the
+# future cannot silently also grant it to "warehouse" — see that set's
+# comment. Manager already gets this via the wildcard `allow if
+# has_role("manager")` at the top of this file; this comment exists so the
+# absence of a "warehouse" rule here is legible as an explicit choice, not
+# an oversight.
 
 # -- POS: check lifecycle (open/close/cancel) and order intake (place/accept/
 # reject) are counter-facing actions, owned by cashier/shift_manager (mirrors

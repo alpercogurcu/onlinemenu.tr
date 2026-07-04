@@ -27,6 +27,26 @@ type StockReader interface {
 	GetLevel(ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID) (StockLevel, error)
 }
 
+// SupplyMode mirrors domain.SupplyMode (ADR-DATA-007) for cross-module
+// consumers that must not import inventory/domain.
+type SupplyMode string
+
+const (
+	SupplyModeExclusiveHQ       SupplyMode = "exclusive_hq"
+	SupplyModeApprovedSuppliers SupplyMode = "approved_suppliers"
+	SupplyModeFree              SupplyMode = "free"
+)
+
+// SupplyPolicyResolver lets other modules (e.g. Wave B's purchase_receipts,
+// ADR-DATA-007 Şema bölüm 3) resolve the effective supply mode for a stock
+// item at a branch — exclusive_hq, approved_suppliers, or free — without
+// importing inventory internals or re-implementing the resolution priority
+// (branch+item > branch+category > tenant+item > tenant+category >
+// tenant_default > exclusive_hq default).
+type SupplyPolicyResolver interface {
+	EffectivePolicyFor(ctx context.Context, tenantID, stockItemID, branchID uuid.UUID) (SupplyMode, []uuid.UUID, error)
+}
+
 // ErrNotFound is returned when a requested inventory resource does not exist.
 var ErrNotFound = inventoryNotFoundError{}
 

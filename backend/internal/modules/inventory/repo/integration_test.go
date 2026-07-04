@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -726,4 +727,133 @@ func TestWarehouseRepo_ListByBranch(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, list, 2)
 	})
+}
+
+// ============================================================
+// SupplyPolicyRepo tests (ADR-DATA-007)
+// ============================================================
+
+// NOTE: unlike most repo tests in this file, SupplyPolicyRepo's ListAll and
+// ListCandidates queries are NOT scoped down to a single id the test itself
+// picked (e.g. GetByID, or List filtered by a distinctive kind) — they
+// return every row visible under a tenant. Reusing the shared tenantA/
+// tenantB fixtures (used freely elsewhere in this file) would leak rows
+// across these tests, since several of them run under the same tenant in
+// the same test binary. Each test below therefore mints its own fresh
+// tenant id.
+
+func TestSupplyPolicyRepo_CreateAndListAll(t *testing.T) {
+	spRepo := repo.NewSupplyPolicyRepo()
+	ctx := context.Background()
+	tenantID := uuid.New()
+	itemID := createStockItem(t, tenantID)
+	supplierA := uuid.New()
+	supplierB := uuid.New()
+
+	var created domain.SupplyPolicy
+	var createErr error
+	withTx(t, tenantID, func(tx pgx.Tx) {
+		id, err := uuid.NewV7()
+		require.NoError(t, err)
+		created, createErr = spRepo.Create(ctx, tx, domain.SupplyPolicy{
+			ID:                  id,
+			TenantID:            tenantID,
+			Scope:               domain.SupplyScopeStockItem,
+			StockItemID:         &itemID,
+			Mode:                domain.SupplyModeApprovedSuppliers,
+			ApprovedSupplierIDs: []uuid.UUID{supplierA, supplierB},
+			EffectiveFrom:       time.Now(),
+		})
+	})
+	require.NoError(t, createErr)
+	assert.Equal(t, domain.SupplyScopeStockItem, created.Scope)
+	assert.Equal(t, domain.SupplyModeApprovedSuppliers, created.Mode)
+	assert.Equal(t, []uuid.UUID{supplierA, supplierB}, created.ApprovedSupplierIDs)
+	assert.Nil(t, created.BranchID)
+
+	var all []domain.SupplyPolicy
+	var listErr error
+	withReadTx(t, tenantID, func(tx pgx.Tx) {
+		all, listErr = spRepo.ListAll(ctx, tx)
+	})
+	require.NoError(t, listErr)
+	require.Len(t, all, 1)
+	assert.Equal(t, created.ID, all[0].ID)
+}
+
+func TestSupplyPolicyRepo_TenantIsolation(t *testing.T) {
+	spRepo := repo.NewSupplyPolicyRepo()
+	ctx := context.Background()
+	tenantOwn := uuid.New()
+	tenantOther := uuid.New()
+	itemID := createStockItem(t, tenantOwn)
+
+	withTx(t, tenantOwn, func(tx pgx.Tx) {
+		id, err := uuid.NewV7()
+		require.NoError(t, err)
+		_, err = spRepo.Create(ctx, tx, domain.SupplyPolicy{
+			ID: id, TenantID: tenantOwn, Scope: domain.SupplyScopeStockItem, StockItemID: &itemID,
+			Mode: domain.SupplyModeFree, EffectiveFrom: time.Now(),
+		})
+		require.NoError(t, err)
+	})
+
+	var all []domain.SupplyPolicy
+	var listErr error
+	withReadTx(t, tenantOther, func(tx pgx.Tx) {
+		all, listErr = spRepo.ListAll(ctx, tx)
+	})
+	require.NoError(t, listErr)
+	assert.Empty(t, all, "a different tenant must not see this tenant's supply policy rows")
+}
+
+// TestSupplyPolicyRepo_ListCandidates_BranchScoping proves ListCandidates
+// returns tenant-wide rows unconditionally plus only the rows scoped to the
+// requested branch — never a different branch's override.
+func TestSupplyPolicyRepo_ListCandidates_BranchScoping(t *testing.T) {
+	spRepo := repo.NewSupplyPolicyRepo()
+	ctx := context.Background()
+	tenantID := uuid.New()
+	itemID := createStockItem(t, tenantID)
+	ownBranch := uuid.New()
+	otherBranch := uuid.New()
+
+	withTx(t, tenantID, func(tx pgx.Tx) {
+		tenantWideID, err := uuid.NewV7()
+		require.NoError(t, err)
+		_, err = spRepo.Create(ctx, tx, domain.SupplyPolicy{
+			ID: tenantWideID, TenantID: tenantID, Scope: domain.SupplyScopeTenantDefault,
+			Mode: domain.SupplyModeExclusiveHQ, EffectiveFrom: time.Now(),
+		})
+		require.NoError(t, err)
+
+		ownBranchID, err := uuid.NewV7()
+		require.NoError(t, err)
+		_, err = spRepo.Create(ctx, tx, domain.SupplyPolicy{
+			ID: ownBranchID, TenantID: tenantID, BranchID: &ownBranch, Scope: domain.SupplyScopeStockItem,
+			StockItemID: &itemID, Mode: domain.SupplyModeFree, EffectiveFrom: time.Now(),
+		})
+		require.NoError(t, err)
+
+		otherBranchRowID, err := uuid.NewV7()
+		require.NoError(t, err)
+		_, err = spRepo.Create(ctx, tx, domain.SupplyPolicy{
+			ID: otherBranchRowID, TenantID: tenantID, BranchID: &otherBranch, Scope: domain.SupplyScopeStockItem,
+			StockItemID: &itemID, Mode: domain.SupplyModeApprovedSuppliers, EffectiveFrom: time.Now(),
+		})
+		require.NoError(t, err)
+	})
+
+	var candidates []domain.SupplyPolicy
+	var listErr error
+	withReadTx(t, tenantID, func(tx pgx.Tx) {
+		candidates, listErr = spRepo.ListCandidates(ctx, tx, ownBranch)
+	})
+	require.NoError(t, listErr)
+	require.Len(t, candidates, 2, "must include the tenant-wide row plus ownBranch's row, but not otherBranch's")
+	for _, c := range candidates {
+		if c.BranchID != nil {
+			assert.Equal(t, ownBranch, *c.BranchID)
+		}
+	}
 }

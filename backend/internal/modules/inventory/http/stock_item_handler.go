@@ -17,6 +17,12 @@ type stockItemRequest struct {
 	IsActive      *bool  `json:"is_active,omitempty"`
 }
 
+// stockItemResponse is the FULL projection: rendered for stock items the
+// acting principal is entitled to see in detail (ADR-DATA-007 mode
+// approved_suppliers/free, or any item seen by a tenant-wide-scoped
+// principal). SupplyMode is only populated by listStockItems (it has no
+// meaning for a single Create/Get/Update call, which is why omitempty keeps
+// the key absent there rather than emitting an empty string).
 type stockItemResponse struct {
 	ID            string `json:"id"`
 	SKU           string `json:"sku"`
@@ -27,6 +33,22 @@ type stockItemResponse struct {
 	IsActive      bool   `json:"is_active"`
 	CreatedAt     string `json:"created_at"`
 	UpdatedAt     string `json:"updated_at"`
+	SupplyMode    string `json:"supply_mode,omitempty"`
+}
+
+// restrictedStockItemResponse is the RESTRICTED projection for an
+// exclusive_hq-mode item viewed by a branch-scoped principal (ADR-DATA-007
+// / DATA-005 İlke 4 revizyonu): only the BTO catalog fields a branch needs
+// to place an order. Cost/supplier/category/status fields are not merely
+// empty here — the JSON key itself does not exist, because this is a
+// distinct Go type, not the full struct with fields blanked out
+// (docs/lessons-from-b2b.md: visibility must be field absence, never an
+// opt-in row flag or a same-shape-but-empty response).
+type restrictedStockItemResponse struct {
+	ID            string `json:"id"`
+	SKU           string `json:"sku"`
+	Name          string `json:"name"`
+	CanonicalUnit string `json:"canonical_unit"`
 }
 
 func (h *Handler) createStockItem(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +77,13 @@ func (h *Handler) createStockItem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toStockItemResponse(item))
 }
 
+// listStockItems renders each item as EITHER the full projection OR the
+// restricted BTO-catalog-only projection, per its ADR-DATA-007 resolved
+// supply mode for the acting principal (service.StockItemService.List does
+// the resolution; this handler only picks which DTO type to serialize).
+// The response is []any because the two DTO types have genuinely different
+// JSON shapes — a single shared struct with omitempty would still emit
+// empty-valued keys, which is exactly the leak this projection must avoid.
 func (h *Handler) listStockItems(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
@@ -62,14 +91,18 @@ func (h *Handler) listStockItems(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := domain.StockItemKind(r.URL.Query().Get("kind"))
 
-	items, err := h.stockItems.List(r.Context(), p.TenantID, kind)
+	views, err := h.stockItems.List(r.Context(), p.TenantID, kind, p)
 	if err != nil {
 		h.logError(w, r, err)
 		return
 	}
-	resp := make([]stockItemResponse, len(items))
-	for i, item := range items {
-		resp[i] = toStockItemResponse(item)
+	resp := make([]any, len(views))
+	for i, v := range views {
+		if v.Restricted {
+			resp[i] = toRestrictedStockItemResponse(v.Item)
+			continue
+		}
+		resp[i] = toFullStockItemResponse(v.Item, v.Mode)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -159,6 +192,25 @@ func toStockItemResponse(item domain.StockItem) stockItemResponse {
 		IsActive:      item.IsActive,
 		CreatedAt:     item.CreatedAt.Format(timeLayout),
 		UpdatedAt:     item.UpdatedAt.Format(timeLayout),
+	}
+}
+
+// toFullStockItemResponse is toStockItemResponse plus the resolved
+// ADR-DATA-007 supply mode, used only by listStockItems's unrestricted branch.
+func toFullStockItemResponse(item domain.StockItem, mode domain.SupplyMode) stockItemResponse {
+	resp := toStockItemResponse(item)
+	resp.SupplyMode = string(mode)
+	return resp
+}
+
+// toRestrictedStockItemResponse renders the BTO-catalog-only projection for
+// an exclusive_hq item viewed by a branch-scoped principal.
+func toRestrictedStockItemResponse(item domain.StockItem) restrictedStockItemResponse {
+	return restrictedStockItemResponse{
+		ID:            item.ID.String(),
+		SKU:           item.SKU,
+		Name:          item.Name,
+		CanonicalUnit: item.CanonicalUnit,
 	}
 }
 

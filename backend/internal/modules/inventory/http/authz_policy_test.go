@@ -53,6 +53,7 @@ var inventoryManagementActions = []string{
 	"inventory.shipment.advance",
 	"inventory.shipment.receive",
 	"inventory.shipment.cancel",
+	"inventory.supply_policy.read",
 }
 
 func TestAuthz_InventoryManagement_ManagerAllowed(t *testing.T) {
@@ -86,6 +87,33 @@ func TestAuthz_InventoryManagement_WarehouseAllowed(t *testing.T) {
 		assert.Truef(t, d.Allow, "warehouse role should be allowed %q", action)
 		assert.Equal(t, "branch", d.Scope)
 	}
+}
+
+// TestAuthz_SupplyPolicyCreate_ManagerOnly is the ADR-DATA-007 regression
+// test: "inventory.supply_policy.create" is deliberately absent from
+// inventory_management_actions (authz.rego) so that manager is the ONLY
+// role allowed to create/change a commercial procurement policy — warehouse
+// gets read (covered by TestAuthz_InventoryManagement_WarehouseAllowed above)
+// but never create. This guards against a future rego edit that folds create
+// into the shared set and silently grants it to warehouse too.
+func TestAuthz_SupplyPolicyCreate_ManagerOnly(t *testing.T) {
+	eng := newSmokeTestEngine(t)
+
+	manager := auth.Principal{
+		PersonID: uuid.New(), Ctx: auth.ContextStaff, TenantID: uuid.New(), BranchID: uuid.New(),
+		RoleIDs: []uuid.UUID{managerRoleID},
+	}
+	d, err := eng.Decide(context.Background(), "inventory.supply_policy.create", manager)
+	require.NoError(t, err)
+	assert.True(t, d.Allow, "manager should be allowed inventory.supply_policy.create")
+
+	warehouse := auth.Principal{
+		PersonID: uuid.New(), Ctx: auth.ContextStaff, TenantID: uuid.New(), BranchID: uuid.New(),
+		RoleIDs: []uuid.UUID{warehouseRoleID},
+	}
+	d, err = eng.Decide(context.Background(), "inventory.supply_policy.create", warehouse)
+	require.NoError(t, err)
+	assert.False(t, d.Allow, "warehouse must be denied inventory.supply_policy.create")
 }
 
 // TestAuthz_InventoryManagement_BranchRolesDenied is the ADR-DATA-005 İlke 4

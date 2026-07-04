@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -194,7 +195,7 @@ func newWarehouseService() *service.WarehouseService {
 
 func newStockItemService() *service.StockItemService {
 	return service.NewStockItemService(service.StockItemParams{
-		DB: sharedPool, Repo: repo.NewStockItemRepo(), Logger: zap.NewNop(),
+		DB: sharedPool, Repo: repo.NewStockItemRepo(), SupplyPolicyRepo: repo.NewSupplyPolicyRepo(), Logger: zap.NewNop(),
 	})
 }
 
@@ -542,6 +543,368 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 	assert.InDelta(t, 40.0, btoItemsFinal[0].ReceivedQty, 0.001, "received_qty must sum both shipments (25+15)")
 }
 
+// TestTransferOrderApprove_SetsUnitPrice proves that the source branch can
+// price a BTO item at approve time (ADR-DATA-006 eklenti / ADR-DATA-007
+// SS4), and that an un-priced item on the same BTO stays nil — pricing is
+// per-item, not all-or-nothing.
+func TestTransferOrderApprove_SetsUnitPrice(t *testing.T) {
+	ctx := context.Background()
+	itemPriced := createTestStockItem(t, ctx, tenantA)
+	itemFree := createTestStockItem(t, ctx, tenantA)
+
+	toSvc := newTransferOrderService()
+
+	bto, _, err := toSvc.Create(ctx, tenantA, service.CreateTransferOrderRequest{
+		RequestingBranchID: branchReq,
+		SourceBranchID:     branchSrc,
+		Items: []service.CreateTransferOrderItemRequest{
+			{StockItemID: itemPriced.ID, RequestedQty: 10, Unit: "kg"},
+			{StockItemID: itemFree.ID, RequestedQty: 5, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Before approval, no item has a price (ADR-DATA-007: "talep asamasinda
+	// fiyat yok").
+	itemsBeforeApproval, err := toSvc.ListItems(ctx, tenantA, bto.ID)
+	require.NoError(t, err)
+	for _, it := range itemsBeforeApproval {
+		assert.Nil(t, it.UnitPrice)
+		assert.Nil(t, it.Currency)
+	}
+
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+
+	price := 12.50
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+		{StockItemID: itemPriced.ID, ApprovedQty: 10, UnitPrice: &price, Currency: "TRY"},
+		{StockItemID: itemFree.ID, ApprovedQty: 5}, // no price: free/approved_suppliers policy item
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.BTOStatusApproved, bto.Status)
+
+	itemsAfterApproval, err := toSvc.ListItems(ctx, tenantA, bto.ID)
+	require.NoError(t, err)
+	byStockItem := make(map[uuid.UUID]domain.BranchTransferOrderItem, len(itemsAfterApproval))
+	for _, it := range itemsAfterApproval {
+		byStockItem[it.StockItemID] = it
+	}
+
+	priced := byStockItem[itemPriced.ID]
+	require.NotNil(t, priced.UnitPrice)
+	assert.InDelta(t, 12.50, *priced.UnitPrice, 0.0001)
+	require.NotNil(t, priced.Currency)
+	assert.Equal(t, "TRY", *priced.Currency)
+
+	free := byStockItem[itemFree.ID]
+	assert.Nil(t, free.UnitPrice, "an item the source branch chooses not to price must stay nil, not default to zero")
+	assert.Nil(t, free.Currency)
+}
+
+// TestTransferOrderAndShipment_PriceFlow_ReceiveSetsBranchLocalCost is the
+// end-to-end proof of ADR-DATA-007 SS4: a source branch prices a BTO item at
+// approve time, the shipment created against that BTO copies the price, and
+// receiving the shipment stamps the destination warehouse's stock_levels row
+// with that price as its branch-local cost (source=transfer).
+func TestTransferOrderAndShipment_PriceFlow_ReceiveSetsBranchLocalCost(t *testing.T) {
+	ctx := context.Background()
+	sourceWH := createTestWarehouse(t, ctx, tenantA, branchSrc)
+	destWH := createTestWarehouse(t, ctx, tenantA, branchReq)
+	item := createTestStockItem(t, ctx, tenantA)
+	seedSourceStock(t, ctx, tenantA, sourceWH.ID, item.ID, 100, "kg")
+
+	toSvc := newTransferOrderService()
+	shSvc := newShipmentService()
+	invSvc := newInventoryService()
+
+	bto, _, err := toSvc.Create(ctx, tenantA, service.CreateTransferOrderRequest{
+		RequestingBranchID: branchReq,
+		SourceBranchID:     branchSrc,
+		Items: []service.CreateTransferOrderItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+
+	price := 7.25
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+		{StockItemID: item.ID, ApprovedQty: 40, UnitPrice: &price, Currency: "TRY"},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+
+	// Shipment created against the priced BTO: no per-line override given,
+	// so the price must be copied from the BTO item.
+	shipment, shItems, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		FromWarehouseID: sourceWH.ID,
+		ToBranchID:      branchReq,
+		TransferOrderID: &bto.ID,
+		Items: []service.CreateShipmentItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, shItems, 1)
+	require.NotNil(t, shItems[0].UnitPrice, "shipment item must copy the BTO item's transfer price")
+	assert.InDelta(t, 7.25, *shItems[0].UnitPrice, 0.0001)
+	require.NotNil(t, shItems[0].Currency)
+	assert.Equal(t, "TRY", *shItems[0].Currency)
+
+	shipment, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	require.NoError(t, err)
+	shipment, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	require.NoError(t, err)
+
+	// Before receive: destination warehouse has no stock_levels row at all
+	// yet (nothing has ever moved there), so no cost either.
+	_, err = invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
+	assert.Error(t, err, "destination level must not exist before anything is received into it")
+
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
+	require.NoError(t, err)
+
+	destLevel, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 40.0, destLevel.OnHand, 0.001)
+	require.NotNil(t, destLevel.LastUnitCost, "receive must stamp the destination level's branch-local cost from the transfer price")
+	assert.InDelta(t, 7.25, *destLevel.LastUnitCost, 0.0001)
+	require.NotNil(t, destLevel.LastCostCurrency)
+	assert.Equal(t, "TRY", *destLevel.LastCostCurrency)
+	require.NotNil(t, destLevel.LastCostSource)
+	assert.Equal(t, string(domain.CostSourceTransfer), *destLevel.LastCostSource)
+	require.NotNil(t, destLevel.LastCostAt)
+	assert.False(t, destLevel.LastCostAt.IsZero())
+
+	// Source warehouse's own level must be unaffected: cost tracking is
+	// destination-scoped, the shipment does not retroactively price the
+	// source's existing stock.
+	sourceLevel, err := invSvc.GetLevel(ctx, tenantA, sourceWH.ID, item.ID)
+	require.NoError(t, err)
+	assert.Nil(t, sourceLevel.LastUnitCost)
+}
+
+// TestTransferOrderAndShipment_NoPriceLeavesCostNil proves the negative
+// path: a transfer with no price set anywhere (the existing default flow)
+// must leave the destination level's cost columns nil after receive, not
+// zero or some other sentinel — this is the regression guard for
+// TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive, which
+// exercises the exact same flow with no prices at all.
+func TestTransferOrderAndShipment_NoPriceLeavesCostNil(t *testing.T) {
+	ctx := context.Background()
+	sourceWH := createTestWarehouse(t, ctx, tenantA, branchSrc)
+	destWH := createTestWarehouse(t, ctx, tenantA, branchReq)
+	item := createTestStockItem(t, ctx, tenantA)
+	seedSourceStock(t, ctx, tenantA, sourceWH.ID, item.ID, 100, "kg")
+
+	toSvc := newTransferOrderService()
+	shSvc := newShipmentService()
+	invSvc := newInventoryService()
+
+	bto, _, err := toSvc.Create(ctx, tenantA, service.CreateTransferOrderRequest{
+		RequestingBranchID: branchReq,
+		SourceBranchID:     branchSrc,
+		Items: []service.CreateTransferOrderItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+		{StockItemID: item.ID, ApprovedQty: 40}, // no UnitPrice
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+
+	shipment, shItems, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		FromWarehouseID: sourceWH.ID,
+		ToBranchID:      branchReq,
+		TransferOrderID: &bto.ID,
+		Items: []service.CreateShipmentItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, shItems, 1)
+	assert.Nil(t, shItems[0].UnitPrice)
+	assert.Nil(t, shItems[0].Currency)
+
+	shipment, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	require.NoError(t, err)
+	shipment, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	require.NoError(t, err)
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
+	require.NoError(t, err)
+
+	destLevel, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 40.0, destLevel.OnHand, 0.001)
+	assert.Nil(t, destLevel.LastUnitCost, "no price anywhere in the flow must leave the destination cost nil, not zero")
+	assert.Nil(t, destLevel.LastCostCurrency)
+	assert.Nil(t, destLevel.LastCostSource)
+	assert.Nil(t, destLevel.LastCostAt)
+}
+
+// TestShipmentCreate_OverridesBTOPricePerLine proves that an explicit
+// per-line UnitPrice on shipment create wins over the BTO item's price
+// (ADR-DATA-006 eklenti: "kopyalanir/override edilebilir").
+func TestShipmentCreate_OverridesBTOPricePerLine(t *testing.T) {
+	ctx := context.Background()
+	sourceWH := createTestWarehouse(t, ctx, tenantA, branchSrc)
+	item := createTestStockItem(t, ctx, tenantA)
+	seedSourceStock(t, ctx, tenantA, sourceWH.ID, item.ID, 100, "kg")
+
+	toSvc := newTransferOrderService()
+	shSvc := newShipmentService()
+
+	bto, _, err := toSvc.Create(ctx, tenantA, service.CreateTransferOrderRequest{
+		RequestingBranchID: branchReq,
+		SourceBranchID:     branchSrc,
+		Items: []service.CreateTransferOrderItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+	btoPrice := 7.25
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+		{StockItemID: item.ID, ApprovedQty: 40, UnitPrice: &btoPrice, Currency: "TRY"},
+	})
+	require.NoError(t, err)
+
+	overridePrice := 9.99
+	_, shItems, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		FromWarehouseID: sourceWH.ID,
+		ToBranchID:      branchReq,
+		TransferOrderID: &bto.ID,
+		Items: []service.CreateShipmentItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg", UnitPrice: &overridePrice, Currency: "USD"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, shItems, 1)
+	require.NotNil(t, shItems[0].UnitPrice)
+	assert.InDelta(t, 9.99, *shItems[0].UnitPrice, 0.0001, "explicit per-line price must override the BTO item's price")
+	require.NotNil(t, shItems[0].Currency)
+	assert.Equal(t, "USD", *shItems[0].Currency)
+}
+
+// TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive covers
+// task item 5's "kısmi teslimatta davranış" and directly proves the
+// clobber-protection documented on ShipmentService.Receive: a priced
+// partial-fulfilment BTO stamps the destination cost correctly across two
+// shipments, and a later, unrelated priceless receive into the SAME
+// (warehouse, stock_item) must never null out that already-recorded cost.
+func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *testing.T) {
+	ctx := context.Background()
+	sourceWH := createTestWarehouse(t, ctx, tenantA, branchSrc)
+	destWH := createTestWarehouse(t, ctx, tenantA, branchReq)
+	item := createTestStockItem(t, ctx, tenantA)
+	seedSourceStock(t, ctx, tenantA, sourceWH.ID, item.ID, 100, "kg")
+
+	toSvc := newTransferOrderService()
+	shSvc := newShipmentService()
+	invSvc := newInventoryService()
+
+	bto, _, err := toSvc.Create(ctx, tenantA, service.CreateTransferOrderRequest{
+		RequestingBranchID: branchReq,
+		SourceBranchID:     branchSrc,
+		Items: []service.CreateTransferOrderItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+	price := 8.40
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+		{StockItemID: item.ID, ApprovedQty: 40, UnitPrice: &price, Currency: "TRY"},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+
+	createAndAdvance := func(qty float64) domain.Shipment {
+		sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+			FromWarehouseID: sourceWH.ID,
+			ToBranchID:      branchReq,
+			TransferOrderID: &bto.ID,
+			Items: []service.CreateShipmentItemRequest{
+				{StockItemID: item.ID, RequestedQty: qty, Unit: "kg"},
+			},
+		})
+		require.NoError(t, err)
+		sh, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		require.NoError(t, err)
+		sh, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		require.NoError(t, err)
+		return sh
+	}
+
+	// Both partial shipments are created and advanced (fulfilling -> shipped)
+	// before either is received, matching ADR-DATA-006's "one BTO, N
+	// shipments" flow (see TestTransferOrder_PartialFulfilment_...): the BTO
+	// only leaves "shipped" once its first Receive runs.
+	ship1 := createAndAdvance(25)
+	ship2 := createAndAdvance(15)
+
+	// Receive shipment 1 (25kg of 40kg): destination gets its first cost stamp.
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
+	require.NoError(t, err)
+
+	afterPartial, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 25.0, afterPartial.OnHand, 0.001)
+	require.NotNil(t, afterPartial.LastUnitCost, "first partial receive must stamp the cost")
+	assert.InDelta(t, 8.40, *afterPartial.LastUnitCost, 0.0001)
+
+	// Receive shipment 2 (15kg): completes the BTO (40/40), same price.
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
+	require.NoError(t, err)
+
+	afterFull, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 40.0, afterFull.OnHand, 0.001)
+	require.NotNil(t, afterFull.LastUnitCost, "second partial receive must keep the cost set")
+	assert.InDelta(t, 8.40, *afterFull.LastUnitCost, 0.0001)
+	require.NotNil(t, afterFull.LastCostSource)
+	assert.Equal(t, string(domain.CostSourceTransfer), *afterFull.LastCostSource)
+
+	// An unrelated, priceless ad-hoc shipment (no BTO link) into the SAME
+	// (warehouse, stock_item) must add stock without nulling the
+	// already-recorded cost -- the "doluysa" guard in
+	// ShipmentService.Receive must not clobber a known cost with a later
+	// priceless movement.
+	adhoc, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		FromWarehouseID: sourceWH.ID,
+		ToBranchID:      branchReq,
+		Items: []service.CreateShipmentItemRequest{
+			{StockItemID: item.ID, RequestedQty: 10, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	adhoc, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), adhoc.ID)
+	require.NoError(t, err)
+	adhoc, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), adhoc.ID)
+	require.NoError(t, err)
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), adhoc.ID, destWH.ID)
+	require.NoError(t, err)
+
+	final, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 50.0, final.OnHand, 0.001, "on_hand must still accumulate (40+10)")
+	require.NotNil(t, final.LastUnitCost, "a later priceless receive must NOT clobber a previously recorded cost")
+	assert.InDelta(t, 8.40, *final.LastUnitCost, 0.0001)
+	require.NotNil(t, final.LastCostSource)
+	assert.Equal(t, string(domain.CostSourceTransfer), *final.LastCostSource)
+}
+
 // TestShipmentAdvance_RejectsInsufficientStock proves the availability guard:
 // AdjustOnHand's GREATEST(0, ...) clamp must never be reached via Advance —
 // an over-ship is rejected outright rather than silently manufacturing stock.
@@ -574,4 +937,132 @@ func TestShipmentAdvance_RejectsInsufficientStock(t *testing.T) {
 	level, err := invSvc.GetLevel(ctx, tenantA, sourceWH.ID, item.ID)
 	require.NoError(t, err)
 	assert.InDelta(t, 10.0, level.OnHand, 0.001, "rejected advance must not have written any movement")
+}
+
+// ---------------------------------------------------------------------------
+// SupplyPolicyService (ADR-DATA-007)
+// ---------------------------------------------------------------------------
+
+func newSupplyPolicyService() *service.SupplyPolicyService {
+	return service.NewSupplyPolicyService(service.SupplyPolicyParams{
+		DB: sharedPool, Repo: repo.NewSupplyPolicyRepo(), StockRepo: repo.NewStockItemRepo(), Logger: zap.NewNop(),
+	})
+}
+
+// TestSupplyPolicyService_CreateAndList proves the basic persistence round
+// trip and that List surfaces every tenant row (management listing, not the
+// resolver).
+func TestSupplyPolicyService_CreateAndList(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	item := createTestStockItem(t, ctx, tenantID)
+
+	svc := newSupplyPolicyService()
+	created, err := svc.Create(ctx, tenantID, service.CreateSupplyPolicyRequest{
+		Scope:       domain.SupplyScopeStockItem,
+		StockItemID: &item.ID,
+		Mode:        domain.SupplyModeApprovedSuppliers,
+		ApprovedSupplierIDs: []uuid.UUID{
+			uuid.MustParse("11111111-0000-0000-0000-000000000001"),
+			uuid.MustParse("11111111-0000-0000-0000-000000000002"),
+		},
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, uuid.Nil, created.ID)
+	assert.Nil(t, created.BranchID, "v1 Create must always write a tenant-wide (branch_id NULL) row")
+	assert.Len(t, created.ApprovedSupplierIDs, 2)
+
+	list, err := svc.List(ctx, tenantID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, created.ID, list[0].ID)
+}
+
+// TestSupplyPolicyService_CreateIsAppendOnly proves a second Create for the
+// same resolution key does NOT update the first row (DATA-002 immutability
+// ruhu): List must return BOTH rows, and the resolver (proven at the domain
+// layer, see domain/supply_policy_test.go) picks the winner by effective_from.
+func TestSupplyPolicyService_CreateIsAppendOnly(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	item := createTestStockItem(t, ctx, tenantID)
+
+	svc := newSupplyPolicyService()
+	_, err := svc.Create(ctx, tenantID, service.CreateSupplyPolicyRequest{
+		Scope: domain.SupplyScopeStockItem, StockItemID: &item.ID, Mode: domain.SupplyModeExclusiveHQ,
+		EffectiveFrom: time.Now().Add(-2 * time.Hour),
+	})
+	require.NoError(t, err)
+	_, err = svc.Create(ctx, tenantID, service.CreateSupplyPolicyRequest{
+		Scope: domain.SupplyScopeStockItem, StockItemID: &item.ID, Mode: domain.SupplyModeFree,
+		EffectiveFrom: time.Now().Add(-1 * time.Hour),
+	})
+	require.NoError(t, err)
+
+	list, err := svc.List(ctx, tenantID)
+	require.NoError(t, err)
+	assert.Len(t, list, 2, "policy change must append a new row, never update the existing one")
+}
+
+// TestSupplyPolicyService_EffectivePolicyFor_NoRowDefaultsToExclusiveHQ
+// proves the Faz-1 safe default reaches all the way through the service
+// (repo load + domain.ResolvePolicy) with zero configured policy rows.
+func TestSupplyPolicyService_EffectivePolicyFor_NoRowDefaultsToExclusiveHQ(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	item := createTestStockItem(t, ctx, tenantID)
+
+	svc := newSupplyPolicyService()
+	mode, approved, err := svc.EffectivePolicyFor(ctx, tenantID, item.ID, branchReq)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SupplyModeExclusiveHQ, mode)
+	assert.Nil(t, approved)
+}
+
+// TestSupplyPolicyService_EffectivePolicyFor_TenantIsolation proves a policy
+// row created under one tenant never leaks into another tenant's
+// resolution — RLS hides the row entirely, so the resolver falls back to
+// the exclusive_hq default rather than erroring.
+func TestSupplyPolicyService_EffectivePolicyFor_TenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	item := createTestStockItem(t, ctx, tenantA)
+
+	svc := newSupplyPolicyService()
+	_, err := svc.Create(ctx, tenantA, service.CreateSupplyPolicyRequest{
+		Scope: domain.SupplyScopeStockItem, StockItemID: &item.ID, Mode: domain.SupplyModeFree,
+	})
+	require.NoError(t, err)
+
+	// tenantB has no matching stock item (RLS-hidden), so GetByID fails —
+	// this is the expected not-found behaviour, not a leak.
+	_, _, err = svc.EffectivePolicyFor(ctx, tenantB, item.ID, branchReq)
+	assert.ErrorIs(t, err, pub.ErrNotFound)
+}
+
+// TestSupplyPolicyService_EffectivePolicyFor_ResolvesLatestTenantItemPolicy
+// exercises the full stack (repo -> domain.ResolvePolicy) for the
+// tenant+item tier, proving EffectivePolicyFor picks the most recent
+// effective_from row.
+func TestSupplyPolicyService_EffectivePolicyFor_ResolvesLatestTenantItemPolicy(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	item := createTestStockItem(t, ctx, tenantID)
+
+	svc := newSupplyPolicyService()
+	_, err := svc.Create(ctx, tenantID, service.CreateSupplyPolicyRequest{
+		Scope: domain.SupplyScopeStockItem, StockItemID: &item.ID, Mode: domain.SupplyModeExclusiveHQ,
+		EffectiveFrom: time.Now().Add(-24 * time.Hour),
+	})
+	require.NoError(t, err)
+	supplierID := uuid.New()
+	_, err = svc.Create(ctx, tenantID, service.CreateSupplyPolicyRequest{
+		Scope: domain.SupplyScopeStockItem, StockItemID: &item.ID, Mode: domain.SupplyModeApprovedSuppliers,
+		ApprovedSupplierIDs: []uuid.UUID{supplierID}, EffectiveFrom: time.Now().Add(-1 * time.Hour),
+	})
+	require.NoError(t, err)
+
+	mode, approved, err := svc.EffectivePolicyFor(ctx, tenantID, item.ID, branchReq)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SupplyModeApprovedSuppliers, mode)
+	assert.Equal(t, []uuid.UUID{supplierID}, approved)
 }

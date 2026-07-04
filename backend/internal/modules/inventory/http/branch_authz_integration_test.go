@@ -201,7 +201,7 @@ func newTestHandler(t *testing.T) *inventoryhttp.Handler {
 
 	return inventoryhttp.NewHandler(inventoryhttp.Params{
 		Svc:        service.NewInventoryService(service.Params{DB: httpSharedPool, LvlRepo: repo.NewStockLevelRepo(), MvRepo: repo.NewStockMovementRepo(), WhRepo: whRepo, Logger: logger}),
-		StockItems: service.NewStockItemService(service.StockItemParams{DB: httpSharedPool, Repo: repo.NewStockItemRepo(), Logger: logger}),
+		StockItems: service.NewStockItemService(service.StockItemParams{DB: httpSharedPool, Repo: repo.NewStockItemRepo(), SupplyPolicyRepo: repo.NewSupplyPolicyRepo(), Logger: logger}),
 		Warehouses: warehouses,
 		Transfers:  service.NewTransferOrderService(service.TransferOrderParams{DB: httpSharedPool, Repo: repo.NewTransferOrderRepo(), ItemRepo: repo.NewTransferOrderItemRepo(), Logger: logger}),
 		Shipments: service.NewShipmentService(service.ShipmentParams{
@@ -209,6 +209,9 @@ func newTestHandler(t *testing.T) *inventoryhttp.Handler {
 			LvlRepo: repo.NewStockLevelRepo(), MvRepo: repo.NewStockMovementRepo(),
 			TransferRepo: repo.NewTransferOrderRepo(), TransferItem: repo.NewTransferOrderItemRepo(),
 			WhRepo: whRepo, Logger: logger,
+		}),
+		SupplyPolicies: service.NewSupplyPolicyService(service.SupplyPolicyParams{
+			DB: httpSharedPool, Repo: repo.NewSupplyPolicyRepo(), StockRepo: repo.NewStockItemRepo(), Logger: logger,
 		}),
 		Logger: logger,
 		Engine: engine,

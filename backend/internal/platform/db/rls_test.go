@@ -127,10 +127,16 @@ func startContainer(t *testing.T) {
 }
 
 // bootstrapStmts returns the SQL statements needed to set up the test schema.
+//
+// app_migrator is created WITH BYPASSRLS to mirror deploy/postgres/init.sql
+// (ADR-SEC-002): production's migrator role bypasses RLS entirely (needed to
+// seed tenant_id IS NULL system data), it is not merely "a role with no
+// matching policy". A test that gave app_migrator ordinary FORCE-RLS default-
+// deny behaviour would assert something prod does not actually guarantee.
 func bootstrapStmts() []string {
 	return []string{
 		`DO $$ BEGIN
-			CREATE ROLE app_migrator LOGIN PASSWORD 'migrator_secret';
+			CREATE ROLE app_migrator LOGIN PASSWORD 'migrator_secret' BYPASSRLS;
 		EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
 
 		`DO $$ BEGIN
@@ -160,6 +166,37 @@ func bootstrapStmts() []string {
 
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE test_items TO app_runtime`,
 		`GRANT SELECT ON TABLE test_items TO app_migrator`,
+
+		// platform_items exercises WithAllTenantsTx/WithAllTenantsReadTx: a second,
+		// independent permissive SELECT policy that only grants visibility when
+		// app.tenant_scope = 'all_tenants' (set exclusively by WithAllTenantsTx /
+		// WithAllTenantsReadTx, never by WithTenantTx). PostgreSQL OR-combines
+		// permissive policies for the same command, so normal tenant isolation is
+		// unaffected: only callers that explicitly opted into the all-tenants path
+		// see cross-tenant rows.
+		`CREATE TABLE IF NOT EXISTS platform_items (
+			id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			tenant_id UUID NOT NULL,
+			name      TEXT NOT NULL
+		)`,
+
+		`ALTER TABLE platform_items ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE platform_items FORCE ROW LEVEL SECURITY`,
+
+		`DROP POLICY IF EXISTS platform_items_isolation ON platform_items`,
+		`DROP POLICY IF EXISTS platform_items_all_tenants_read ON platform_items`,
+
+		`CREATE POLICY platform_items_isolation ON platform_items
+			FOR ALL TO app_runtime
+			USING  (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+			WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)`,
+
+		`CREATE POLICY platform_items_all_tenants_read ON platform_items
+			FOR SELECT TO app_runtime
+			USING (current_setting('app.tenant_scope', true) = 'all_tenants')`,
+
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE platform_items TO app_runtime`,
+		`GRANT SELECT ON TABLE platform_items TO app_migrator`,
 	}
 }
 
@@ -300,11 +337,18 @@ func TestRLSWithoutTenantContext(t *testing.T) {
 	assert.Equal(t, 0, n, "without SET LOCAL, NULL tenant context must yield 0 rows")
 }
 
-// TestRLSForceRLSBypassAttempt verifies FORCE ROW LEVEL SECURITY behaviour:
+// TestRLSForceRLSBypassAttempt verifies FORCE ROW LEVEL SECURITY behaviour and
+// that it matches deploy/postgres/init.sql, not an idealized model of it:
 //
-//   - app_runtime without SET LOCAL → 0 rows (no GUC, policy false)
-//   - app_migrator without SET LOCAL → 0 rows (FORCE RLS; no matching policy
-//     means default-deny applies even to the table owner)
+//   - app_runtime without SET LOCAL → 0 rows. This is the actual security
+//     guarantee: the runtime role, which serves all tenant traffic, can never
+//     read a row without an explicit tenant context.
+//   - app_migrator without SET LOCAL → SEES rows. Production grants app_migrator
+//     BYPASSRLS (ADR-SEC-002, deploy/postgres/init.sql) so it can seed
+//     tenant_id IS NULL system data. A test asserting migrator sees 0 rows
+//     would be testing a role configuration prod does not use — exactly the
+//     "test asserts the wrong role's behaviour" class of gap that let b2b's
+//     Casbin/RLS gaps go unnoticed (docs/lessons-from-b2b.md item 1).
 func TestRLSForceRLSBypassAttempt(t *testing.T) {
 	startContainer(t)
 
@@ -324,20 +368,23 @@ func TestRLSForceRLSBypassAttempt(t *testing.T) {
 
 		var n int
 		require.NoError(t, conn.QueryRow(ctx, `SELECT COUNT(*) FROM test_items`).Scan(&n))
-		assert.Equal(t, 0, n, "app_runtime without SET LOCAL must see 0 rows")
+		assert.Equal(t, 0, n, "app_runtime without SET LOCAL must see 0 rows — this is the guarantee that matters")
 	})
 
-	t.Run("migrator_role_force_rls", func(t *testing.T) {
-		// item_isolation policy is FOR ALL TO app_runtime only.
-		// With FORCE ROW LEVEL SECURITY and no applicable policy, app_migrator
-		// is subject to default-deny and sees 0 rows.
+	t.Run("migrator_role_bypassrls_sees_rows", func(t *testing.T) {
+		// app_migrator has BYPASSRLS in both this test bootstrap and prod
+		// (deploy/postgres/init.sql), so FORCE ROW LEVEL SECURITY does not
+		// apply to it at all — it must see the row we just seeded, with no
+		// GUC set. The exact count is not asserted because other tests in
+		// this binary share the same test_items table; only "the seeded row
+		// is visible" is the invariant under test.
 		conn, err := migratorPool.inner.Acquire(ctx)
 		require.NoError(t, err)
 		defer conn.Release()
 
 		var n int
 		require.NoError(t, conn.QueryRow(ctx, `SELECT COUNT(*) FROM test_items`).Scan(&n))
-		assert.Equal(t, 0, n, "FORCE RLS: app_migrator with no matching policy must see 0 rows")
+		assert.GreaterOrEqual(t, n, 1, "BYPASSRLS: app_migrator must see rows even with no tenant context set (prod parity, ADR-SEC-002)")
 	})
 }
 
@@ -406,4 +453,110 @@ func TestRLSConcurrent(t *testing.T) {
 		})
 		require.NoErrorf(t, err, "cross-tenant check for tenant %d → %d", i, neighbour)
 	}
+}
+
+// TestWithTenantTxRejectsNilTenant verifies that WithTenantTx and
+// WithTenantReadTx refuse uuid.Nil outright, before ever touching the
+// database. uuid.Nil must never behave as an ambient "no tenant filter"
+// sentinel (docs/lessons-from-b2b.md item 6); platform/cross-tenant access is
+// only available via the separately-named WithAllTenantsTx/WithAllTenantsReadTx.
+func TestWithTenantTxRejectsNilTenant(t *testing.T) {
+	startContainer(t)
+
+	ctx := context.Background()
+	called := false
+	fn := func(pgx.Tx) error {
+		called = true
+		return nil
+	}
+
+	err := runtimePool.WithTenantTx(ctx, uuid.Nil, fn)
+	require.ErrorIs(t, err, ErrNilTenant)
+	assert.False(t, called, "WithTenantTx must reject uuid.Nil before invoking fn")
+
+	err = runtimePool.WithTenantReadTx(ctx, uuid.Nil, fn)
+	require.ErrorIs(t, err, ErrNilTenant)
+	assert.False(t, called, "WithTenantReadTx must reject uuid.Nil before invoking fn")
+}
+
+// insertPlatformItem and countPlatformItems mirror insertItem/countItems for
+// the platform_items table (see bootstrapStmts), which additionally carries a
+// permissive SELECT policy gated on app.tenant_scope = 'all_tenants'.
+func insertPlatformItem(t *testing.T, ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, name string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := tx.QueryRow(ctx,
+		`INSERT INTO platform_items (tenant_id, name) VALUES ($1, $2) RETURNING id`,
+		tenantID, name,
+	).Scan(&id)
+	require.NoErrorf(t, err, "insertPlatformItem %s", name)
+	return id
+}
+
+func countPlatformItems(t *testing.T, ctx context.Context, tx pgx.Tx) int {
+	t.Helper()
+	var n int
+	require.NoError(t, tx.QueryRow(ctx, `SELECT COUNT(*) FROM platform_items`).Scan(&n))
+	return n
+}
+
+// TestRLSAllTenantsScope verifies WithAllTenantsTx/WithAllTenantsReadTx:
+//
+//   - Without any RLS GUC set at all (raw connection, no SET LOCAL of any
+//     kind), cross-tenant rows in platform_items remain invisible — the
+//     all_tenants policy branch requires an explicit opt-in, it is not a
+//     second ambient bypass.
+//   - With WithAllTenantsReadTx (which sets app.tenant_scope = 'all_tenants'
+//     and deliberately never sets app.tenant_id), rows from every tenant
+//     become visible on platform_items specifically, because that table has a
+//     policy that checks for it. Ordinary tenant-scoped tables (test_items)
+//     are unaffected, because their policies never check app.tenant_scope.
+func TestRLSAllTenantsScope(t *testing.T) {
+	startContainer(t)
+
+	ctx := context.Background()
+	tenantA := uuid.New()
+	tenantB := uuid.New()
+
+	require.NoError(t, runtimePool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		insertPlatformItem(t, ctx, tx, tenantA, "platform-a")
+		return nil
+	}))
+	require.NoError(t, runtimePool.WithTenantTx(ctx, tenantB, func(tx pgx.Tx) error {
+		insertPlatformItem(t, ctx, tx, tenantB, "platform-b")
+		return nil
+	}))
+
+	t.Run("no_guc_at_all_sees_nothing", func(t *testing.T) {
+		conn, err := runtimePool.inner.Acquire(ctx)
+		require.NoError(t, err)
+		defer conn.Release()
+
+		var n int
+		require.NoError(t, conn.QueryRow(ctx, `SELECT COUNT(*) FROM platform_items`).Scan(&n))
+		assert.Equal(t, 0, n, "without any GUC set, cross-tenant rows must stay invisible")
+	})
+
+	t.Run("with_all_tenants_scope_sees_both", func(t *testing.T) {
+		err := runtimePool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
+			n := countPlatformItems(t, ctx, tx)
+			assert.GreaterOrEqual(t, n, 2, "WithAllTenantsReadTx must see rows across tenants on a table with an all_tenants policy")
+			return nil
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("ordinary_tenant_scope_is_unaffected", func(t *testing.T) {
+		// A normal, single-tenant read must still only see its own row —
+		// the all_tenants branch is additive, not a general-purpose leak.
+		err := runtimePool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+			var n int
+			require.NoError(t, tx.QueryRow(ctx,
+				`SELECT COUNT(*) FROM platform_items WHERE tenant_id = $1`, tenantA,
+			).Scan(&n))
+			assert.Equal(t, 1, n, "tenant-scoped read must still see exactly its own row")
+			return nil
+		})
+		require.NoError(t, err)
+	})
 }

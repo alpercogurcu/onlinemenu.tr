@@ -443,14 +443,30 @@ func (s *ShipmentService) Receive(ctx context.Context, tenantID uuid.UUID, princ
 		}
 
 		if sh.TransferOrderID != nil {
-			if err := s.transitionLinkedBTO(ctx, tx, *sh.TransferOrderID, domain.BTOStatusReceived); err != nil {
-				return err
-			}
+			// Quantity-gated received transition (ADR-DATA-006 Açık Karar #1,
+			// closed 2026-07-04): a BTO may be fulfilled by N interleaved
+			// shipments, so this shipment's own receive event must NOT push
+			// the BTO to 'received' until every line item of the BTO has
+			// received_qty >= approved_qty across ALL of its shipments
+			// (AllReceived aggregates the denormalized received_qty already
+			// summed by AddReceivedQty above, cumulative across shipments).
+			// Moving to 'received' unconditionally here — as a prior version
+			// of this code did — closed off allowedBTOTransitions[received]
+			// = {closed} and left a second, still-partial shipment for the
+			// same BTO unable to Advance (fulfilling/shipped -> shipped is
+			// the no-op guarded by transitionLinkedBTO's status==to check,
+			// but shipped -> received a second time from an out-of-order
+			// prior 'received' state failed the transition guard). Until
+			// full receipt, the BTO simply stays at its current status
+			// (shipped) — no new status is introduced.
 			allReceived, err := s.transferItem.AllReceived(ctx, tx, *sh.TransferOrderID)
 			if err != nil {
 				return fmt.Errorf("check all received: %w", err)
 			}
 			if allReceived {
+				if err := s.transitionLinkedBTO(ctx, tx, *sh.TransferOrderID, domain.BTOStatusReceived); err != nil {
+					return err
+				}
 				if err := s.transitionLinkedBTO(ctx, tx, *sh.TransferOrderID, domain.BTOStatusClosed); err != nil {
 					return err
 				}

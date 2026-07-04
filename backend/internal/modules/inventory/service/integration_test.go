@@ -517,13 +517,16 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 	require.Len(t, btoItemsAfterShip, 1)
 	assert.InDelta(t, 40.0, btoItemsAfterShip[0].ShippedQty, 0.001, "shipped_qty must sum both shipments (25+15)")
 
-	// Receive shipment 1: partial receipt, BTO -> received, but NOT closed yet
-	// (shipment 2's 15kg has not arrived).
+	// Receive shipment 1: partial receipt (25 of 40) — the BTO must stay at
+	// 'shipped' (ADR-DATA-006 Açık Karar #1, closed 2026-07-04: the received
+	// transition is quantity-gated on the BTO's full total across ALL of its
+	// shipments, not on any single shipment's own receive event) so that a
+	// still-outstanding sibling shipment can still Advance.
 	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
 	require.NoError(t, err)
 	afterReceive1, err := toSvc.Get(ctx, tenantA, bto.ID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.BTOStatusReceived, afterReceive1.Status)
+	assert.Equal(t, domain.BTOStatusShipped, afterReceive1.Status, "BTO must not move to received until every shipment's receive completes the total")
 
 	btoItemsAfterReceive1, err := toSvc.ListItems(ctx, tenantA, bto.ID)
 	require.NoError(t, err)
@@ -541,6 +544,96 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 	require.NoError(t, err)
 	require.Len(t, btoItemsFinal, 1)
 	assert.InDelta(t, 40.0, btoItemsFinal[0].ReceivedQty, 0.001, "received_qty must sum both shipments (25+15)")
+}
+
+// TestTransferOrder_InterleavedShipments_SecondAdvanceNotBlockedByFirstReceive
+// is the regression test for ADR-DATA-006 Açık Karar #1 (closed 2026-07-04):
+// unlike TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive
+// (which advances both shipments before receiving either), this test
+// interleaves the two shipments' lifecycles — ship1 advance, ship1 receive,
+// ship2 advance, ship2 receive — which is the exact sequence that triggered
+// the bug: a premature, unconditional shipped->received transition on
+// ship1's receive left allowedBTOTransitions[received] = {closed} and made
+// ship2's Advance (fulfilling/shipped -> shipped) fail with a 409, because
+// the BTO was no longer at 'shipped' when ship2 tried to advance.
+func TestTransferOrder_InterleavedShipments_SecondAdvanceNotBlockedByFirstReceive(t *testing.T) {
+	ctx := context.Background()
+	sourceWH := createTestWarehouse(t, ctx, tenantA, branchSrc)
+	destWH := createTestWarehouse(t, ctx, tenantA, branchReq)
+	item := createTestStockItem(t, ctx, tenantA)
+	seedSourceStock(t, ctx, tenantA, sourceWH.ID, item.ID, 100, "kg")
+
+	toSvc := newTransferOrderService()
+	shSvc := newShipmentService()
+
+	bto, _, err := toSvc.Create(ctx, tenantA, service.CreateTransferOrderRequest{
+		RequestingBranchID: branchReq,
+		SourceBranchID:     branchSrc,
+		Items: []service.CreateTransferOrderItemRequest{
+			{StockItemID: item.ID, RequestedQty: 40, Unit: "kg"},
+		},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+		{StockItemID: item.ID, ApprovedQty: 40},
+	})
+	require.NoError(t, err)
+	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	require.NoError(t, err)
+
+	createShipment := func(qty float64) domain.Shipment {
+		sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+			FromWarehouseID: sourceWH.ID,
+			ToBranchID:      branchReq,
+			TransferOrderID: &bto.ID,
+			Items: []service.CreateShipmentItemRequest{
+				{StockItemID: item.ID, RequestedQty: qty, Unit: "kg"},
+			},
+		})
+		require.NoError(t, err)
+		return sh
+	}
+
+	// Shipment 1 (25kg): create, advance (fulfilling -> shipped), receive
+	// (partial: 25 of 40 -> BTO must stay 'shipped', not jump to 'received').
+	ship1 := createShipment(25)
+	_, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), ship1.ID)
+	require.NoError(t, err)
+	_, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), ship1.ID)
+	require.NoError(t, err)
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
+	require.NoError(t, err)
+
+	afterReceive1, err := toSvc.Get(ctx, tenantA, bto.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BTOStatusShipped, afterReceive1.Status, "partial receive must not close off the shipped->shipped no-op that ship2's Advance depends on")
+
+	// Shipment 2 (15kg): created and advanced AFTER ship1 already received.
+	// This is the exact step that used to 409 before the fix.
+	ship2 := createShipment(15)
+	_, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), ship2.ID)
+	require.NoError(t, err)
+	_, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), ship2.ID)
+	require.NoError(t, err, "ship2's Advance must not be blocked by ship1's earlier receive")
+
+	afterShip2, err := toSvc.Get(ctx, tenantA, bto.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BTOStatusShipped, afterShip2.Status)
+
+	// Receive shipment 2: completes the total (25+15=40) -> shipped -> received -> closed.
+	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
+	require.NoError(t, err)
+
+	afterReceive2, err := toSvc.Get(ctx, tenantA, bto.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BTOStatusClosed, afterReceive2.Status, "BTO must auto-close once the last interleaved shipment completes the total")
+
+	btoItemsFinal, err := toSvc.ListItems(ctx, tenantA, bto.ID)
+	require.NoError(t, err)
+	require.Len(t, btoItemsFinal, 1)
+	assert.InDelta(t, 40.0, btoItemsFinal[0].ReceivedQty, 0.001, "received_qty must sum both interleaved shipments (25+15)")
 }
 
 // TestTransferOrderApprove_SetsUnitPrice proves that the source branch can

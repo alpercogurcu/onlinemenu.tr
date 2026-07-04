@@ -69,7 +69,7 @@ export default function UsersPage() {
               <Users className="size-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold">Üye bulunamadı</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Kullanıcı davetleri Faz 2'de aktif olacak.
+                Kullanıcı davetleri Faz 2&apos;de aktif olacak.
               </p>
             </div>
           ) : (

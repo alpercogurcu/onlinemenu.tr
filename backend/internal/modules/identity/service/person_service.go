@@ -17,8 +17,12 @@ import (
 )
 
 // PersonService manages platform-level person records.
-// Person operations use uuid.Nil as the RLS tenant context because persons
-// are not owned by any single tenant — they exist at platform scope.
+// Person read operations use db.WithAllTenantsTx/WithAllTenantsReadTx (the
+// app.tenant_scope = 'all_tenants' RLS path) because persons are not owned by
+// any single tenant — they exist at platform scope. This replaces the former
+// uuid.Nil "tenant" sentinel (docs/lessons-from-b2b.md item 6): uuid.Nil is no
+// longer a valid WithTenantTx argument (see db.ErrNilTenant), so platform-level
+// access must go through this explicitly-named, separately-authorized path.
 type PersonService struct {
 	db         *db.Pool
 	personRepo *repo.PersonRepo
@@ -44,10 +48,10 @@ func NewPersonService(p PersonParams) *PersonService {
 }
 
 // GetByKeycloakSub resolves a Keycloak subject claim to a platform Person.
-// uuid.Nil is used as the tenant context: the persons table is cross-tenant.
+// This is a platform-scope read: the persons table is cross-tenant.
 func (s *PersonService) GetByKeycloakSub(ctx context.Context, sub string) (domain.Person, error) {
 	var person domain.Person
-	err := s.db.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+	err := s.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		person, err = s.personRepo.GetByKeycloakSub(ctx, tx, sub)
 		return err
@@ -59,10 +63,10 @@ func (s *PersonService) GetByKeycloakSub(ctx context.Context, sub string) (domai
 }
 
 // GetByID returns the Person for the given personID.
-// uuid.Nil is used as the tenant context: the persons table is cross-tenant.
+// This is a platform-scope read: the persons table is cross-tenant.
 func (s *PersonService) GetByID(ctx context.Context, personID uuid.UUID) (domain.Person, error) {
 	var person domain.Person
-	err := s.db.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+	err := s.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		person, err = s.personRepo.GetByID(ctx, tx, personID)
 		return err
@@ -74,10 +78,10 @@ func (s *PersonService) GetByID(ctx context.Context, personID uuid.UUID) (domain
 }
 
 // Create inserts a new Person at platform scope.
-// uuid.Nil is used as the tenant context because the person has no tenant yet.
+// This is a platform-scope write: the person has no tenant yet.
 func (s *PersonService) Create(ctx context.Context, p domain.Person) (domain.Person, error) {
 	var created domain.Person
-	err := s.db.WithTenantTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+	err := s.db.WithAllTenantsTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		created, err = s.personRepo.Create(ctx, tx, p)
 		return err

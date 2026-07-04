@@ -14,6 +14,7 @@ import (
 
 	"onlinemenu.tr/internal/modules/billing/domain"
 	"onlinemenu.tr/internal/modules/billing/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -78,7 +79,13 @@ var ErrIdempotent = errors.New("billing/service: idempotency key already used")
 
 // GenerateInvoice creates an invoice record, assigns a number, builds UBL, and submits to provider.
 // Idempotent: if the key was used before the existing invoice is returned without re-submission.
-func (s *BillingService) GenerateInvoice(ctx context.Context, req GenerateInvoiceRequest) (domain.Invoice, error) {
+// The acting principal must belong to the requested branch_id (ADR-AUTH-001
+// layer 3 / security sprint); there is no persisted entity yet at this
+// point, so the client-supplied branch_id is what gets validated.
+func (s *BillingService) GenerateInvoice(ctx context.Context, principal auth.Principal, req GenerateInvoiceRequest) (domain.Invoice, error) {
+	if err := requireBranch(ctx, principal, req.BranchID); err != nil {
+		return domain.Invoice{}, err
+	}
 	if req.IdempotencyKey == "" {
 		return domain.Invoice{}, fmt.Errorf("billing/service: idempotency key required")
 	}
@@ -217,9 +224,18 @@ func (s *BillingService) ListInvoices(ctx context.Context, tenantID uuid.UUID, l
 
 // RetrySubmission re-submits an invoice that failed to reach the provider.
 // Only invoices in "draft" or "pending_submission" status can be retried.
-func (s *BillingService) RetrySubmission(ctx context.Context, tenantID, invoiceID uuid.UUID) (domain.Invoice, error) {
+// The acting principal must cover the invoice's branch_id (ADR-AUTH-001
+// layer 3 / security sprint); this is checked immediately after loading the
+// entity but BEFORE the status-eligibility check below, so a
+// branch-forbidden caller receives 403, never a 422 that would otherwise
+// leak the invoice's current status to someone who has no business acting
+// on it.
+func (s *BillingService) RetrySubmission(ctx context.Context, principal auth.Principal, tenantID, invoiceID uuid.UUID) (domain.Invoice, error) {
 	inv, err := s.GetInvoice(ctx, tenantID, invoiceID)
 	if err != nil {
+		return domain.Invoice{}, err
+	}
+	if err := requireBranch(ctx, principal, inv.BranchID); err != nil {
 		return domain.Invoice{}, err
 	}
 

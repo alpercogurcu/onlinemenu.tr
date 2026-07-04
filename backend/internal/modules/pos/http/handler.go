@@ -12,10 +12,13 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	"github.com/redis/go-redis/v9"
+
 	"onlinemenu.tr/internal/modules/pos/domain"
 	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/service"
 	"onlinemenu.tr/internal/platform/auth"
+	"onlinemenu.tr/internal/platform/httpx"
 )
 
 // Handler exposes POS REST endpoints.
@@ -23,6 +26,7 @@ type Handler struct {
 	checks *service.CheckService
 	orders *service.OrderService
 	logger *zap.Logger
+	engine *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -32,27 +36,55 @@ type Params struct {
 	Checks *service.CheckService
 	Orders *service.OrderService
 	Logger *zap.Logger
+	Cache  *redis.Client
+	Engine *auth.Engine
 }
 
-func NewHandler(p Params) *Handler {
-	return &Handler{checks: p.Checks, orders: p.Orders, logger: p.Logger}
+// HandlerWithCache wraps Handler with the Redis client needed for the
+// idempotency middleware (ADR-SEC-003).
+type HandlerWithCache struct {
+	h     *Handler
+	cache *redis.Client
+}
+
+func NewHandler(p Params) *HandlerWithCache {
+	return &HandlerWithCache{
+		h:     &Handler{checks: p.Checks, orders: p.Orders, logger: p.Logger, engine: p.Engine},
+		cache: p.Cache,
+	}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts POS endpoints on the provided router.
-func (h *Handler) RegisterRoutes(r *chi.Mux) {
+// ADR-SEC-003: order creation and check close require Idempotency-Key —
+// both are POST endpoints with side effects (kitchen ticket dispatch, fiscal
+// close) that must not be duplicated by client retries. Open/cancel/accept/
+// reject/advance are not idempotency-key-gated: cancel/accept/reject/advance
+// are already guarded by the status-transition machine (a retry lands on an
+// already-transitioned row and gets a 409, not a duplicate side effect), and
+// open-check has no equivalent natural dedup key from the client today.
+//
+// Every route also carries auth.RequirePermission (ADR-AUTH-001, layer 2). Where
+// a route combines both, RequirePermission is listed first in r.With so a
+// caller without permission never reaches the idempotency reservation logic.
+func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/pos", func(r chi.Router) {
-		r.Get("/checks", h.listChecks)
-		r.Post("/checks", h.openCheck)
-		r.Get("/checks/{id}", h.getCheck)
-		r.Post("/checks/{id}/close", h.closeCheck)
-		r.Post("/checks/{id}/cancel", h.cancelCheck)
-		r.Get("/checks/{id}/orders", h.listOrdersByCheck)
+		r.With(hwc.h.permit("pos.check.read")).Get("/checks", hwc.h.listChecks)
+		r.With(hwc.h.permit("pos.check.open")).Post("/checks", hwc.h.openCheck)
+		r.With(hwc.h.permit("pos.check.read")).Get("/checks/{id}", hwc.h.getCheck)
+		r.With(hwc.h.permit("pos.check.close"), httpx.Idempotency(hwc.cache)).Post("/checks/{id}/close", hwc.h.closeCheck)
+		r.With(hwc.h.permit("pos.check.cancel")).Post("/checks/{id}/cancel", hwc.h.cancelCheck)
+		r.With(hwc.h.permit("pos.order.read")).Get("/checks/{id}/orders", hwc.h.listOrdersByCheck)
 
-		r.Post("/orders", h.placeOrder)
-		r.Get("/orders/{id}", h.getOrder)
-		r.Post("/orders/{id}/accept", h.acceptOrder)
-		r.Post("/orders/{id}/reject", h.rejectOrder)
-		r.Post("/orders/{id}/advance", h.advanceOrder)
+		r.With(hwc.h.permit("pos.order.place"), httpx.Idempotency(hwc.cache)).Post("/orders", hwc.h.placeOrder)
+		r.With(hwc.h.permit("pos.order.read")).Get("/orders/{id}", hwc.h.getOrder)
+		r.With(hwc.h.permit("pos.order.accept")).Post("/orders/{id}/accept", hwc.h.acceptOrder)
+		r.With(hwc.h.permit("pos.order.reject")).Post("/orders/{id}/reject", hwc.h.rejectOrder)
+		r.With(hwc.h.permit("pos.order.advance")).Post("/orders/{id}/advance", hwc.h.advanceOrder)
 	})
 }
 
@@ -106,7 +138,7 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.checks.Open(r.Context(), p.TenantID, domain.Check{
+	c, err := h.checks.Open(r.Context(), p.TenantID, p, domain.Check{
 		BranchID:   req.BranchID,
 		TableLabel: req.TableLabel,
 		Note:       req.Note,
@@ -147,7 +179,7 @@ func (h *Handler) closeCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	c, err := h.checks.Close(r.Context(), p.TenantID, id, p.PersonID)
+	c, err := h.checks.Close(r.Context(), p.TenantID, p, id, p.PersonID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -165,7 +197,7 @@ func (h *Handler) cancelCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	c, err := h.checks.Cancel(r.Context(), p.TenantID, id, p.PersonID)
+	c, err := h.checks.Cancel(r.Context(), p.TenantID, p, id, p.PersonID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -243,7 +275,7 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	o, err := h.orders.Place(r.Context(), p.TenantID, domain.Order{
+	o, err := h.orders.Place(r.Context(), p.TenantID, p, domain.Order{
 		BranchID:             req.BranchID,
 		CheckID:              req.CheckID,
 		OrderChannel:         domain.OrderChannel(req.OrderChannel),
@@ -287,7 +319,7 @@ func (h *Handler) acceptOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	o, err := h.orders.Accept(r.Context(), p.TenantID, id, p.PersonID)
+	o, err := h.orders.Accept(r.Context(), p.TenantID, p, id, p.PersonID)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -312,7 +344,7 @@ func (h *Handler) rejectOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	o, err := h.orders.Reject(r.Context(), p.TenantID, id, p.PersonID, req.Reason)
+	o, err := h.orders.Reject(r.Context(), p.TenantID, p, id, p.PersonID, req.Reason)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -337,7 +369,7 @@ func (h *Handler) advanceOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	o, err := h.orders.AdvanceStatus(r.Context(), p.TenantID, id, domain.OrderStatus(req.Status))
+	o, err := h.orders.AdvanceStatus(r.Context(), p.TenantID, p, id, domain.OrderStatus(req.Status))
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -383,16 +415,16 @@ type orderItemResponse struct {
 }
 
 type orderResponse struct {
-	ID           uuid.UUID          `json:"id"`
-	TenantID     uuid.UUID          `json:"tenant_id"`
-	BranchID     uuid.UUID          `json:"branch_id"`
-	CheckID      *uuid.UUID         `json:"check_id"`
-	OrderChannel string             `json:"order_channel"`
-	Status       string             `json:"status"`
-	Note         string             `json:"note"`
+	ID           uuid.UUID           `json:"id"`
+	TenantID     uuid.UUID           `json:"tenant_id"`
+	BranchID     uuid.UUID           `json:"branch_id"`
+	CheckID      *uuid.UUID          `json:"check_id"`
+	OrderChannel string              `json:"order_channel"`
+	Status       string              `json:"status"`
+	Note         string              `json:"note"`
 	Items        []orderItemResponse `json:"items"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    time.Time           `json:"updated_at"`
 }
 
 func toOrderResponse(o domain.Order) orderResponse {
@@ -439,6 +471,14 @@ type orderItemInput struct {
 func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	if errors.Is(err, pub.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, pub.ErrInvalidTransition) {
+		http.Error(w, "invalid status transition", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	h.logger.Error("pos handler error", zap.Error(err))

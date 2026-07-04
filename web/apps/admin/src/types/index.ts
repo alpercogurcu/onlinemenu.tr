@@ -110,21 +110,50 @@ export interface Payment {
   created_at: string
 }
 
-// Inventory
-export interface InventoryLevel {
+// Inventory (ADR-DATA-005 Faz 1 — warehouse-scoped, not branch-scoped)
+export type StockItemKind = "raw" | "intermediate" | "packaging" | "finished"
+export interface StockItem {
   id: string
-  product_id: string
-  branch_id: string
-  quantity: number
+  sku: string
+  name: string
+  kind: StockItemKind
+  canonical_unit: string
+  category?: string
+  is_active: boolean
+  created_at: string
   updated_at: string
 }
 
+export type WarehouseType = "depo" | "imalat"
+export interface Warehouse {
+  id: string
+  branch_id: string
+  name: string
+  warehouse_type: WarehouseType
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface InventoryLevel {
+  id: string
+  warehouse_id: string
+  stock_item_id: string
+  on_hand: number
+  reserved: number
+  available: number
+  reorder_point?: number | null
+  unit: string
+  updated_at: string
+}
+
+export type MovementType = "in" | "out" | "adjust" | "transfer" | "reserve" | "release"
 export interface InventoryTransaction {
   id: string
-  product_id: string
-  branch_id: string
-  type: string
-  quantity_delta: number
+  warehouse_id: string
+  stock_item_id: string
+  movement_type: MovementType
+  quantity: number
   reference_id: string | null
   reference_type: string | null
   notes: string | null

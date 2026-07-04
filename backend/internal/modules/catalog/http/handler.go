@@ -24,6 +24,7 @@ type Handler struct {
 	modifiers  *service.ModifierService
 	menus      *service.MenuService
 	logger     *zap.Logger
+	engine     *auth.Engine
 }
 
 // Params groups fx-injected dependencies for NewHandler.
@@ -35,6 +36,7 @@ type Params struct {
 	Modifiers  *service.ModifierService
 	Menus      *service.MenuService
 	Logger     *zap.Logger
+	Engine     *auth.Engine
 }
 
 // NewHandler constructs a Handler for fx injection.
@@ -45,52 +47,58 @@ func NewHandler(p Params) *Handler {
 		modifiers:  p.Modifiers,
 		menus:      p.Menus,
 		logger:     p.Logger,
+		engine:     p.Engine,
 	}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts catalog endpoints on the provided router.
 func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/catalog", func(r chi.Router) {
-		r.Get("/categories", h.listCategories)
-		r.Post("/categories", h.createCategory)
-		r.Get("/categories/{id}", h.getCategory)
+		r.With(h.permit("catalog.category.read")).Get("/categories", h.listCategories)
+		r.With(h.permit("catalog.category.create")).Post("/categories", h.createCategory)
+		r.With(h.permit("catalog.category.read")).Get("/categories/{id}", h.getCategory)
 
-		r.Get("/products", h.listProducts)
-		r.Post("/products", h.createProduct)
-		r.Get("/products/{id}", h.getProduct)
-		r.Put("/products/{id}", h.updateProduct)
-		r.Delete("/products/{id}", h.deleteProduct)
+		r.With(h.permit("catalog.product.read")).Get("/products", h.listProducts)
+		r.With(h.permit("catalog.product.create")).Post("/products", h.createProduct)
+		r.With(h.permit("catalog.product.read")).Get("/products/{id}", h.getProduct)
+		r.With(h.permit("catalog.product.update")).Put("/products/{id}", h.updateProduct)
+		r.With(h.permit("catalog.product.delete")).Delete("/products/{id}", h.deleteProduct)
 
-		r.Get("/categories/{id}/products", h.listByCategory)
+		r.With(h.permit("catalog.product.read")).Get("/categories/{id}/products", h.listByCategory)
 
 		// Modifier groups
-		r.Post("/modifier-groups", h.createModifierGroup)
-		r.Get("/modifier-groups", h.listModifierGroups)
-		r.Get("/modifier-groups/{id}", h.getModifierGroup)
-		r.Put("/modifier-groups/{id}", h.updateModifierGroup)
-		r.Delete("/modifier-groups/{id}", h.deleteModifierGroup)
+		r.With(h.permit("catalog.modifier_group.create")).Post("/modifier-groups", h.createModifierGroup)
+		r.With(h.permit("catalog.modifier_group.read")).Get("/modifier-groups", h.listModifierGroups)
+		r.With(h.permit("catalog.modifier_group.read")).Get("/modifier-groups/{id}", h.getModifierGroup)
+		r.With(h.permit("catalog.modifier_group.update")).Put("/modifier-groups/{id}", h.updateModifierGroup)
+		r.With(h.permit("catalog.modifier_group.delete")).Delete("/modifier-groups/{id}", h.deleteModifierGroup)
 
 		// Modifiers within a group
-		r.Post("/modifier-groups/{id}/modifiers", h.createModifier)
-		r.Get("/modifier-groups/{id}/modifiers", h.listModifiers)
-		r.Put("/modifier-groups/{groupID}/modifiers/{id}", h.updateModifier)
-		r.Delete("/modifier-groups/{groupID}/modifiers/{id}", h.deleteModifier)
+		r.With(h.permit("catalog.modifier.create")).Post("/modifier-groups/{id}/modifiers", h.createModifier)
+		r.With(h.permit("catalog.modifier.read")).Get("/modifier-groups/{id}/modifiers", h.listModifiers)
+		r.With(h.permit("catalog.modifier.update")).Put("/modifier-groups/{groupID}/modifiers/{id}", h.updateModifier)
+		r.With(h.permit("catalog.modifier.delete")).Delete("/modifier-groups/{groupID}/modifiers/{id}", h.deleteModifier)
 
 		// Product ↔ modifier group assignments
-		r.Post("/products/{id}/modifier-groups", h.assignModifierGroup)
-		r.Get("/products/{id}/modifier-groups", h.listProductModifierGroups)
-		r.Delete("/products/{id}/modifier-groups/{groupID}", h.removeModifierGroup)
+		r.With(h.permit("catalog.modifier_group.assign")).Post("/products/{id}/modifier-groups", h.assignModifierGroup)
+		r.With(h.permit("catalog.modifier_group.read")).Get("/products/{id}/modifier-groups", h.listProductModifierGroups)
+		r.With(h.permit("catalog.modifier_group.assign")).Delete("/products/{id}/modifier-groups/{groupID}", h.removeModifierGroup)
 
 		// Menus
-		r.Post("/menus", h.createMenu)
-		r.Get("/menus", h.listMenus)
-		r.Get("/menus/{id}", h.getMenu)
-		r.Put("/menus/{id}", h.updateMenu)
+		r.With(h.permit("catalog.menu.create")).Post("/menus", h.createMenu)
+		r.With(h.permit("catalog.menu.read")).Get("/menus", h.listMenus)
+		r.With(h.permit("catalog.menu.read")).Get("/menus/{id}", h.getMenu)
+		r.With(h.permit("catalog.menu.update")).Put("/menus/{id}", h.updateMenu)
 
 		// Menu items
-		r.Post("/menus/{id}/items", h.addMenuItem)
-		r.Get("/menus/{id}/items", h.listMenuItems)
-		r.Delete("/menus/{id}/items/{productID}", h.removeMenuItem)
+		r.With(h.permit("catalog.menu_item.create")).Post("/menus/{id}/items", h.addMenuItem)
+		r.With(h.permit("catalog.menu_item.read")).Get("/menus/{id}/items", h.listMenuItems)
+		r.With(h.permit("catalog.menu_item.delete")).Delete("/menus/{id}/items/{productID}", h.removeMenuItem)
 	})
 }
 
@@ -233,6 +241,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock bool       `json:"auto_close_on_zero_stock"`
 		StockQuantity        *int       `json:"stock_quantity"`
 		SortOrder            int16      `json:"sort_order"`
+		SourceStockItemID    *uuid.UUID `json:"source_stock_item_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -261,6 +270,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock: req.AutoCloseOnZeroStock,
 		StockQuantity:        req.StockQuantity,
 		SortOrder:            req.SortOrder,
+		SourceStockItemID:    req.SourceStockItemID,
 	})
 	if err != nil {
 		h.error(w, r, err)
@@ -292,6 +302,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock bool       `json:"auto_close_on_zero_stock"`
 		StockQuantity        *int       `json:"stock_quantity"`
 		SortOrder            int16      `json:"sort_order"`
+		SourceStockItemID    *uuid.UUID `json:"source_stock_item_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -311,6 +322,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		AutoCloseOnZeroStock: req.AutoCloseOnZeroStock,
 		StockQuantity:        req.StockQuantity,
 		SortOrder:            req.SortOrder,
+		SourceStockItemID:    req.SourceStockItemID,
 	})
 	if err != nil {
 		h.error(w, r, err)

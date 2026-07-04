@@ -25,6 +25,7 @@ import (
 type Handler struct {
 	payments *service.PaymentService
 	logger   *zap.Logger
+	engine   *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -34,6 +35,7 @@ type Params struct {
 	Payments *service.PaymentService
 	Logger   *zap.Logger
 	Cache    *redis.Client
+	Engine   *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client needed for idempotency middleware.
@@ -44,18 +46,25 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{payments: p.Payments, logger: p.Logger},
+		h:     &Handler{payments: p.Payments, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
 
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
+}
+
 // RegisterRoutes mounts payment endpoints on the provided router.
-// POST /api/v1/payments requires Idempotency-Key (ADR-SEC-003).
+// POST /api/v1/payments requires Idempotency-Key (ADR-SEC-003). RequirePermission
+// is listed first in r.With so an unauthorized caller never reaches the
+// idempotency reservation logic.
 func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/payments", func(r chi.Router) {
-		r.Get("/", hwc.h.listPayments)
-		r.With(httpx.Idempotency(hwc.cache)).Post("/", hwc.h.registerSale)
-		r.Get("/{id}", hwc.h.getPayment)
+		r.With(hwc.h.permit("payment.payment.read")).Get("/", hwc.h.listPayments)
+		r.With(hwc.h.permit("payment.sale.register"), httpx.Idempotency(hwc.cache)).Post("/", hwc.h.registerSale)
+		r.With(hwc.h.permit("payment.payment.read")).Get("/{id}", hwc.h.getPayment)
 	})
 }
 

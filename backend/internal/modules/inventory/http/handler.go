@@ -21,30 +21,91 @@ import (
 
 // Handler is the inventory HTTP handler.
 type Handler struct {
-	svc    *service.InventoryService
-	logger *zap.Logger
+	svc        *service.InventoryService
+	stockItems *service.StockItemService
+	warehouses *service.WarehouseService
+	transfers  *service.TransferOrderService
+	shipments  *service.ShipmentService
+	logger     *zap.Logger
+	engine     *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
 type Params struct {
 	fx.In
 
-	Svc    *service.InventoryService
-	Logger *zap.Logger
+	Svc        *service.InventoryService
+	StockItems *service.StockItemService
+	Warehouses *service.WarehouseService
+	Transfers  *service.TransferOrderService
+	Shipments  *service.ShipmentService
+	Logger     *zap.Logger
+	Engine     *auth.Engine
 }
 
 // NewHandler constructs a Handler for fx injection.
 func NewHandler(p Params) *Handler {
-	return &Handler{svc: p.Svc, logger: p.Logger}
+	return &Handler{
+		svc:        p.Svc,
+		stockItems: p.StockItems,
+		warehouses: p.Warehouses,
+		transfers:  p.Transfers,
+		shipments:  p.Shipments,
+		logger:     p.Logger,
+		engine:     p.Engine,
+	}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts inventory endpoints on the router.
 func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/inventory", func(r chi.Router) {
-		r.Get("/levels", h.listLevels)
-		r.Get("/levels/{productID}", h.getLevel)
-		r.Post("/transactions", h.recordAdjustment)
-		r.Get("/transactions", h.listTransactions)
+		// Stock levels / movements are warehouse+stock_item scoped (ADR-DATA-005).
+		// manager/warehouse only (ADR-DATA-005 İlke 4) — see authz.rego.
+		r.With(h.permit("inventory.level.read")).Get("/levels", h.listLevels)
+		r.With(h.permit("inventory.level.read")).Get("/levels/{stockItemID}", h.getLevel)
+		r.With(h.permit("inventory.movement.create")).Post("/movements", h.recordMovement)
+		r.With(h.permit("inventory.movement.read")).Get("/movements", h.listMovements)
+
+		// Stock items (ADR-DATA-005 Faz 1)
+		r.With(h.permit("inventory.stock_item.create")).Post("/stock-items", h.createStockItem)
+		r.With(h.permit("inventory.stock_item.read")).Get("/stock-items", h.listStockItems)
+		r.With(h.permit("inventory.stock_item.read")).Get("/stock-items/{id}", h.getStockItem)
+		r.With(h.permit("inventory.stock_item.update")).Put("/stock-items/{id}", h.updateStockItem)
+		r.With(h.permit("inventory.stock_item.delete")).Delete("/stock-items/{id}", h.deleteStockItem)
+
+		// Warehouses (ADR-DATA-005 Faz 1)
+		r.With(h.permit("inventory.warehouse.create")).Post("/warehouses", h.createWarehouse)
+		r.With(h.permit("inventory.warehouse.read")).Get("/warehouses", h.listWarehouses)
+		r.With(h.permit("inventory.warehouse.read")).Get("/warehouses/{id}", h.getWarehouse)
+		r.With(h.permit("inventory.warehouse.update")).Put("/warehouses/{id}", h.updateWarehouse)
+		r.With(h.permit("inventory.warehouse.delete")).Delete("/warehouses/{id}", h.deleteWarehouse)
+
+		// Branch transfer orders (ADR-DATA-006 Faz 1). Note: there is
+		// deliberately no route that sets status to shipped/received directly
+		// — those transitions are owned by the shipment endpoints below.
+		r.With(h.permit("inventory.transfer_order.create")).Post("/transfer-orders", h.createTransferOrder)
+		r.With(h.permit("inventory.transfer_order.read")).Get("/transfer-orders", h.listTransferOrders)
+		r.With(h.permit("inventory.transfer_order.read")).Get("/transfer-orders/{id}", h.getTransferOrder)
+		r.With(h.permit("inventory.transfer_order.submit")).Post("/transfer-orders/{id}/submit", h.submitTransferOrder)
+		r.With(h.permit("inventory.transfer_order.approve")).Post("/transfer-orders/{id}/approve", h.approveTransferOrder)
+		r.With(h.permit("inventory.transfer_order.reject")).Post("/transfer-orders/{id}/reject", h.rejectTransferOrder)
+		r.With(h.permit("inventory.transfer_order.cancel")).Post("/transfer-orders/{id}/cancel", h.cancelTransferOrder)
+		r.With(h.permit("inventory.transfer_order.fulfil")).Post("/transfer-orders/{id}/fulfil", h.fulfilTransferOrder)
+
+		// Shipments (ADR-DATA-006 Faz 1). advance = fulfilling->in_transit,
+		// receive = in_transit->received (sole owner of the "received" fact).
+		r.With(h.permit("inventory.shipment.create")).Post("/shipments", h.createShipment)
+		r.With(h.permit("inventory.shipment.read")).Get("/shipments", h.listShipments)
+		r.With(h.permit("inventory.shipment.read")).Get("/shipments/{id}", h.getShipment)
+		r.With(h.permit("inventory.shipment.advance")).Post("/shipments/{id}/approve", h.approveShipment)
+		r.With(h.permit("inventory.shipment.advance")).Post("/shipments/{id}/advance", h.advanceShipment)
+		r.With(h.permit("inventory.shipment.receive")).Post("/shipments/{id}/receive", h.receiveShipment)
+		r.With(h.permit("inventory.shipment.cancel")).Post("/shipments/{id}/cancel", h.cancelShipment)
 	})
 }
 
@@ -52,39 +113,44 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 // Request / response types
 // ============================================================
 
-type adjustmentRequest struct {
-	BranchID      uuid.UUID  `json:"branch_id"`
-	ProductID     uuid.UUID  `json:"product_id"`
-	Type          string     `json:"type"`
-	QuantityDelta float64    `json:"quantity_delta"`
+type movementRequest struct {
+	WarehouseID   uuid.UUID  `json:"warehouse_id"`
+	StockItemID   uuid.UUID  `json:"stock_item_id"`
+	Type          string     `json:"movement_type"`
+	Quantity      float64    `json:"quantity"`
+	Unit          string     `json:"unit"`
 	ReferenceID   *uuid.UUID `json:"reference_id,omitempty"`
 	ReferenceType *string    `json:"reference_type,omitempty"`
 	Notes         *string    `json:"notes,omitempty"`
 }
 
 type levelResponse struct {
-	ID        uuid.UUID `json:"id"`
-	ProductID uuid.UUID `json:"product_id"`
-	BranchID  uuid.UUID `json:"branch_id"`
-	Quantity  float64   `json:"quantity"`
-	UpdatedAt string    `json:"updated_at"`
+	ID           uuid.UUID `json:"id"`
+	WarehouseID  uuid.UUID `json:"warehouse_id"`
+	StockItemID  uuid.UUID `json:"stock_item_id"`
+	OnHand       float64   `json:"on_hand"`
+	Reserved     float64   `json:"reserved"`
+	Available    float64   `json:"available"`
+	ReorderPoint *float64  `json:"reorder_point,omitempty"`
+	Unit         string    `json:"unit"`
+	UpdatedAt    string    `json:"updated_at"`
 }
 
-type transactionResponse struct {
+type movementResponse struct {
 	ID            uuid.UUID  `json:"id"`
-	ProductID     uuid.UUID  `json:"product_id"`
-	BranchID      uuid.UUID  `json:"branch_id"`
-	Type          string     `json:"type"`
-	QuantityDelta float64    `json:"quantity_delta"`
+	WarehouseID   uuid.UUID  `json:"warehouse_id"`
+	StockItemID   uuid.UUID  `json:"stock_item_id"`
+	Type          string     `json:"movement_type"`
+	Quantity      float64    `json:"quantity"`
 	ReferenceID   *uuid.UUID `json:"reference_id,omitempty"`
 	ReferenceType *string    `json:"reference_type,omitempty"`
 	Notes         *string    `json:"notes,omitempty"`
 	CreatedAt     string     `json:"created_at"`
 }
 
-type recordAdjustmentResponse struct {
-	Transaction transactionResponse `json:"transaction"`
-	Level       levelResponse       `json:"level"`
+type recordMovementResponse struct {
+	Movement movementResponse `json:"movement"`
+	Level    levelResponse    `json:"level"`
 }
 
 // ============================================================
@@ -96,13 +162,13 @@ func (h *Handler) listLevels(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	branchID, err := uuidQuery(r, "branch_id")
+	warehouseID, err := uuidQuery(r, "warehouse_id")
 	if err != nil {
-		http.Error(w, "branch_id query param is required and must be a valid UUID", http.StatusBadRequest)
+		http.Error(w, "warehouse_id query param is required and must be a valid UUID", http.StatusBadRequest)
 		return
 	}
 
-	levels, err := h.svc.ListLevelsByBranch(r.Context(), p.TenantID, branchID)
+	levels, err := h.svc.ListLevelsByWarehouse(r.Context(), p.TenantID, warehouseID)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -120,18 +186,18 @@ func (h *Handler) getLevel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	productID, err := uuidParam(r, "productID")
+	stockItemID, err := uuidParam(r, "stockItemID")
 	if err != nil {
-		http.Error(w, "invalid product_id", http.StatusBadRequest)
+		http.Error(w, "invalid stock_item_id", http.StatusBadRequest)
 		return
 	}
-	branchID, err := uuidQuery(r, "branch_id")
+	warehouseID, err := uuidQuery(r, "warehouse_id")
 	if err != nil {
-		http.Error(w, "branch_id query param is required and must be a valid UUID", http.StatusBadRequest)
+		http.Error(w, "warehouse_id query param is required and must be a valid UUID", http.StatusBadRequest)
 		return
 	}
 
-	lvl, err := h.svc.GetLevel(r.Context(), p.TenantID, branchID, productID)
+	lvl, err := h.svc.GetLevel(r.Context(), p.TenantID, warehouseID, stockItemID)
 	if err != nil {
 		h.logError(w, r, err)
 		return
@@ -139,13 +205,13 @@ func (h *Handler) getLevel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toLevelResponse(lvl))
 }
 
-func (h *Handler) recordAdjustment(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) recordMovement(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
 		return
 	}
 
-	var req adjustmentRequest
+	var req movementRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -157,37 +223,38 @@ func (h *Handler) recordAdjustment(w http.ResponseWriter, r *http.Request) {
 		createdBy = &id
 	}
 
-	svcReq := service.RecordAdjustmentRequest{
-		BranchID:      req.BranchID,
-		ProductID:     req.ProductID,
-		Type:          domain.TransactionType(req.Type),
-		QuantityDelta: req.QuantityDelta,
+	svcReq := service.RecordMovementRequest{
+		WarehouseID:   req.WarehouseID,
+		StockItemID:   req.StockItemID,
+		Type:          domain.MovementType(req.Type),
+		Quantity:      req.Quantity,
+		Unit:          req.Unit,
 		ReferenceID:   req.ReferenceID,
 		ReferenceType: req.ReferenceType,
 		Notes:         req.Notes,
 		CreatedBy:     createdBy,
 	}
 
-	tx, lvl, err := h.svc.RecordAdjustment(r.Context(), p.TenantID, svcReq)
+	mv, lvl, err := h.svc.RecordMovement(r.Context(), p.TenantID, p, svcReq)
 	if err != nil {
 		h.logError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, recordAdjustmentResponse{
-		Transaction: toTransactionResponse(tx),
-		Level:       toLevelResponse(lvl),
+	writeJSON(w, http.StatusCreated, recordMovementResponse{
+		Movement: toMovementResponse(mv),
+		Level:    toLevelResponse(lvl),
 	})
 }
 
-func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) listMovements(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
 		return
 	}
-	branchID, err := uuidQuery(r, "branch_id")
+	warehouseID, err := uuidQuery(r, "warehouse_id")
 	if err != nil {
-		http.Error(w, "branch_id query param is required and must be a valid UUID", http.StatusBadRequest)
+		http.Error(w, "warehouse_id query param is required and must be a valid UUID", http.StatusBadRequest)
 		return
 	}
 
@@ -198,28 +265,28 @@ func (h *Handler) listTransactions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	productIDStr := r.URL.Query().Get("product_id")
-	if productIDStr != "" {
-		productID, err := uuid.Parse(productIDStr)
+	stockItemIDStr := r.URL.Query().Get("stock_item_id")
+	if stockItemIDStr != "" {
+		stockItemID, err := uuid.Parse(stockItemIDStr)
 		if err != nil {
-			http.Error(w, "invalid product_id", http.StatusBadRequest)
+			http.Error(w, "invalid stock_item_id", http.StatusBadRequest)
 			return
 		}
-		txs, err := h.svc.ListTransactionsByProduct(r.Context(), p.TenantID, branchID, productID, limit)
+		mvs, err := h.svc.ListMovementsByStockItem(r.Context(), p.TenantID, warehouseID, stockItemID, limit)
 		if err != nil {
 			h.logError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toTransactionSlice(txs))
+		writeJSON(w, http.StatusOK, toMovementSlice(mvs))
 		return
 	}
 
-	txs, err := h.svc.ListTransactionsByBranch(r.Context(), p.TenantID, branchID, limit)
+	mvs, err := h.svc.ListMovementsByWarehouse(r.Context(), p.TenantID, warehouseID, limit)
 	if err != nil {
 		h.logError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toTransactionSlice(txs))
+	writeJSON(w, http.StatusOK, toMovementSlice(mvs))
 }
 
 // ============================================================
@@ -240,9 +307,18 @@ func (h *Handler) logError(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	var ve *pub.ValidationError
 	if errors.As(err, &ve) {
 		http.Error(w, ve.Msg, http.StatusUnprocessableEntity)
+		return
+	}
+	var te *pub.TransitionError
+	if errors.As(err, &te) {
+		http.Error(w, te.Error(), http.StatusConflict)
 		return
 	}
 	h.logger.Error("inventory handler error", zap.Error(err))
@@ -263,34 +339,38 @@ func uuidQuery(r *http.Request, key string) (uuid.UUID, error) {
 	return uuid.Parse(r.URL.Query().Get(key))
 }
 
-func toLevelResponse(l domain.InventoryLevel) levelResponse {
+func toLevelResponse(l domain.StockLevel) levelResponse {
 	return levelResponse{
-		ID:        l.ID,
-		ProductID: l.ProductID,
-		BranchID:  l.BranchID,
-		Quantity:  l.Quantity,
-		UpdatedAt: l.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:           l.ID,
+		WarehouseID:  l.WarehouseID,
+		StockItemID:  l.StockItemID,
+		OnHand:       l.OnHand,
+		Reserved:     l.Reserved,
+		Available:    l.Available,
+		ReorderPoint: l.ReorderPoint,
+		Unit:         l.Unit,
+		UpdatedAt:    l.UpdatedAt.Format(timeLayout),
 	}
 }
 
-func toTransactionResponse(t domain.InventoryTransaction) transactionResponse {
-	return transactionResponse{
-		ID:            t.ID,
-		ProductID:     t.ProductID,
-		BranchID:      t.BranchID,
-		Type:          string(t.Type),
-		QuantityDelta: t.QuantityDelta,
-		ReferenceID:   t.ReferenceID,
-		ReferenceType: t.ReferenceType,
-		Notes:         t.Notes,
-		CreatedAt:     t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+func toMovementResponse(m domain.StockMovement) movementResponse {
+	return movementResponse{
+		ID:            m.ID,
+		WarehouseID:   m.WarehouseID,
+		StockItemID:   m.StockItemID,
+		Type:          string(m.Type),
+		Quantity:      m.Quantity,
+		ReferenceID:   m.ReferenceID,
+		ReferenceType: m.ReferenceType,
+		Notes:         m.Notes,
+		CreatedAt:     m.CreatedAt.Format(timeLayout),
 	}
 }
 
-func toTransactionSlice(txs []domain.InventoryTransaction) []transactionResponse {
-	resp := make([]transactionResponse, len(txs))
-	for i, t := range txs {
-		resp[i] = toTransactionResponse(t)
+func toMovementSlice(mvs []domain.StockMovement) []movementResponse {
+	resp := make([]movementResponse, len(mvs))
+	for i, m := range mvs {
+		resp[i] = toMovementResponse(m)
 	}
 	return resp
 }

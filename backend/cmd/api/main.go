@@ -201,7 +201,7 @@ func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.Handle
 		var personID uuid.UUID
 		var fullName, email string
 
-		err := pool.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+		err := pool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx,
 				`SELECT id, full_name, email FROM persons WHERE email = $1`, req.Email,
 			).Scan(&personID, &fullName, &email)
@@ -215,12 +215,13 @@ func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.Handle
 			return
 		}
 
-		// Find the first active membership (cross-tenant via uuid.Nil context).
+		// Find the first active membership (cross-tenant via the explicit
+		// all-tenants scope; dev-only handler).
 		var tenantID uuid.UUID
 		var branchID uuid.UUID // uuid.Nil means chain-wide
 		var membershipFound bool
 
-		err = pool.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+		err = pool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 			var rawBranchID *uuid.UUID
 			err := tx.QueryRow(ctx,
 				`SELECT tenant_id, branch_id FROM memberships
@@ -413,10 +414,31 @@ type devTokenVerifier struct{}
 
 func newTokenVerifier() (auth.TokenVerifier, error) {
 	env := envOr("APP_ENV", "")
-	if env != "dev" {
-		return nil, fmt.Errorf("api: devTokenVerifier requires APP_ENV=dev (got %q); configure a real JWKS verifier for non-dev environments", env)
+	if env == "dev" {
+		return devTokenVerifier{}, nil
 	}
-	return devTokenVerifier{}, nil
+
+	issuerURL := envOr("KEYCLOAK_ISSUER_URL", "")
+	audience := envOr("KEYCLOAK_AUDIENCE", "")
+	if issuerURL == "" || audience == "" {
+		return nil, fmt.Errorf("api: KEYCLOAK_ISSUER_URL and KEYCLOAK_AUDIENCE are required when APP_ENV=%q", env)
+	}
+
+	// A bounded background context is used for the initial JWKS fetch: fx does not
+	// inject context.Context, and startup must fail fast rather than hang forever
+	// if Keycloak is unreachable.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	verifier, err := auth.NewKeycloakVerifier(ctx, auth.KeycloakVerifierConfig{
+		IssuerURL: issuerURL,
+		JWKSURL:   envOr("KEYCLOAK_JWKS_URL", ""),
+		Audience:  audience,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: build keycloak verifier: %w", err)
+	}
+	return verifier, nil
 }
 
 func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.KeycloakClaims, error) {

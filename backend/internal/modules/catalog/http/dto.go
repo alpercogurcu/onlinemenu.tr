@@ -41,56 +41,58 @@ func toCategoryResponse(c domain.Category) categoryResponse {
 // --- Product ---
 
 type productResponse struct {
-	ID          uuid.UUID  `json:"id"`
-	TenantID    uuid.UUID  `json:"tenant_id"`
-	CategoryID  *uuid.UUID `json:"category_id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	ImageKey    string     `json:"image_key"`
-	PriceAmount int64      `json:"price_amount"`
-	Currency    string     `json:"currency"`
-	SKU         string     `json:"sku"`
-	Unit        string     `json:"unit"`
-	TaxRateBPS  int        `json:"tax_rate_bps"`
-	IsActive    bool       `json:"is_active"`
-	SortOrder   int16      `json:"sort_order"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID                uuid.UUID  `json:"id"`
+	TenantID          uuid.UUID  `json:"tenant_id"`
+	CategoryID        *uuid.UUID `json:"category_id"`
+	Name              string     `json:"name"`
+	Description       string     `json:"description"`
+	ImageKey          string     `json:"image_key"`
+	PriceAmount       int64      `json:"price_amount"`
+	Currency          string     `json:"currency"`
+	SKU               string     `json:"sku"`
+	Unit              string     `json:"unit"`
+	TaxRateBPS        int        `json:"tax_rate_bps"`
+	IsActive          bool       `json:"is_active"`
+	SortOrder         int16      `json:"sort_order"`
+	SourceStockItemID *uuid.UUID `json:"source_stock_item_id,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 func toProductResponse(p domain.Product) productResponse {
 	return productResponse{
-		ID:          p.ID,
-		TenantID:    p.TenantID,
-		CategoryID:  p.CategoryID,
-		Name:        p.Name,
-		Description: p.Description,
-		ImageKey:    p.ImageKey,
-		PriceAmount: p.PriceAmount,
-		Currency:    p.Currency,
-		SKU:         p.SKU,
-		Unit:        p.Unit,
-		TaxRateBPS:  p.TaxRateBPS,
-		IsActive:    p.IsActive,
-		SortOrder:   p.SortOrder,
-		CreatedAt:   p.CreatedAt,
-		UpdatedAt:   p.UpdatedAt,
+		ID:                p.ID,
+		TenantID:          p.TenantID,
+		CategoryID:        p.CategoryID,
+		Name:              p.Name,
+		Description:       p.Description,
+		ImageKey:          p.ImageKey,
+		PriceAmount:       p.PriceAmount,
+		Currency:          p.Currency,
+		SKU:               p.SKU,
+		Unit:              p.Unit,
+		TaxRateBPS:        p.TaxRateBPS,
+		IsActive:          p.IsActive,
+		SortOrder:         p.SortOrder,
+		SourceStockItemID: p.SourceStockItemID,
+		CreatedAt:         p.CreatedAt,
+		UpdatedAt:         p.UpdatedAt,
 	}
 }
 
 // --- ModifierGroup ---
 
 type modifierGroupResponse struct {
-	ID            uuid.UUID  `json:"id"`
-	TenantID      uuid.UUID  `json:"tenant_id"`
-	Name          string     `json:"name"`
-	SelectionType string     `json:"selection_type"`
-	MinSelections int16      `json:"min_selections"`
-	MaxSelections *int16     `json:"max_selections"`
-	IsRequired    bool       `json:"is_required"`
-	SortOrder     int16      `json:"sort_order"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            uuid.UUID `json:"id"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	Name          string    `json:"name"`
+	SelectionType string    `json:"selection_type"`
+	MinSelections int16     `json:"min_selections"`
+	MaxSelections *int16    `json:"max_selections"`
+	IsRequired    bool      `json:"is_required"`
+	SortOrder     int16     `json:"sort_order"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func toModifierGroupResponse(mg domain.ModifierGroup) modifierGroupResponse {

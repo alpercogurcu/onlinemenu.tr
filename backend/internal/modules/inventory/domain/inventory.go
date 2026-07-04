@@ -1,5 +1,6 @@
 // Package domain defines the inventory module's core types.
-// All stock is branch-scoped; tenant-wide stock is a catalog concern.
+// All stock is warehouse-scoped (ADR-DATA-005); a warehouse belongs to a
+// branch, but stock itself is never addressed by branch_id directly.
 package domain
 
 import (
@@ -8,44 +9,67 @@ import (
 	"github.com/google/uuid"
 )
 
-// TransactionType classifies a stock movement.
-type TransactionType string
+// MovementType classifies a stock movement (db-schema.md STOCK_MOVEMENTS).
+type MovementType string
 
 const (
-	TransactionTypeRestock     TransactionType = "restock"
-	TransactionTypeConsumption TransactionType = "consumption"
-	TransactionTypeWaste       TransactionType = "waste"
-	TransactionTypeAdjustment  TransactionType = "adjustment"
+	MovementTypeIn       MovementType = "in"
+	MovementTypeOut      MovementType = "out"
+	MovementTypeAdjust   MovementType = "adjust"
+	MovementTypeTransfer MovementType = "transfer"
+	MovementTypeReserve  MovementType = "reserve"
+	MovementTypeRelease  MovementType = "release"
 )
 
-// Valid reports whether t is a recognised transaction type.
-func (t TransactionType) Valid() bool {
+// Valid reports whether t is a recognised movement type.
+func (t MovementType) Valid() bool {
 	switch t {
-	case TransactionTypeRestock, TransactionTypeConsumption, TransactionTypeWaste, TransactionTypeAdjustment:
+	case MovementTypeIn, MovementTypeOut, MovementTypeAdjust, MovementTypeTransfer, MovementTypeReserve, MovementTypeRelease:
 		return true
 	}
 	return false
 }
 
-// InventoryLevel is the materialized current stock for one product in one branch.
-type InventoryLevel struct {
-	ID        uuid.UUID
-	TenantID  uuid.UUID
-	BranchID  uuid.UUID
-	ProductID uuid.UUID
-	Quantity  float64 // NUMERIC(12,3) — supports fractional units
-	UpdatedAt time.Time
+// AffectsOnHand reports whether this movement type changes StockLevel.OnHand
+// directly (in/out/adjust/transfer) as opposed to only Reserved (reserve/release).
+func (t MovementType) AffectsOnHand() bool {
+	switch t {
+	case MovementTypeIn, MovementTypeOut, MovementTypeAdjust, MovementTypeTransfer:
+		return true
+	}
+	return false
 }
 
-// InventoryTransaction is an immutable ledger entry for a stock movement.
-type InventoryTransaction struct {
+// StockLevel is the materialized current stock for one stock item in one
+// warehouse. Available is derived (on_hand - reserved) by the database
+// (STORED GENERATED column); application code must never compute or persist
+// it independently (see migrations/inventory/000003 for the rationale).
+type StockLevel struct {
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	WarehouseID  uuid.UUID
+	StockItemID  uuid.UUID
+	OnHand       float64
+	Reserved     float64
+	Available    float64
+	ReorderPoint *float64
+	Unit         string
+	UpdatedAt    time.Time
+}
+
+// StockMovement is an immutable ledger entry for a stock movement.
+//
+// Quantity is a positive magnitude for in/out/transfer/reserve/release
+// (direction comes from Type); it may be signed only when Type is
+// MovementTypeAdjust, since a manual correction can go either direction.
+type StockMovement struct {
 	ID            uuid.UUID
 	TenantID      uuid.UUID
-	BranchID      uuid.UUID
-	ProductID     uuid.UUID
-	Type          TransactionType
-	QuantityDelta float64    // positive = stock in, negative = stock out
-	ReferenceID   *uuid.UUID // optional: order_id or purchase_order_id
+	WarehouseID   uuid.UUID
+	StockItemID   uuid.UUID
+	Type          MovementType
+	Quantity      float64
+	ReferenceID   *uuid.UUID // optional: shipment_id, transfer_order_id, purchase_order_id
 	ReferenceType *string
 	Notes         *string
 	CreatedBy     *uuid.UUID

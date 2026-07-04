@@ -29,7 +29,6 @@ var (
 	tenantA    = uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001")
 	tenantB    = uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000001")
 	branchA    = uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000002")
-	product1   = uuid.MustParse("11111111-0000-0000-0000-000000000001")
 )
 
 func TestMain(m *testing.M) {
@@ -200,221 +199,264 @@ func withReadTx(t *testing.T, tenantID uuid.UUID, f func(tx pgx.Tx)) {
 }
 
 // ============================================================
-// InventoryLevelRepo tests
+// Fixture helpers: stock_levels/stock_movements now carry a real FK to
+// warehouses/stock_items (intra-module FK, added in migration 000003), so
+// tests create those parent rows first.
 // ============================================================
 
-func TestInventoryLevelRepo_UpsertAndGet(t *testing.T) {
-	lvlRepo := repo.NewInventoryLevelRepo()
-	ctx := context.Background()
+func createWarehouse(t *testing.T, tenantID uuid.UUID) uuid.UUID {
+	t.Helper()
+	whRepo := repo.NewWarehouseRepo()
+	var id uuid.UUID
+	withTx(t, tenantID, func(tx pgx.Tx) {
+		wh, err := whRepo.Create(context.Background(), tx, domain.Warehouse{
+			TenantID:      tenantID,
+			BranchID:      branchA,
+			Name:          "Test Warehouse " + uuid.NewString(),
+			WarehouseType: domain.WarehouseTypeDepo,
+			IsActive:      true,
+		})
+		require.NoError(t, err)
+		id = wh.ID
+	})
+	return id
+}
 
-	var created domain.InventoryLevel
+func createStockItem(t *testing.T, tenantID uuid.UUID) uuid.UUID {
+	t.Helper()
+	itemRepo := repo.NewStockItemRepo()
+	newID, err := uuid.NewV7()
+	require.NoError(t, err)
+	withTx(t, tenantID, func(tx pgx.Tx) {
+		item, err := itemRepo.Create(context.Background(), tx, domain.StockItem{
+			ID:            newID,
+			TenantID:      tenantID,
+			SKU:           "SKU-" + uuid.NewString(),
+			Name:          "Test Item",
+			Kind:          domain.StockItemKindRaw,
+			CanonicalUnit: "kg",
+			IsActive:      true,
+		})
+		require.NoError(t, err)
+		newID = item.ID
+	})
+	return newID
+}
+
+// ============================================================
+// StockLevelRepo tests
+// ============================================================
+
+func TestStockLevelRepo_AdjustAndGet(t *testing.T) {
+	lvlRepo := repo.NewStockLevelRepo()
+	ctx := context.Background()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
+
+	var lvl domain.StockLevel
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		var err error
-		created, err = lvlRepo.Upsert(ctx, tx, domain.InventoryLevel{
-			TenantID:  tenantA,
-			BranchID:  branchA,
-			ProductID: product1,
-			Quantity:  50.5,
-		})
+		lvl, err = lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, 50.5, "kg")
 		require.NoError(t, err)
 	})
 
-	assert.NotEqual(t, uuid.Nil, created.ID)
-	assert.Equal(t, 50.5, created.Quantity)
-	assert.Equal(t, branchA, created.BranchID)
+	assert.NotEqual(t, uuid.Nil, lvl.ID)
+	assert.InDelta(t, 50.5, lvl.OnHand, 0.001)
+	assert.InDelta(t, 50.5, lvl.Available, 0.001)
+	assert.Equal(t, warehouseID, lvl.WarehouseID)
 
-	// Verify via GetByProduct.
 	withReadTx(t, tenantA, func(tx pgx.Tx) {
-		lvl, err := lvlRepo.GetByProduct(ctx, tx, branchA, product1)
+		got, err := lvlRepo.GetByStockItem(ctx, tx, warehouseID, itemID)
 		require.NoError(t, err)
-		assert.InDelta(t, 50.5, lvl.Quantity, 0.001)
+		assert.InDelta(t, 50.5, got.OnHand, 0.001)
 	})
 }
 
-func TestInventoryLevelRepo_UpsertIdempotent(t *testing.T) {
-	lvlRepo := repo.NewInventoryLevelRepo()
+func TestStockLevelRepo_AdjustOnHandClampsAtZero(t *testing.T) {
+	lvlRepo := repo.NewStockLevelRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
 
-	withTx(t, tenantA, func(tx pgx.Tx) {
-		_, err := lvlRepo.Upsert(ctx, tx, domain.InventoryLevel{
-			TenantID:  tenantA,
-			BranchID:  branchA,
-			ProductID: prodID,
-			Quantity:  10,
-		})
-		require.NoError(t, err)
-	})
-
-	// Upsert with different quantity should update.
-	var updated domain.InventoryLevel
+	var lvl domain.StockLevel
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		var err error
-		updated, err = lvlRepo.Upsert(ctx, tx, domain.InventoryLevel{
-			TenantID:  tenantA,
-			BranchID:  branchA,
-			ProductID: prodID,
-			Quantity:  25,
-		})
+		lvl, err = lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, 100, "kg")
 		require.NoError(t, err)
 	})
-	assert.InDelta(t, 25.0, updated.Quantity, 0.001)
+	assert.InDelta(t, 100.0, lvl.OnHand, 0.001)
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		var err error
+		lvl, err = lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, -30, "kg")
+		require.NoError(t, err)
+	})
+	assert.InDelta(t, 70.0, lvl.OnHand, 0.001)
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		var err error
+		lvl, err = lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, -999, "kg")
+		require.NoError(t, err)
+	})
+	assert.InDelta(t, 0.0, lvl.OnHand, 0.001)
 }
 
-func TestInventoryLevelRepo_AdjustQuantity(t *testing.T) {
-	lvlRepo := repo.NewInventoryLevelRepo()
+func TestStockLevelRepo_AdjustReserved_AvailableDerived(t *testing.T) {
+	lvlRepo := repo.NewStockLevelRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
 
-	// Start at zero (no prior level record).
-	var lvl domain.InventoryLevel
 	withTx(t, tenantA, func(tx pgx.Tx) {
-		var err error
-		lvl, err = lvlRepo.AdjustQuantity(ctx, tx, tenantA, branchA, prodID, 100)
+		_, err := lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, 100, "kg")
 		require.NoError(t, err)
 	})
-	assert.InDelta(t, 100.0, lvl.Quantity, 0.001)
 
-	// Apply a negative delta.
+	var lvl domain.StockLevel
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		var err error
-		lvl, err = lvlRepo.AdjustQuantity(ctx, tx, tenantA, branchA, prodID, -30)
+		lvl, err = lvlRepo.AdjustReserved(ctx, tx, tenantA, warehouseID, itemID, 20, "kg")
 		require.NoError(t, err)
 	})
-	assert.InDelta(t, 70.0, lvl.Quantity, 0.001)
-
-	// Delta that would go negative is clamped to zero.
-	withTx(t, tenantA, func(tx pgx.Tx) {
-		var err error
-		lvl, err = lvlRepo.AdjustQuantity(ctx, tx, tenantA, branchA, prodID, -999)
-		require.NoError(t, err)
-	})
-	assert.InDelta(t, 0.0, lvl.Quantity, 0.001)
+	assert.InDelta(t, 100.0, lvl.OnHand, 0.001)
+	assert.InDelta(t, 20.0, lvl.Reserved, 0.001)
+	// available is DB-generated (on_hand - reserved); never set by app code.
+	assert.InDelta(t, 80.0, lvl.Available, 0.001)
 }
 
-func TestInventoryLevelRepo_TenantIsolation(t *testing.T) {
-	lvlRepo := repo.NewInventoryLevelRepo()
+func TestStockLevelRepo_TenantIsolation(t *testing.T) {
+	lvlRepo := repo.NewStockLevelRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
 
-	// Insert level for tenantA.
 	withTx(t, tenantA, func(tx pgx.Tx) {
-		_, err := lvlRepo.Upsert(ctx, tx, domain.InventoryLevel{
-			TenantID:  tenantA,
-			BranchID:  branchA,
-			ProductID: prodID,
-			Quantity:  42,
-		})
+		_, err := lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, 42, "kg")
 		require.NoError(t, err)
 	})
 
-	// tenantB should not see it.
+	// tenantB should not see it (RLS hides the row entirely; a cross-tenant
+	// warehouse_id/stock_item_id pair does not exist from tenantB's view).
 	withReadTx(t, tenantB, func(tx pgx.Tx) {
-		_, err := lvlRepo.GetByProduct(ctx, tx, branchA, prodID)
+		_, err := lvlRepo.GetByStockItem(ctx, tx, warehouseID, itemID)
 		assert.ErrorIs(t, err, repo.ErrNotFound)
 	})
 }
 
-func TestInventoryLevelRepo_ListByBranch(t *testing.T) {
-	lvlRepo := repo.NewInventoryLevelRepo()
+func TestStockLevelRepo_ListByWarehouse(t *testing.T) {
+	lvlRepo := repo.NewStockLevelRepo()
 	ctx := context.Background()
-	branchID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
 
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		for i := range 3 {
-			_, err := lvlRepo.Upsert(ctx, tx, domain.InventoryLevel{
-				TenantID:  tenantA,
-				BranchID:  branchID,
-				ProductID: uuid.New(),
-				Quantity:  float64(i + 1),
-			})
+			itemID := createStockItemInTx(t, tx, tenantA)
+			_, err := lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, float64(i+1), "kg")
 			require.NoError(t, err)
 		}
 	})
 
 	withReadTx(t, tenantA, func(tx pgx.Tx) {
-		levels, err := lvlRepo.ListByBranch(ctx, tx, branchID)
+		levels, err := lvlRepo.ListByWarehouse(ctx, tx, warehouseID)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(levels), 3)
 	})
 }
 
+// createStockItemInTx creates a stock item using an already-open tx (for tests
+// that build several fixtures within a single withTx block).
+func createStockItemInTx(t *testing.T, tx pgx.Tx, tenantID uuid.UUID) uuid.UUID {
+	t.Helper()
+	itemRepo := repo.NewStockItemRepo()
+	newID, err := uuid.NewV7()
+	require.NoError(t, err)
+	item, err := itemRepo.Create(context.Background(), tx, domain.StockItem{
+		ID:            newID,
+		TenantID:      tenantID,
+		SKU:           "SKU-" + uuid.NewString(),
+		Name:          "Test Item",
+		Kind:          domain.StockItemKindRaw,
+		CanonicalUnit: "kg",
+		IsActive:      true,
+	})
+	require.NoError(t, err)
+	return item.ID
+}
+
 // ============================================================
-// InventoryTransactionRepo tests
+// StockMovementRepo tests
 // ============================================================
 
-func TestInventoryTransactionRepo_CreateAndList(t *testing.T) {
-	txRepo := repo.NewInventoryTransactionRepo()
+func TestStockMovementRepo_CreateAndList(t *testing.T) {
+	mvRepo := repo.NewStockMovementRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
-	branchID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
 
-	notes := "initial restock"
-	var created domain.InventoryTransaction
+	notes := "initial in"
+	var created domain.StockMovement
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		var err error
-		created, err = txRepo.Create(ctx, tx, domain.InventoryTransaction{
-			TenantID:      tenantA,
-			BranchID:      branchID,
-			ProductID:     prodID,
-			Type:          domain.TransactionTypeRestock,
-			QuantityDelta: 100,
-			Notes:         &notes,
+		created, err = mvRepo.Create(ctx, tx, domain.StockMovement{
+			TenantID:    tenantA,
+			WarehouseID: warehouseID,
+			StockItemID: itemID,
+			Type:        domain.MovementTypeIn,
+			Quantity:    100,
+			Notes:       &notes,
 		})
 		require.NoError(t, err)
 	})
 
 	assert.NotEqual(t, uuid.Nil, created.ID)
-	assert.Equal(t, domain.TransactionTypeRestock, created.Type)
-	assert.InDelta(t, 100.0, created.QuantityDelta, 0.001)
+	assert.Equal(t, domain.MovementTypeIn, created.Type)
+	assert.InDelta(t, 100.0, created.Quantity, 0.001)
 	assert.Equal(t, &notes, created.Notes)
 
-	// List returns the created transaction.
 	withReadTx(t, tenantA, func(tx pgx.Tx) {
-		txs, err := txRepo.ListByProduct(ctx, tx, branchID, prodID, 10)
+		mvs, err := mvRepo.ListByStockItem(ctx, tx, warehouseID, itemID, 10)
 		require.NoError(t, err)
-		require.Len(t, txs, 1)
-		assert.Equal(t, created.ID, txs[0].ID)
+		require.Len(t, mvs, 1)
+		assert.Equal(t, created.ID, mvs[0].ID)
 	})
 }
 
-func TestInventoryTransactionRepo_MultipleTypes(t *testing.T) {
-	txRepo := repo.NewInventoryTransactionRepo()
+func TestStockMovementRepo_MultipleTypes(t *testing.T) {
+	mvRepo := repo.NewStockMovementRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
-	branchID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
 
 	movements := []struct {
-		typ   domain.TransactionType
-		delta float64
+		typ domain.MovementType
+		qty float64
 	}{
-		{domain.TransactionTypeRestock, 200},
-		{domain.TransactionTypeConsumption, -50},
-		{domain.TransactionTypeWaste, -10},
-		{domain.TransactionTypeAdjustment, 5},
+		{domain.MovementTypeIn, 200},
+		{domain.MovementTypeOut, 50},
+		{domain.MovementTypeReserve, 10},
+		{domain.MovementTypeAdjust, -5},
 	}
 
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		for _, m := range movements {
-			_, err := txRepo.Create(ctx, tx, domain.InventoryTransaction{
-				TenantID:      tenantA,
-				BranchID:      branchID,
-				ProductID:     prodID,
-				Type:          m.typ,
-				QuantityDelta: m.delta,
+			_, err := mvRepo.Create(ctx, tx, domain.StockMovement{
+				TenantID:    tenantA,
+				WarehouseID: warehouseID,
+				StockItemID: itemID,
+				Type:        m.typ,
+				Quantity:    m.qty,
 			})
 			require.NoError(t, err)
 		}
 	})
 
 	withReadTx(t, tenantA, func(tx pgx.Tx) {
-		txs, err := txRepo.ListByProduct(ctx, tx, branchID, prodID, 100)
+		mvs, err := mvRepo.ListByStockItem(ctx, tx, warehouseID, itemID, 100)
 		require.NoError(t, err)
-		assert.Len(t, txs, len(movements))
-		// All expected types are present (order by created_at; within-tx timestamps identical).
-		types := make(map[domain.TransactionType]bool, len(txs))
-		for _, tx := range txs {
-			types[tx.Type] = true
+		assert.Len(t, mvs, len(movements))
+		types := make(map[domain.MovementType]bool, len(mvs))
+		for _, m := range mvs {
+			types[m.Type] = true
 		}
 		for _, m := range movements {
 			assert.True(t, types[m.typ], "expected type %q in results", m.typ)
@@ -422,79 +464,266 @@ func TestInventoryTransactionRepo_MultipleTypes(t *testing.T) {
 	})
 }
 
-func TestInventoryTransactionRepo_TenantIsolation(t *testing.T) {
-	txRepo := repo.NewInventoryTransactionRepo()
+func TestStockMovementRepo_TenantIsolation(t *testing.T) {
+	mvRepo := repo.NewStockMovementRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
-	branchID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
 
 	withTx(t, tenantA, func(tx pgx.Tx) {
-		_, err := txRepo.Create(ctx, tx, domain.InventoryTransaction{
-			TenantID:      tenantA,
-			BranchID:      branchID,
-			ProductID:     prodID,
-			Type:          domain.TransactionTypeRestock,
-			QuantityDelta: 50,
+		_, err := mvRepo.Create(ctx, tx, domain.StockMovement{
+			TenantID:    tenantA,
+			WarehouseID: warehouseID,
+			StockItemID: itemID,
+			Type:        domain.MovementTypeIn,
+			Quantity:    50,
 		})
 		require.NoError(t, err)
 	})
 
-	// tenantB sees no transactions for tenantA's branch+product.
 	withReadTx(t, tenantB, func(tx pgx.Tx) {
-		txs, err := txRepo.ListByProduct(ctx, tx, branchID, prodID, 10)
+		mvs, err := mvRepo.ListByStockItem(ctx, tx, warehouseID, itemID, 10)
 		require.NoError(t, err)
-		assert.Empty(t, txs)
+		assert.Empty(t, mvs)
 	})
 }
 
-func TestInventoryTransactionRepo_ListByBranch(t *testing.T) {
-	txRepo := repo.NewInventoryTransactionRepo()
+func TestStockMovementRepo_ListByWarehouse(t *testing.T) {
+	mvRepo := repo.NewStockMovementRepo()
 	ctx := context.Background()
-	branchID := uuid.New()
+	warehouseID := createWarehouse(t, tenantA)
 
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		for range 5 {
-			_, err := txRepo.Create(ctx, tx, domain.InventoryTransaction{
-				TenantID:      tenantA,
-				BranchID:      branchID,
-				ProductID:     uuid.New(),
-				Type:          domain.TransactionTypeRestock,
-				QuantityDelta: 10,
+			itemID := createStockItemInTx(t, tx, tenantA)
+			_, err := mvRepo.Create(ctx, tx, domain.StockMovement{
+				TenantID:    tenantA,
+				WarehouseID: warehouseID,
+				StockItemID: itemID,
+				Type:        domain.MovementTypeIn,
+				Quantity:    10,
 			})
 			require.NoError(t, err)
 		}
 	})
 
 	withReadTx(t, tenantA, func(tx pgx.Tx) {
-		txs, err := txRepo.ListByBranch(ctx, tx, branchID, 100)
+		mvs, err := mvRepo.ListByWarehouse(ctx, tx, warehouseID, 100)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(txs), 5)
+		assert.GreaterOrEqual(t, len(mvs), 5)
 	})
 }
 
-func TestInventoryTransactionRepo_ReferenceID(t *testing.T) {
-	txRepo := repo.NewInventoryTransactionRepo()
+func TestStockMovementRepo_ReferenceID(t *testing.T) {
+	mvRepo := repo.NewStockMovementRepo()
 	ctx := context.Background()
-	prodID := uuid.New()
-	branchID := uuid.New()
-	orderID := uuid.New()
-	refType := "order"
+	warehouseID := createWarehouse(t, tenantA)
+	itemID := createStockItem(t, tenantA)
+	shipmentID := uuid.New()
+	refType := "shipment"
 
-	var created domain.InventoryTransaction
+	var created domain.StockMovement
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		var err error
-		created, err = txRepo.Create(ctx, tx, domain.InventoryTransaction{
+		created, err = mvRepo.Create(ctx, tx, domain.StockMovement{
 			TenantID:      tenantA,
-			BranchID:      branchID,
-			ProductID:     prodID,
-			Type:          domain.TransactionTypeConsumption,
-			QuantityDelta: -3,
-			ReferenceID:   &orderID,
+			WarehouseID:   warehouseID,
+			StockItemID:   itemID,
+			Type:          domain.MovementTypeOut,
+			Quantity:      3,
+			ReferenceID:   &shipmentID,
 			ReferenceType: &refType,
 		})
 		require.NoError(t, err)
 	})
 
-	assert.Equal(t, &orderID, created.ReferenceID)
+	assert.Equal(t, &shipmentID, created.ReferenceID)
 	assert.Equal(t, &refType, created.ReferenceType)
+}
+
+// ============================================================
+// StockItemRepo tests
+// ============================================================
+
+func TestStockItemRepo_CreateGetUpdateDelete(t *testing.T) {
+	itemRepo := repo.NewStockItemRepo()
+	ctx := context.Background()
+	newID, err := uuid.NewV7()
+	require.NoError(t, err)
+
+	var created domain.StockItem
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		var err error
+		created, err = itemRepo.Create(ctx, tx, domain.StockItem{
+			ID:            newID,
+			TenantID:      tenantA,
+			SKU:           "SKU-CREATE-" + uuid.NewString(),
+			Name:          "Un",
+			Kind:          domain.StockItemKindRaw,
+			CanonicalUnit: "kg",
+			Category:      "meat",
+			IsActive:      true,
+		})
+		require.NoError(t, err)
+	})
+	assert.Equal(t, newID, created.ID)
+	assert.Equal(t, domain.StockItemKindRaw, created.Kind)
+
+	withReadTx(t, tenantA, func(tx pgx.Tx) {
+		got, err := itemRepo.GetByID(ctx, tx, newID)
+		require.NoError(t, err)
+		assert.Equal(t, "Un", got.Name)
+	})
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		updated, err := itemRepo.Update(ctx, tx, domain.StockItem{
+			ID:            newID,
+			SKU:           created.SKU,
+			Name:          "Un (güncellendi)",
+			Kind:          domain.StockItemKindRaw,
+			CanonicalUnit: "kg",
+			Category:      "meat",
+			IsActive:      true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "Un (güncellendi)", updated.Name)
+	})
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		require.NoError(t, itemRepo.Delete(ctx, tx, newID))
+	})
+
+	withReadTx(t, tenantA, func(tx pgx.Tx) {
+		got, err := itemRepo.GetByID(ctx, tx, newID)
+		require.NoError(t, err)
+		assert.False(t, got.IsActive)
+	})
+}
+
+func TestStockItemRepo_TenantIsolation(t *testing.T) {
+	itemRepo := repo.NewStockItemRepo()
+	ctx := context.Background()
+	itemID := createStockItem(t, tenantA)
+
+	withReadTx(t, tenantB, func(tx pgx.Tx) {
+		_, err := itemRepo.GetByID(ctx, tx, itemID)
+		assert.ErrorIs(t, err, repo.ErrNotFound)
+	})
+}
+
+func TestStockItemRepo_ListFiltersByKind(t *testing.T) {
+	itemRepo := repo.NewStockItemRepo()
+	ctx := context.Background()
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		for _, kind := range []domain.StockItemKind{domain.StockItemKindRaw, domain.StockItemKindFinished} {
+			id, err := uuid.NewV7()
+			require.NoError(t, err)
+			_, err = itemRepo.Create(ctx, tx, domain.StockItem{
+				ID:            id,
+				TenantID:      tenantA,
+				SKU:           "SKU-KIND-" + uuid.NewString(),
+				Name:          "Item",
+				Kind:          kind,
+				CanonicalUnit: "adet",
+				IsActive:      true,
+			})
+			require.NoError(t, err)
+		}
+	})
+
+	withReadTx(t, tenantA, func(tx pgx.Tx) {
+		items, err := itemRepo.List(ctx, tx, domain.StockItemKindFinished)
+		require.NoError(t, err)
+		for _, it := range items {
+			assert.Equal(t, domain.StockItemKindFinished, it.Kind)
+		}
+	})
+}
+
+// ============================================================
+// WarehouseRepo tests
+// ============================================================
+
+func TestWarehouseRepo_CreateGetUpdateDelete(t *testing.T) {
+	whRepo := repo.NewWarehouseRepo()
+	ctx := context.Background()
+
+	var created domain.Warehouse
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		var err error
+		created, err = whRepo.Create(ctx, tx, domain.Warehouse{
+			TenantID:      tenantA,
+			BranchID:      branchA,
+			Name:          "Merkez Depo",
+			WarehouseType: domain.WarehouseTypeDepo,
+			IsActive:      true,
+		})
+		require.NoError(t, err)
+	})
+	assert.NotEqual(t, uuid.Nil, created.ID)
+
+	withReadTx(t, tenantA, func(tx pgx.Tx) {
+		got, err := whRepo.GetByID(ctx, tx, created.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "Merkez Depo", got.Name)
+	})
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		updated, err := whRepo.Update(ctx, tx, domain.Warehouse{
+			ID:            created.ID,
+			BranchID:      branchA,
+			Name:          "Merkez Depo (Yeni)",
+			WarehouseType: domain.WarehouseTypeImalat,
+			IsActive:      true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, domain.WarehouseTypeImalat, updated.WarehouseType)
+	})
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		require.NoError(t, whRepo.Delete(ctx, tx, created.ID))
+	})
+
+	withReadTx(t, tenantA, func(tx pgx.Tx) {
+		got, err := whRepo.GetByID(ctx, tx, created.ID)
+		require.NoError(t, err)
+		assert.False(t, got.IsActive)
+	})
+}
+
+func TestWarehouseRepo_TenantIsolation(t *testing.T) {
+	whRepo := repo.NewWarehouseRepo()
+	ctx := context.Background()
+	id := createWarehouse(t, tenantA)
+
+	withReadTx(t, tenantB, func(tx pgx.Tx) {
+		_, err := whRepo.GetByID(ctx, tx, id)
+		assert.ErrorIs(t, err, repo.ErrNotFound)
+	})
+}
+
+func TestWarehouseRepo_ListByBranch(t *testing.T) {
+	whRepo := repo.NewWarehouseRepo()
+	ctx := context.Background()
+	testBranch := uuid.New()
+
+	withTx(t, tenantA, func(tx pgx.Tx) {
+		for i := range 2 {
+			_, err := whRepo.Create(ctx, tx, domain.Warehouse{
+				TenantID:      tenantA,
+				BranchID:      testBranch,
+				Name:          fmt.Sprintf("Depo %d", i),
+				WarehouseType: domain.WarehouseTypeDepo,
+				IsActive:      true,
+			})
+			require.NoError(t, err)
+		}
+	})
+
+	withReadTx(t, tenantA, func(tx pgx.Tx) {
+		list, err := whRepo.List(ctx, tx, testBranch)
+		require.NoError(t, err)
+		assert.Len(t, list, 2)
+	})
 }

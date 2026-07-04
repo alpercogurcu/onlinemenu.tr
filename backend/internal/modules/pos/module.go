@@ -24,7 +24,7 @@ var Module = fx.Module("pos",
 		poshttp.NewHandler,
 		fx.Annotate(newCheckReader, fx.As(new(pub.CheckReader))),
 	),
-	fx.Invoke(func(h *poshttp.Handler, r *chi.Mux) {
+	fx.Invoke(func(h *poshttp.HandlerWithCache, r *chi.Mux) {
 		h.RegisterRoutes(r)
 	}),
 )

@@ -15,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"onlinemenu.tr/internal/modules/billing/domain"
+	pub "onlinemenu.tr/internal/modules/billing/public"
 	"onlinemenu.tr/internal/modules/billing/service"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/httpx"
@@ -24,6 +25,7 @@ import (
 type Handler struct {
 	billing *service.BillingService
 	logger  *zap.Logger
+	engine  *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -33,6 +35,7 @@ type Params struct {
 	Billing *service.BillingService
 	Logger  *zap.Logger
 	Cache   *redis.Client
+	Engine  *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client for idempotency middleware.
@@ -44,18 +47,24 @@ type HandlerWithCache struct {
 // New constructs a HandlerWithCache.
 func New(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{billing: p.Billing, logger: p.Logger},
+		h:     &Handler{billing: p.Billing, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
 
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
+}
+
 // RegisterRoutes mounts billing endpoints on the provided router.
+// Faz 1: invoices are manager-only (see configs/opa/bundles/authz.rego).
 func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/invoices", func(r chi.Router) {
-		r.With(httpx.Idempotency(hwc.cache)).Post("/", hwc.h.generate)
-		r.Get("/", hwc.h.list)
-		r.Get("/{id}", hwc.h.get)
-		r.Post("/{id}/retry", hwc.h.retry)
+		r.With(hwc.h.permit("billing.invoice.create"), httpx.Idempotency(hwc.cache)).Post("/", hwc.h.generate)
+		r.With(hwc.h.permit("billing.invoice.read")).Get("/", hwc.h.list)
+		r.With(hwc.h.permit("billing.invoice.read")).Get("/{id}", hwc.h.get)
+		r.With(hwc.h.permit("billing.invoice.retry")).Post("/{id}/retry", hwc.h.retry)
 	})
 }
 
@@ -66,16 +75,16 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		BranchID     uuid.UUID      `json:"branch_id"`
-		InvoiceType  string         `json:"invoice_type"`
-		CheckID      *uuid.UUID     `json:"check_id"`
-		PaymentID    *uuid.UUID     `json:"payment_id"`
-		SupplierVKN  string         `json:"supplier_vkn"`
-		SupplierName string         `json:"supplier_name"`
+		BranchID      uuid.UUID     `json:"branch_id"`
+		InvoiceType   string        `json:"invoice_type"`
+		CheckID       *uuid.UUID    `json:"check_id"`
+		PaymentID     *uuid.UUID    `json:"payment_id"`
+		SupplierVKN   string        `json:"supplier_vkn"`
+		SupplierName  string        `json:"supplier_name"`
 		SupplierAlias string        `json:"supplier_alias"`
-		CustomerVKN  string         `json:"customer_vkn"`
-		CustomerName string         `json:"customer_name"`
-		Items        []itemRequest  `json:"items"`
+		CustomerVKN   string        `json:"customer_vkn"`
+		CustomerName  string        `json:"customer_name"`
+		Items         []itemRequest `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -104,20 +113,24 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	inv, err := h.billing.GenerateInvoice(r.Context(), service.GenerateInvoiceRequest{
-		TenantID:      p.TenantID,
-		BranchID:      body.BranchID,
-		InvoiceType:   invType,
+	inv, err := h.billing.GenerateInvoice(r.Context(), p, service.GenerateInvoiceRequest{
+		TenantID:       p.TenantID,
+		BranchID:       body.BranchID,
+		InvoiceType:    invType,
 		IdempotencyKey: idempotencyKey,
-		CheckID:       body.CheckID,
-		PaymentID:     body.PaymentID,
-		SupplierVKN:   body.SupplierVKN,
-		SupplierName:  body.SupplierName,
-		SupplierAlias: body.SupplierAlias,
-		CustomerVKN:   body.CustomerVKN,
-		CustomerName:  body.CustomerName,
-		Items:         items,
+		CheckID:        body.CheckID,
+		PaymentID:      body.PaymentID,
+		SupplierVKN:    body.SupplierVKN,
+		SupplierName:   body.SupplierName,
+		SupplierAlias:  body.SupplierAlias,
+		CustomerVKN:    body.CustomerVKN,
+		CustomerName:   body.CustomerName,
+		Items:          items,
 	})
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		http.Error(w, "forbidden for this branch", http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		h.logger.Error("billing: generate invoice", zap.Error(err))
 		http.Error(w, "failed to generate invoice", http.StatusInternalServerError)
@@ -200,9 +213,13 @@ func (h *Handler) retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inv, err := h.billing.RetrySubmission(r.Context(), p.TenantID, id)
+	inv, err := h.billing.RetrySubmission(r.Context(), p, p.TenantID, id)
 	if errors.Is(err, service.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		http.Error(w, "forbidden for this branch", http.StatusForbidden)
 		return
 	}
 	if err != nil {

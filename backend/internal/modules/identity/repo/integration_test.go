@@ -231,16 +231,28 @@ func withReadTx(ctx context.Context, t *testing.T, tenantID uuid.UUID, f func(pg
 	require.NoError(t, err)
 }
 
-// withPlatformTx executes f with uuid.Nil as tenant (platform-level bypass).
-// Use for persons, which have no tenant_id and use the nil-UUID RLS bypass.
+// withPlatformTx executes f under the platform-scope RLS path
+// (app.tenant_scope = 'all_tenants', db.WithAllTenantsTx). Use for persons,
+// which have no tenant_id and are visible/writable at platform scope only.
+// uuid.Nil is no longer a valid WithTenantTx tenant argument (db.ErrNilTenant,
+// docs/lessons-from-b2b.md item 6), so this goes through the explicitly-named
+// all-tenants path instead.
 func withPlatformTx(ctx context.Context, t *testing.T, f func(pgx.Tx)) {
 	t.Helper()
-	withTx(ctx, t, uuid.Nil, f)
+	err := sharedPool.WithAllTenantsTx(ctx, func(tx pgx.Tx) error {
+		f(tx)
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 func withPlatformReadTx(ctx context.Context, t *testing.T, f func(pgx.Tx)) {
 	t.Helper()
-	withReadTx(ctx, t, uuid.Nil, f)
+	err := sharedPool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
+		f(tx)
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -302,9 +314,19 @@ func TestPersonRepo_GetByKeycloakSub(t *testing.T) {
 	})
 }
 
+// TestPersonRepo_Update proves persons_update (migrations/identity/000008)
+// requires the caller's tenant to hold an active membership for the target
+// person — there is no all_tenants write branch (see db.WithAllTenantsTx
+// godoc: the persons table has no legitimate cross-tenant write path, only
+// PersonService.Update exists, and it always supplies a real tenantID). The
+// update below therefore runs under the person's own tenant (withTx), not
+// under withPlatformTx — attempting the latter would now correctly fail,
+// which is the latent cross-tenant write hole this migration closes.
 func TestPersonRepo_Update(t *testing.T) {
 	ctx := context.Background()
 	r := repo.NewPersonRepo()
+	mr := repo.NewMembershipRepo()
+	cashierRoleID := systemRoleID(t, "cashier")
 
 	var person domain.Person
 	withPlatformTx(ctx, t, func(tx pgx.Tx) {
@@ -317,7 +339,15 @@ func TestPersonRepo_Update(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	withPlatformTx(ctx, t, func(tx pgx.Tx) {
+	withTx(ctx, t, tenantA, func(tx pgx.Tx) {
+		_, err := mr.Create(ctx, tx, domain.Membership{
+			PersonID: person.ID, TenantID: tenantA, BranchID: &branchA,
+			RoleID: cashierRoleID, Status: domain.MembershipActive,
+		})
+		require.NoError(t, err)
+	})
+
+	withTx(ctx, t, tenantA, func(tx pgx.Tx) {
 		person.FullName = "Charlie Updated"
 		person.Phone = "+905009999999"
 		updated, err := r.Update(ctx, tx, person)
@@ -574,6 +604,79 @@ func TestMembershipRepo_ActiveRoleIDsAt(t *testing.T) {
 		}
 		assert.True(t, idSet[cashierRoleID])
 		assert.True(t, idSet[kitchenRoleID])
+	})
+}
+
+// TestMembershipRepo_ListContextsForPerson_CrossTenant proves that the
+// memberships_read policy rewritten in migrations/identity/000008 (uuid.Nil
+// bypass -> app.tenant_scope = 'all_tenants') still lets ListContextsForPerson
+// see a person's memberships across every tenant, and that this requires the
+// explicit WithAllTenantsReadTx path — an ordinary single-tenant read only
+// sees that tenant's own membership. This is the exact query path
+// ContextService.SelectContext and MembershipService.ListContexts depend on.
+func TestMembershipRepo_ListContextsForPerson_CrossTenant(t *testing.T) {
+	ctx := context.Background()
+	mr := repo.NewMembershipRepo()
+	pr := repo.NewPersonRepo()
+	cashierRoleID := systemRoleID(t, "cashier")
+
+	var person domain.Person
+	withPlatformTx(ctx, t, func(tx pgx.Tx) {
+		var err error
+		person, err = pr.Create(ctx, tx, domain.Person{
+			KeycloakSub: "kc-sub-" + uuid.NewString(),
+			Email:       "grace+" + uuid.NewString() + "@example.com",
+			FullName:    "Grace Test",
+		})
+		require.NoError(t, err)
+	})
+
+	// tenantA: branch-scoped membership.
+	withTx(ctx, t, tenantA, func(tx pgx.Tx) {
+		_, err := mr.Create(ctx, tx, domain.Membership{
+			PersonID: person.ID, TenantID: tenantA, BranchID: &branchA,
+			RoleID: cashierRoleID, Status: domain.MembershipActive,
+		})
+		require.NoError(t, err)
+	})
+
+	// tenantB: chain-wide membership (no branch fixture seeded for tenantB).
+	withTx(ctx, t, tenantB, func(tx pgx.Tx) {
+		_, err := mr.Create(ctx, tx, domain.Membership{
+			PersonID: person.ID, TenantID: tenantB, BranchID: nil,
+			RoleID: cashierRoleID, Status: domain.MembershipActive,
+		})
+		require.NoError(t, err)
+	})
+
+	withPlatformReadTx(ctx, t, func(tx pgx.Tx) {
+		items, err := mr.ListContextsForPerson(ctx, tx, person.ID)
+		require.NoError(t, err)
+
+		// Only IDs are asserted here, deliberately: TenantName/RoleName come
+		// from tenants/roles, which are LEFT JOINed and may legitimately be
+		// empty cross-tenant because those tables' own RLS is keyed on
+		// app.tenant_id (out of this module's scope to change — see
+		// ListContextsForPerson godoc). Do not "helpfully" add a name
+		// assertion here; it will fail until the tenant module adds an
+		// app.tenant_scope = 'all_tenants' SELECT branch of its own.
+		tenantIDs := make(map[uuid.UUID]bool, len(items))
+		for _, item := range items {
+			tenantIDs[item.TenantID] = true
+		}
+		assert.True(t, tenantIDs[tenantA], "cross-tenant read must include tenantA membership")
+		assert.True(t, tenantIDs[tenantB], "cross-tenant read must include tenantB membership")
+	})
+
+	// An ordinary tenant-scoped read must NOT see the other tenant's membership —
+	// the all_tenants branch is additive, never a general leak.
+	withReadTx(ctx, t, tenantA, func(tx pgx.Tx) {
+		var count int
+		err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM memberships WHERE person_id = $1`, person.ID,
+		).Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 1, count, "tenant-scoped read must only see tenantA's own membership row")
 	})
 }
 

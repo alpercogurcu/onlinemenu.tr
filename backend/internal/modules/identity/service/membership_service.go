@@ -65,7 +65,7 @@ func (s *MembershipService) List(
 
 // ListContexts returns the lightweight context summaries for all active memberships
 // belonging to the person identified by keycloakSub.
-// uuid.Nil is used for the person lookup: the persons table is cross-tenant.
+// This is a platform-scope read: the memberships-by-person view spans tenants.
 func (s *MembershipService) ListContexts(ctx context.Context, keycloakSub string, personSvc *PersonService) ([]domain.ContextItem, error) {
 	person, err := personSvc.GetByKeycloakSub(ctx, keycloakSub)
 	if err != nil {
@@ -73,8 +73,10 @@ func (s *MembershipService) ListContexts(ctx context.Context, keycloakSub string
 	}
 
 	var items []domain.ContextItem
-	// uuid.Nil scopes the query to the cross-tenant view of memberships.
-	err = s.db.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+	// WithAllTenantsReadTx scopes the query to the cross-tenant view of
+	// memberships (app.tenant_scope = 'all_tenants'), the named platform-scope
+	// path — see db.WithAllTenantsReadTx and docs/lessons-from-b2b.md item 6.
+	err = s.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		items, err = s.membershipRepo.ListContextsForPerson(ctx, tx, person.ID)
 		return err
@@ -90,7 +92,7 @@ func (s *MembershipService) ListContexts(ctx context.Context, keycloakSub string
 // a context token (CTX) and personID is known.
 func (s *MembershipService) ListContextsByPerson(ctx context.Context, personID uuid.UUID) ([]domain.ContextItem, error) {
 	var items []domain.ContextItem
-	err := s.db.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+	err := s.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		items, err = s.membershipRepo.ListContextsForPerson(ctx, tx, personID)
 		return err

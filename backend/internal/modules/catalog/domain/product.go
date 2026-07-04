@@ -24,8 +24,14 @@ type Product struct {
 	AutoCloseOnZeroStock bool // POS closes product when stock reaches 0
 	StockQuantity        *int // nil = unlimited
 	SortOrder            int16
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	// SourceStockItemID optionally links this sellable product to its
+	// canonical stocked entity in inventory.stock_items (ADR-DATA-005). Only
+	// products backed by tracked stock (e.g. a franchise-sold finished good)
+	// set this; pure service/combo products leave it nil. No FK: cross-module
+	// reference (migrations/catalog/000002).
+	SourceStockItemID *uuid.UUID
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // ChannelAvailability controls product visibility per order channel.

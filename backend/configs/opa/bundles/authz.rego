@@ -4,79 +4,193 @@ import future.keywords.if
 import future.keywords.in
 
 # Authorization layer 2 of 4 (ADR-AUTH-001):
-# RLS (layer 1) → OPA Allow + Scope (layer 2) → Service WHERE clause (layer 3) → DTO projection (layer 4)
+# RLS (layer 1) -> OPA Allow + Scope (layer 2) -> Service WHERE clause (layer 3) -> DTO projection (layer 4)
 #
 # This policy returns:
-#   allow: bool   — whether the action is permitted at all
-#   scope: string — data visibility level ("tenant" | "branch" | "own")
+#   allow: bool   - whether the action is permitted at all
+#   scope: string - data visibility level ("tenant" | "branch" | "own")
 #
 # OPA does NOT return permission lists; field-level filtering is done in DTO projection only.
+#
+# Action naming: "<module>.<resource>.<verb>", e.g. "catalog.product.create".
+#
+# Role representation: input.principal.roles carries role UUIDs (Principal.RoleIDs),
+# not names. This policy matches against the well-known *system* role IDs seeded in
+# identity/000006_seed_system_roles.up.sql (immutable templates, tenant_id IS NULL).
+# Tenant-specific custom roles are NOT resolved here: doing so requires a role_id ->
+# system_key lookup backed by identity module internals (PermissionRepo / PermSet),
+# which is out of platform/auth's module boundary. Custom-role scoped policies are
+# deferred to a Faz 2 follow-up (see docs/lessons-from-b2b.md task list, item 1).
+system_roles := {
+	"cashier": "00000001-0000-0000-0000-000000000001",
+	"shift_manager": "00000001-0000-0000-0000-000000000002",
+	"driver": "00000001-0000-0000-0000-000000000003",
+	"kitchen": "00000001-0000-0000-0000-000000000004",
+	"bar": "00000001-0000-0000-0000-000000000005",
+	"manager": "00000001-0000-0000-0000-000000000006",
+	# "warehouse" is forward-declared here (ADR-DATA-005 İlke 4: depo/imalat
+	# şubesinin manager/warehouse rolü inventory permission'ı alır) but is NOT
+	# yet seeded in identity/000006_seed_system_roles.up.sql — that migration
+	# is outside this task's file scope (backend/internal/modules/identity is
+	# not touched here). Until the identity module seeds role id ...0007 with
+	# system_key='warehouse', no principal can actually hold this role, so the
+	# rules below are inert-but-correct: they take effect the moment identity
+	# seeds the role, with no further rego change required. Flagged as a
+	# required identity-module follow-up in the sprint report.
+	"warehouse": "00000001-0000-0000-0000-000000000007",
+}
+
+has_role(name) if {
+	system_roles[name] in input.principal.roles
+}
+
+any_role(names) if {
+	some name in names
+	has_role(name)
+}
 
 default allow = false
+
 default scope = "own"
 
-# ── Tenant admin ────────────────────────────────────────────────────────────────
-# A tenant admin can perform any action within their tenant.
+# -- Manager: chain-wide administrator (seed migration comment: "wildcard - tum kaynak
+# ve eylemler"). Manager is the only system role authorized for back-office modules
+# (tenant configuration, identity role/membership management, party/CRM, hr-core,
+# billing) in Faz 1 — those modules have no seeded permission rows for other roles.
 allow if {
-	"admin" in input.principal.roles
+	has_role("manager")
 }
 
 scope := "tenant" if {
-	"admin" in input.principal.roles
+	has_role("manager")
 }
 
-# ── Branch manager ───────────────────────────────────────────────────────────────
-# A manager can perform actions within the branches they are assigned to.
+# -- Catalog: read access for POS-facing roles; writes remain manager-only (covered
+# by the manager rule above).
+catalog_read_actions := {
+	"catalog.category.read",
+	"catalog.product.read",
+	"catalog.modifier_group.read",
+	"catalog.modifier.read",
+	"catalog.menu.read",
+	"catalog.menu_item.read",
+}
+
 allow if {
-	"manager" in input.principal.roles
-	not "admin" in input.principal.roles
+	input.action in catalog_read_actions
+	any_role({"cashier", "shift_manager", "kitchen", "bar"})
 }
 
+# -- Inventory (legacy, pre-ADR-DATA-005 branch-scoped model): ORPHANED.
+# inventory_levels/inventory_transactions were re-keyed to warehouse-scoped
+# stock_levels/stock_movements (migrations/inventory/000003); no live endpoint
+# is wired to "inventory.transaction.*" any more (the HTTP layer now uses
+# "inventory.level.read" and "inventory.movement.*", both governed by
+# inventory_management_actions below, manager/warehouse only per ADR-DATA-005
+# İlke 4). This block is left in place, unused, only because
+# internal/platform/auth/opa_test.go asserts it directly by action string
+# (TestEngine_Decide_ShiftManager_InventoryWrite) and that file is outside
+# this task's scope to edit — removing it would break that test without a
+# corresponding code change to fix it. Do not wire any new endpoint to
+# "inventory.transaction.*"; it is dead policy, kept only for that test.
+allow if {
+	input.action == "inventory.transaction.read"
+	any_role({"kitchen", "bar", "shift_manager"})
+}
+
+allow if {
+	input.action == "inventory.transaction.create"
+	has_role("shift_manager")
+}
+
+# -- Inventory management (ADR-DATA-005 İlke 4): stock items, warehouses,
+# stock movements, branch transfer orders and shipments are manager/warehouse
+# only. Counter-facing roles (cashier/waiter) and kitchen/bar get NONE of
+# these actions — visibility is route/permission absence, never a row-level
+# opt-in flag (this is exactly the discipline the b2b post-mortem in
+# ADR-DATA-005 says was missing: "BranchStockTracking" was a per-row bayrak,
+# not a module boundary).
+inventory_management_actions := {
+	"inventory.level.read",
+	"inventory.stock_item.read",
+	"inventory.stock_item.create",
+	"inventory.stock_item.update",
+	"inventory.stock_item.delete",
+	"inventory.warehouse.read",
+	"inventory.warehouse.create",
+	"inventory.warehouse.update",
+	"inventory.warehouse.delete",
+	"inventory.movement.read",
+	"inventory.movement.create",
+	"inventory.transfer_order.read",
+	"inventory.transfer_order.create",
+	"inventory.transfer_order.submit",
+	"inventory.transfer_order.approve",
+	"inventory.transfer_order.reject",
+	"inventory.transfer_order.cancel",
+	"inventory.transfer_order.fulfil",
+	"inventory.shipment.read",
+	"inventory.shipment.create",
+	"inventory.shipment.advance",
+	"inventory.shipment.receive",
+	"inventory.shipment.cancel",
+}
+
+allow if {
+	input.action in inventory_management_actions
+	has_role("warehouse")
+}
+
+# -- POS: check lifecycle (open/close/cancel) and order intake (place/accept/
+# reject) are counter-facing actions, owned by cashier/shift_manager (mirrors
+# role_permissions seed: checks/orders create+read+update for both).
+pos_counter_actions := {
+	"pos.check.read",
+	"pos.check.open",
+	"pos.check.close",
+	"pos.check.cancel",
+	"pos.order.read",
+	"pos.order.place",
+	"pos.order.accept",
+	"pos.order.reject",
+	"pos.order.advance",
+}
+
+allow if {
+	input.action in pos_counter_actions
+	any_role({"cashier", "shift_manager"})
+}
+
+# -- Kitchen/bar: read tickets and advance them through preparing/ready; they
+# never open/close checks or accept/reject intake — that stays with the
+# counter roles above (mirrors role_permissions seed: orders read+update only).
+pos_kitchen_actions := {
+	"pos.order.read",
+	"pos.order.advance",
+}
+
+allow if {
+	input.action in pos_kitchen_actions
+	any_role({"kitchen", "bar"})
+}
+
+# -- Payment: cashier/shift_manager register sales at the counter (mirrors
+# role_permissions seed: payment.create for both). Listing/reading past
+# payments is reserved for shift reconciliation (shift_manager) and manager
+# (wildcard, covered above).
+allow if {
+	input.action == "payment.sale.register"
+	any_role({"cashier", "shift_manager"})
+}
+
+allow if {
+	input.action == "payment.payment.read"
+	has_role("shift_manager")
+}
+
+# -- Scope resolution for non-manager allows above: branch-scoped, since cashier/
+# shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {
-	"manager" in input.principal.roles
-	not "admin" in input.principal.roles
-}
-
-# ── Cashier ──────────────────────────────────────────────────────────────────────
-# Cashiers can perform POS sale operations within their branch.
-allow if {
-	"cashier" in input.principal.roles
-	input.action in {"pos:order:create", "pos:order:read", "pos:payment:create"}
-}
-
-# ── Waiter ───────────────────────────────────────────────────────────────────────
-# Waiters can create and read orders; they cannot process payments.
-allow if {
-	"waiter" in input.principal.roles
-	input.action in {"pos:order:create", "pos:order:read", "pos:table:read"}
-}
-
-# ── Kitchen staff ────────────────────────────────────────────────────────────────
-# Kitchen display system users can only read and update order item status.
-allow if {
-	"kitchen" in input.principal.roles
-	input.action in {"pos:order:read", "pos:order:item:update_status"}
-}
-
-# ── Inventory read ──────────────────────────────────────────────────────────────
-# Kitchen and bar staff can read stock levels (their DB role_permissions have inventory:read).
-# Shift manager can read and adjust stock within their branch.
-allow if {
-	input.principal.roles[_] in {"kitchen", "bar"}
-	input.action in {"inventory:level:read", "inventory:transaction:read"}
-}
-
-allow if {
-	"shift_manager" in input.principal.roles
-	input.action in {"inventory:level:read", "inventory:transaction:read",
-	                 "inventory:transaction:create"}
-}
-
-# ── Read-only scope for non-manager roles ────────────────────────────────────────
-# Non-admin, non-manager roles see only their own branch data.
-# The service layer is responsible for translating "own" scope into a WHERE branch_id = ?
-# clause using the principal's branch_id from the JWT.
-scope := "own" if {
-	not "admin" in input.principal.roles
-	not "manager" in input.principal.roles
+	not has_role("manager")
+	any_role({"cashier", "shift_manager", "driver", "kitchen", "bar", "warehouse"})
 }

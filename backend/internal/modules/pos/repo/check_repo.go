@@ -47,6 +47,27 @@ func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 	return c, nil
 }
 
+// GetForUpdate locks the check row for the duration of the caller's
+// transaction. This is what actually prevents two concurrent Close/Cancel
+// calls from both observing "open" and both emitting an outbox event: the
+// second caller blocks here until the first commits or rolls back, then
+// observes the already-updated status.
+func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
+	const q = `
+		SELECT id, tenant_id, branch_id, table_label, status, opened_by,
+		       closed_by, note, opened_at, closed_at, created_at, updated_at
+		FROM checks WHERE id = $1 FOR UPDATE`
+
+	c, err := scanCheck(tx.QueryRow(ctx, q, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Check{}, ErrNotFound
+		}
+		return domain.Check{}, fmt.Errorf("pos/repo/check: get for update: %w", err)
+	}
+	return c, nil
+}
+
 // List returns all checks visible to the current tenant (open first, then by opened_at desc).
 func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Check, error) {
 	const q = `
@@ -88,20 +109,25 @@ func (r *CheckRepo) GetTotal(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) 
 	return total, nil
 }
 
-// UpdateStatus transitions a check to a new status.
-func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status domain.CheckStatus, closedBy *uuid.UUID) (domain.Check, error) {
+// UpdateStatus transitions a check to a new status, guarded on its expected
+// current status. Returns ErrInvalidTransition if the row's status no longer
+// matches expectedStatus (0 rows affected). Callers should pair this with a
+// preceding GetForUpdate in the same transaction: the row lock is what makes
+// concurrent Close/Cancel calls serialize (only one observes "open"), while
+// this guard is a defense-in-depth check against the expected status.
+func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status, expectedStatus domain.CheckStatus, closedBy *uuid.UUID) (domain.Check, error) {
 	const q = `
-		UPDATE checks SET status = $2, closed_by = $3,
+		UPDATE checks SET status = $2, closed_by = $4,
 		                  closed_at = CASE WHEN $2 IN ('closed','cancelled') THEN NOW() ELSE closed_at END,
 		                  updated_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND status = $3
 		RETURNING id, tenant_id, branch_id, table_label, status, opened_by,
 		          closed_by, note, opened_at, closed_at, created_at, updated_at`
 
-	c, err := scanCheck(tx.QueryRow(ctx, q, id, string(status), closedBy))
+	c, err := scanCheck(tx.QueryRow(ctx, q, id, string(status), string(expectedStatus), closedBy))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Check{}, ErrNotFound
+			return domain.Check{}, ErrInvalidTransition
 		}
 		return domain.Check{}, fmt.Errorf("pos/repo/check: update status: %w", err)
 	}

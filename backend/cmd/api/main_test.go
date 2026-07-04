@@ -82,7 +82,7 @@ func TestRouterMiddleware(t *testing.T) {
 	verifier, err := newTokenVerifier()
 	require.NoError(t, err)
 
-	router := newRouter(signer, verifier)
+	router := newRouter(signer, verifier, nil)
 
 	t.Run("healthz_no_auth_200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

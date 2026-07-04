@@ -66,13 +66,16 @@ func (s *ContextService) SelectContext(
 
 	// Resolve tenantID and branchID for the requested membershipID.
 	// ListContextsForPerson is the only cross-tenant read path available;
-	// GetByID requires a known tenantID which we don't have yet.
+	// GetByID requires a known tenantID which we don't have yet. It is read
+	// via WithAllTenantsReadTx (app.tenant_scope = 'all_tenants'), the named
+	// platform-scope path — see db.WithAllTenantsReadTx and
+	// docs/lessons-from-b2b.md item 6.
 	// Only active memberships are returned by the query, so a missing match
 	// means the membership is inactive, terminated, or belongs to a different person.
 	var tenantID uuid.UUID
 	var branchID uuid.UUID
 	var found bool
-	err = s.db.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+	err = s.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		items, err := s.membershipRepo.ListContextsForPerson(ctx, tx, person.ID)
 		if err != nil {
 			return err

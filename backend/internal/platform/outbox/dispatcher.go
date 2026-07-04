@@ -39,6 +39,15 @@ type Config struct {
 	BatchSize int
 	// MaxRetries is the retry limit before marking an event as dead.
 	MaxRetries int
+	// PublishTimeout bounds each individual NATS publish call. Publishing happens
+	// outside the claim transaction, so a slow/unavailable NATS server must not
+	// hold a claimed row (or a DB connection) indefinitely. Defaults to 5s.
+	PublishTimeout time.Duration
+	// StaleClaimAfter is how long a row may stay claimed without being resolved
+	// (processed or retried) before another dispatcher instance may reclaim it.
+	// This bounds recovery time after a dispatcher crash between claim and
+	// result-apply. Defaults to 5 minutes.
+	StaleClaimAfter time.Duration
 }
 
 // tableSpec describes one outbox table and its NATS subject namespace.
@@ -50,6 +59,7 @@ type tableSpec struct {
 var tables = []tableSpec{
 	{table: "pos_outbox", module: "pos"},
 	{table: "payment_outbox", module: "payment"},
+	{table: "billing_outbox", module: "billing"},
 }
 
 // outboxRow is a row fetched from any outbox table.
@@ -65,11 +75,14 @@ type outboxRow struct {
 
 // Dispatcher polls outbox tables and publishes events to NATS JetStream.
 type Dispatcher struct {
-	pool   *pgxpool.Pool
-	pub    msgPublisher
-	cfg    Config
-	logger *zap.Logger
-	cancel context.CancelFunc
+	pool            *pgxpool.Pool
+	pub             msgPublisher
+	cfg             Config
+	logger          *zap.Logger
+	cancel          context.CancelFunc
+	done            chan struct{}
+	publishTimeout  time.Duration
+	staleClaimAfter time.Duration
 }
 
 // Params groups fx-injected dependencies for the Dispatcher.
@@ -104,7 +117,24 @@ func Register(p Params) error {
 		return fmt.Errorf("outbox: create dispatcher pool: %w", err)
 	}
 
-	d := &Dispatcher{pool: pool, pub: p.Bus, cfg: p.Config, logger: p.Logger}
+	publishTimeout := p.Config.PublishTimeout
+	if publishTimeout <= 0 {
+		publishTimeout = 5 * time.Second
+	}
+	staleClaimAfter := p.Config.StaleClaimAfter
+	if staleClaimAfter <= 0 {
+		staleClaimAfter = 5 * time.Minute
+	}
+
+	d := &Dispatcher{
+		pool:            pool,
+		pub:             p.Bus,
+		cfg:             p.Config,
+		logger:          p.Logger,
+		done:            make(chan struct{}),
+		publishTimeout:  publishTimeout,
+		staleClaimAfter: staleClaimAfter,
+	}
 
 	p.LC.Append(fx.Hook{
 		OnStart: func(startCtx context.Context) error {
@@ -118,12 +148,22 @@ func Register(p Params) error {
 			p.Logger.Info("outbox dispatcher started",
 				zap.Duration("poll_interval", p.Config.PollInterval),
 				zap.Int("batch_size", p.Config.BatchSize),
+				zap.Duration("publish_timeout", publishTimeout),
+				zap.Duration("stale_claim_after", staleClaimAfter),
 			)
 			return nil
 		},
-		OnStop: func(_ context.Context) error {
+		OnStop: func(stopCtx context.Context) error {
 			if d.cancel != nil {
 				d.cancel()
+			}
+			// Wait for run() to observe cancellation and exit before closing the
+			// pool, otherwise an in-flight query would fail against a closed pool
+			// and the run() goroutine would leak past OnStop's return.
+			select {
+			case <-d.done:
+			case <-stopCtx.Done():
+				p.Logger.Warn("outbox: dispatcher stop deadline exceeded before loop exit")
 			}
 			pool.Close()
 			p.Logger.Info("outbox dispatcher stopped")
@@ -136,6 +176,8 @@ func Register(p Params) error {
 
 // run is the main dispatcher loop. It polls all outbox tables on a ticker.
 func (d *Dispatcher) run(ctx context.Context) {
+	defer close(d.done)
+
 	interval := d.cfg.PollInterval
 	if interval <= 0 {
 		interval = 2 * time.Second
@@ -160,49 +202,21 @@ func (d *Dispatcher) run(ctx context.Context) {
 	}
 }
 
-// dispatchTable fetches a batch from one outbox table and publishes each event.
+// dispatchTable claims a batch from one outbox table, publishes each event
+// outside any transaction, then persists the outcome in a short results tx.
+//
+// Splitting claim / publish / apply-results is deliberate (see ADR-DATA-001
+// discussion in the sprint report): publishing while holding a row lock and a
+// pooled connection meant a slow or unavailable NATS server could exhaust the
+// dispatcher's small connection pool (MaxConns=4) and stall the dispatcher
+// entirely. Publishing is now bounded by PublishTimeout and never blocks a
+// database connection.
 func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
-	query := fmt.Sprintf(`
-		SELECT event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload, retry_count
-		FROM %s
-		WHERE processed_at IS NULL
-		  AND is_dead = FALSE
-		  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-		ORDER BY aggregate_id, event_id
-		FOR UPDATE SKIP LOCKED
-		LIMIT %d
-	`, t.table, d.cfg.BatchSize)
-
-	tx, err := d.pool.Begin(ctx)
+	batch, err := d.claimBatch(ctx, t.table)
 	if err != nil {
-		return fmt.Errorf("outbox: begin tx for %s: %w", t.table, err)
+		return fmt.Errorf("outbox: claim batch for %s: %w", t.table, err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	rows, err := tx.Query(ctx, query)
-	if err != nil {
-		return fmt.Errorf("outbox: query %s: %w", t.table, err)
-	}
-
-	var batch []outboxRow
-	for rows.Next() {
-		var r outboxRow
-		if err := rows.Scan(
-			&r.eventID, &r.tenantID, &r.aggregateType, &r.aggregateID,
-			&r.eventType, &r.payload, &r.retryCount,
-		); err != nil {
-			rows.Close()
-			return fmt.Errorf("outbox: scan %s: %w", t.table, err)
-		}
-		batch = append(batch, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("outbox: rows err %s: %w", t.table, err)
-	}
-
 	if len(batch) == 0 {
-		_ = tx.Rollback(ctx)
 		return nil
 	}
 
@@ -213,7 +227,7 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
 
 	for _, r := range batch {
 		subject := toSubject(t.module, r.eventType)
-		pubErr := d.publish(ctx, r.eventID, subject, r.payload)
+		pubErr := d.publishWithTimeout(ctx, r.eventID, subject, r.payload)
 		if pubErr == nil {
 			successIDs = append(successIDs, r.eventID)
 		} else {
@@ -232,12 +246,8 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
 		maxRetries = 10
 	}
 
-	if err := d.applyResults(ctx, tx, t.table, successIDs, failures, maxRetries); err != nil {
+	if err := d.applyResults(ctx, t.table, successIDs, failures, maxRetries); err != nil {
 		return fmt.Errorf("outbox: apply results for %s: %w", t.table, err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("outbox: commit %s: %w", t.table, err)
 	}
 
 	if len(successIDs) > 0 {
@@ -250,26 +260,109 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
 	return nil
 }
 
+// claimBatch atomically selects and marks up to BatchSize eligible rows as
+// claimed, in one short transaction, and returns them for publishing.
+//
+// Eligible rows are: unprocessed, not dead, past their retry backoff, and
+// either never claimed or claimed longer than StaleClaimAfter ago (recovers
+// rows left claimed by a dispatcher that crashed after claiming but before
+// applying results — at-least-once delivery relies on this reclaim plus
+// JetStream's Nats-Msg-Id dedup and consumers' ON CONFLICT DO NOTHING).
+func (d *Dispatcher) claimBatch(ctx context.Context, table string) ([]outboxRow, error) {
+	// Truncated to whole seconds for the INTERVAL literal below: guard against
+	// a sub-second StaleClaimAfter (e.g. in a misconfigured test) rounding down
+	// to 0, which would make every claimed-but-unresolved row reclaimable
+	// instantly instead of after a meaningful crash-recovery window.
+	staleSeconds := int(d.staleClaimAfter.Seconds())
+	if staleSeconds < 1 {
+		staleSeconds = 1
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE %s
+		SET claimed_at = NOW()
+		WHERE event_id IN (
+			SELECT event_id
+			FROM %s
+			WHERE processed_at IS NULL
+			  AND is_dead = FALSE
+			  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+			  AND (claimed_at IS NULL OR claimed_at <= NOW() - INTERVAL '%d seconds')
+			ORDER BY aggregate_id, event_id
+			FOR UPDATE SKIP LOCKED
+			LIMIT %d
+		)
+		RETURNING event_id, tenant_id, aggregate_type, aggregate_id, event_type, payload, retry_count
+	`, table, table, staleSeconds, d.cfg.BatchSize)
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin claim tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("claim query: %w", err)
+	}
+
+	var batch []outboxRow
+	for rows.Next() {
+		var r outboxRow
+		if err := rows.Scan(
+			&r.eventID, &r.tenantID, &r.aggregateType, &r.aggregateID,
+			&r.eventType, &r.payload, &r.retryCount,
+		); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan claimed row: %w", err)
+		}
+		batch = append(batch, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("claim rows err: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit claim tx: %w", err)
+	}
+
+	return batch, nil
+}
+
 type failureResult struct {
 	row outboxRow
 	err error
 }
 
-// applyResults marks successful events as processed and increments retry/dead for failures.
+// applyResults marks successful events as processed and increments retry/dead for
+// failures, in a short transaction separate from the (already-committed) claim
+// and the (already-completed) publish attempts.
 func (d *Dispatcher) applyResults(
 	ctx context.Context,
-	tx pgx.Tx,
 	table string,
 	successIDs []uuid.UUID,
 	failures []failureResult,
 	maxRetries int,
 ) error {
-	if len(successIDs) > 0 {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin results tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Executed as individual statements rather than "= ANY($1)" with a slice
+	// parameter: under QueryExecModeSimpleProtocol (required for pgBouncer
+	// transaction-mode compatibility) pgx cannot text-encode a []uuid.UUID
+	// array parameter ("unable to encode ... unknown type"). Batch sizes here
+	// are small (BatchSize per cycle), so per-row statements are not a
+	// meaningful cost against the outbox poll interval.
+	for _, id := range successIDs {
 		_, err := tx.Exec(ctx, fmt.Sprintf(
-			`UPDATE %s SET processed_at = NOW() WHERE event_id = ANY($1)`, table,
-		), successIDs)
+			`UPDATE %s SET processed_at = NOW() WHERE event_id = $1`, table,
+		), id)
 		if err != nil {
-			return fmt.Errorf("mark processed: %w", err)
+			return fmt.Errorf("mark processed %s: %w", id, err)
 		}
 	}
 
@@ -279,12 +372,15 @@ func (d *Dispatcher) applyResults(
 		next := retryBackoff(newRetry)
 		errStr := f.err.Error()
 
+		// claimed_at is cleared so the row is immediately eligible again once
+		// next_retry_at elapses, instead of also waiting out StaleClaimAfter.
 		_, err := tx.Exec(ctx, fmt.Sprintf(`
 			UPDATE %s
 			SET retry_count   = $2,
 			    next_retry_at = $3,
 			    last_error    = $4,
-			    is_dead       = $5
+			    is_dead       = $5,
+			    claimed_at    = NULL
 			WHERE event_id = $1
 		`, table), f.row.eventID, newRetry, next, errStr, isDead)
 		if err != nil {
@@ -301,12 +397,25 @@ func (d *Dispatcher) applyResults(
 		}
 	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit results tx: %w", err)
+	}
 	return nil
+}
+
+// publishWithTimeout bounds one publish call so a slow/unavailable NATS server
+// cannot stall a dispatch cycle indefinitely. The timeout is derived from the
+// dispatcher's run-loop context so shutdown aborts in-flight publishes cleanly.
+func (d *Dispatcher) publishWithTimeout(ctx context.Context, eventID uuid.UUID, subject string, payload []byte) error {
+	pubCtx, cancel := context.WithTimeout(ctx, d.publishTimeout)
+	defer cancel()
+	return d.publish(pubCtx, eventID, subject, payload)
 }
 
 // publish sends one event to NATS JetStream with Nats-Msg-Id for deduplication.
 // The Nats-Msg-Id header enables JetStream's built-in deduplication window,
-// preventing duplicate delivery if the dispatcher restarts before committing.
+// preventing duplicate delivery if the dispatcher restarts before committing,
+// or if a claimed-but-unresolved row is reclaimed and republished.
 func (d *Dispatcher) publish(ctx context.Context, eventID uuid.UUID, subject string, payload []byte) error {
 	return d.pub.PublishMsg(ctx, &nats.Msg{
 		Subject: subject,

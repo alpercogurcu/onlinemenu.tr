@@ -4,8 +4,11 @@ package httpx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -36,15 +39,41 @@ type idempotencyEntry struct {
 	StatusCode int               `json:"status_code"`
 	Headers    map[string]string `json:"headers"`
 	Body       []byte            `json:"body"`
+	// BodyHash is the SHA-256 (hex) of the request body that produced this
+	// entry. It lets a later request reusing the same Idempotency-Key with a
+	// different body be rejected instead of silently replaying (or worse,
+	// re-executing against) an unrelated request.
+	BodyHash string `json:"body_hash"`
 }
+
+// cacheLookup is the outcome of comparing an incoming request against a
+// previously cached entry for the same Idempotency-Key.
+type cacheLookup int
+
+const (
+	// cacheMiss means no entry exists yet (or the entry could not be read/
+	// decoded, which is treated the same as a miss — the handler runs and a
+	// fresh entry is written).
+	cacheMiss cacheLookup = iota
+	// cacheHitSameBody means a cached response exists for a request with the
+	// same key AND the same body: the cached response should be replayed.
+	cacheHitSameBody
+	// cacheHitDifferentBody means the key was reused with a different body:
+	// this must be rejected, not replayed or re-executed.
+	cacheHitDifferentBody
+)
 
 // Idempotency returns a chi middleware that enforces ADR-SEC-003.
 //
 // On the first request with a given Idempotency-Key it acquires a short-lived
-// Redis lock, executes the handler, then records the response for 24 hours.
-// Concurrent duplicate requests (same key, same tenant) receive 409 Conflict
-// while the first request is in-flight. Subsequent retries receive the cached
-// response without re-executing the handler.
+// Redis lock, executes the handler, then records the response — together with
+// a hash of the request body — for 24 hours. Concurrent duplicate requests
+// (same key, same tenant) receive 409 Conflict while the first request is
+// in-flight. A subsequent retry with the same key AND the same body receives
+// the cached response without re-executing the handler. A subsequent request
+// reusing the same key with a DIFFERENT body is rejected with 422: an
+// Idempotency-Key identifies one logical request, not a slot that can be
+// silently repointed at different input.
 //
 // The cache key is scoped to the authenticated tenant to prevent cross-tenant
 // key collisions in the multi-tenant environment.
@@ -67,12 +96,27 @@ func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Consume the body once to hash it, then restore it so the wrapped
+			// handler can still decode it — the handler has not run yet.
+			bodyHash, bodyBytes, err := hashAndRestoreBody(r)
+			if err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
 			cacheKey := fmt.Sprintf("%s%s:%s", idempotencyCachePrefix, principal.TenantID, key)
 			lockKey := cacheKey + idempotencyLockSuffix
 
-			// Return a previously cached response if one exists.
-			if replayed := tryReplay(r.Context(), cache, cacheKey, w); replayed {
+			switch entry, result := lookupCachedEntry(r.Context(), cache, cacheKey, bodyHash); result {
+			case cacheHitSameBody:
+				writeReplay(entry, w)
 				return
+			case cacheHitDifferentBody:
+				http.Error(w, "Idempotency-Key was already used with a different request body", http.StatusUnprocessableEntity)
+				return
+			case cacheMiss:
+				// fall through to normal handling below.
 			}
 
 			// Acquire an in-flight lock to prevent concurrent duplicate execution
@@ -107,6 +151,7 @@ func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
 					StatusCode: rec.statusCode,
 					Headers:    captureHeaders(w.Header()),
 					Body:       rec.buf.Bytes(),
+					BodyHash:   bodyHash,
 				}
 				if data, marshalErr := json.Marshal(entry); marshalErr == nil {
 					_ = cache.Set(context.Background(), cacheKey, data, idempotencyTTL).Err()
@@ -116,24 +161,57 @@ func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
 	}
 }
 
-// tryReplay checks Redis for a cached response and writes it to w.
-// Returns true if a cached response was found and written.
-func tryReplay(ctx context.Context, cache *redis.Client, cacheKey string, w http.ResponseWriter) bool {
+// hashAndRestoreBody reads r.Body fully, returning its SHA-256 hex digest
+// and the raw bytes so the caller can restore r.Body for downstream readers.
+// A nil or already-drained body hashes as the digest of an empty byte slice,
+// which is stable and comparable across requests.
+func hashAndRestoreBody(r *http.Request) (hash string, body []byte, err error) {
+	if r.Body == nil || r.Body == http.NoBody {
+		sum := sha256.Sum256(nil)
+		return hex.EncodeToString(sum[:]), nil, nil
+	}
+	body, err = io.ReadAll(r.Body)
+	if err != nil {
+		return "", nil, fmt.Errorf("httpx: read request body: %w", err)
+	}
+	_ = r.Body.Close()
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:]), body, nil
+}
+
+// lookupCachedEntry checks Redis for a cached response under cacheKey and
+// classifies the result against the incoming request's bodyHash. Any Redis
+// error or decode failure is treated as cacheMiss — the safe default is to
+// let the handler run rather than block or misreport on infrastructure noise.
+func lookupCachedEntry(ctx context.Context, cache *redis.Client, cacheKey, bodyHash string) (idempotencyEntry, cacheLookup) {
 	existing, err := cache.Get(ctx, cacheKey).Result()
 	if err != nil {
-		return false
+		return idempotencyEntry{}, cacheMiss
 	}
 	var entry idempotencyEntry
 	if err := json.Unmarshal([]byte(existing), &entry); err != nil {
-		return false
+		return idempotencyEntry{}, cacheMiss
 	}
+	// entry.BodyHash == "" identifies an entry written before this field
+	// existed. Since new entries always carry a non-empty SHA-256 digest
+	// (even an empty body hashes to a fixed non-empty value), this check is
+	// unambiguous. Treating it as a match preserves the pre-existing
+	// same-key/same-body replay behavior for any entry still alive in the
+	// 24h TTL window at deploy time, instead of spuriously rejecting it.
+	if entry.BodyHash != "" && entry.BodyHash != bodyHash {
+		return entry, cacheHitDifferentBody
+	}
+	return entry, cacheHitSameBody
+}
+
+// writeReplay writes a previously cached response to w.
+func writeReplay(entry idempotencyEntry, w http.ResponseWriter) {
 	for h, v := range entry.Headers {
 		w.Header().Set(h, v)
 	}
 	w.Header().Set("Idempotency-Replayed", "true")
 	w.WriteHeader(entry.StatusCode)
 	_, _ = w.Write(entry.Body)
-	return true
 }
 
 // responseRecorder captures the status code and body without buffering headers

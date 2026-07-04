@@ -8,25 +8,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
-	"go.uber.org/fx/fxtest"
 
-	"onlinemenu.tr/internal/modules/catalog"
+	hrcore "onlinemenu.tr/internal/modules/hr-core"
 	"onlinemenu.tr/internal/modules/identity"
-	"onlinemenu.tr/internal/modules/inventory"
-	"onlinemenu.tr/internal/modules/payment"
-	"onlinemenu.tr/internal/modules/pos"
+	"onlinemenu.tr/internal/modules/party"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
 	platformotel "onlinemenu.tr/internal/platform/otel"
-	"onlinemenu.tr/internal/platform/outbox"
 	"onlinemenu.tr/internal/platform/vault"
 )
 
 // TestFxGraphValidation verifies the dependency injection graph is satisfiable
-// without starting any lifecycle hooks (no network, no DB required).
+// without starting any lifecycle hooks (no network, no DB required). Mirrors
+// cmd/api/main_test.go.
 func TestFxGraphValidation(t *testing.T) {
 	t.Setenv("CTX_TOKEN_SECRET", "test-secret-32-bytes-long-padding!")
 	t.Setenv("DATABASE_URL", "pgx5://app_runtime:runtime@localhost:5432/testdb?sslmode=disable")
@@ -43,27 +40,23 @@ func TestFxGraphValidation(t *testing.T) {
 		fx.Provide(newCacheConfig),
 		fx.Provide(newOPAConfig),
 		fx.Provide(newHTTPConfig),
-		fx.Provide(newOutboxConfig),
 
 		db.Module,
 		eventbus.Module,
 		platformotel.Module,
 		vault.Module,
 		cache.Module,
-		outbox.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),
 
 		identity.Module,
 		tenant.Module,
-		catalog.Module,
-		pos.Module,
-		payment.Module,
-		inventory.Module,
+		party.Module,
+		hrcore.Module,
 
 		fx.Provide(newRouter),
-		fx.Invoke(registerHTTPServer),
+		fx.Invoke(startHTTP),
 	)
 	require.NoError(t, err, "fx dependency graph must be satisfiable")
 }
@@ -73,7 +66,6 @@ func TestFxGraphValidation(t *testing.T) {
 //   - any other path without a token responds 401
 func TestRouterMiddleware(t *testing.T) {
 	const secret = "test-secret-32-bytes-long-padding!"
-
 	t.Setenv("APP_ENV", "dev")
 
 	signer, err := auth.NewContextTokenSigner([]byte(secret))
@@ -82,7 +74,7 @@ func TestRouterMiddleware(t *testing.T) {
 	verifier, err := newTokenVerifier()
 	require.NoError(t, err)
 
-	router := newRouter(signer, verifier, nil)
+	router := newRouter(signer, verifier)
 
 	t.Run("healthz_no_auth_200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -92,12 +84,9 @@ func TestRouterMiddleware(t *testing.T) {
 	})
 
 	t.Run("protected_no_token_401", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog/products", nil)
+		req := httptest.NewRequest(http.MethodGet, "/tenants/00000000-0000-0000-0000-000000000000", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 }
-
-// Silence fxtest logger to keep test output clean.
-var _ = fxtest.New

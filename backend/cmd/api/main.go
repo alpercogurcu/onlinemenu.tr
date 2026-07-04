@@ -413,10 +413,31 @@ type devTokenVerifier struct{}
 
 func newTokenVerifier() (auth.TokenVerifier, error) {
 	env := envOr("APP_ENV", "")
-	if env != "dev" {
-		return nil, fmt.Errorf("api: devTokenVerifier requires APP_ENV=dev (got %q); configure a real JWKS verifier for non-dev environments", env)
+	if env == "dev" {
+		return devTokenVerifier{}, nil
 	}
-	return devTokenVerifier{}, nil
+
+	issuerURL := envOr("KEYCLOAK_ISSUER_URL", "")
+	audience := envOr("KEYCLOAK_AUDIENCE", "")
+	if issuerURL == "" || audience == "" {
+		return nil, fmt.Errorf("api: KEYCLOAK_ISSUER_URL and KEYCLOAK_AUDIENCE are required when APP_ENV=%q", env)
+	}
+
+	// A bounded background context is used for the initial JWKS fetch: fx does not
+	// inject context.Context, and startup must fail fast rather than hang forever
+	// if Keycloak is unreachable.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	verifier, err := auth.NewKeycloakVerifier(ctx, auth.KeycloakVerifierConfig{
+		IssuerURL: issuerURL,
+		JWKSURL:   envOr("KEYCLOAK_JWKS_URL", ""),
+		Audience:  audience,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: build keycloak verifier: %w", err)
+	}
+	return verifier, nil
 }
 
 func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.KeycloakClaims, error) {

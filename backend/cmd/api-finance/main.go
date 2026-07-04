@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,8 +30,9 @@ import (
 )
 
 // api-finance serves the finance deployment group: payment, billing, notification.
-// Faz 1: payment.Module, billing.Module, notification.Module are wired here when implemented.
+// Faz 1: payment.Module, notification.Module are wired here when implemented.
 func main() {
+	// Context is cancelled on SIGINT or SIGTERM, triggering graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -47,10 +52,12 @@ func main() {
 
 		db.Module,
 		eventbus.Module,
-		fx.Provide(auth.NewEngine),
 		platformotel.Module,
 		vault.Module,
 		cache.Module,
+		fx.Provide(auth.NewEngine),
+		fx.Provide(newContextTokenSigner),
+		fx.Provide(newTokenVerifier),
 
 		// payment.Module,      (Faz 1 — api-pos'ta da expose edilebilir)
 		billing.Module,
@@ -60,13 +67,25 @@ func main() {
 		fx.Invoke(startHTTP),
 	)
 
-	app.Run()
+	// app.Run() is intentionally NOT used here: it registers its own signal
+	// handler and blocks until shutdown, then returns — calling app.Stop()
+	// again afterwards double-stops an already-stopped app. Start/Done/Stop
+	// mirrors cmd/api/main.go's lifecycle exactly.
+	startCtx, startCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer startCancel()
 
-	<-ctx.Done()
-	stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	if err := app.Start(startCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "api-finance: start: %v\n", err)
+		os.Exit(1)
+	}
+
+	<-app.Done()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stopCancel()
+
 	if err := app.Stop(stopCtx); err != nil {
-		fmt.Fprintf(os.Stderr, "api-finance: graceful shutdown error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "api-finance: stop: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -78,7 +97,11 @@ type httpConfig struct {
 	IdleTimeout  time.Duration
 }
 
-func newRouter() *chi.Mux {
+// newRouter wires the auth middleware onto every path except /healthz. Without
+// this, auth.FromContext never finds a Principal and every route wired to
+// auth.RequirePermission (billing route registration) answers 403 for every
+// caller — the module authz work is otherwise inert here.
+func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
@@ -86,6 +109,19 @@ func newRouter() *chi.Mux {
 	r.Use(func(next http.Handler) http.Handler {
 		return otelhttp.NewHandler(next, "api-finance")
 	})
+
+	authMW := auth.Middleware(verifier, signer)
+	r.Use(func(next http.Handler) http.Handler {
+		protected := authMW(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
+	})
+
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -195,4 +231,64 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func newContextTokenSigner() (*auth.ContextTokenSigner, error) {
+	secret := envOr("CTX_TOKEN_SECRET", "")
+	if secret == "" {
+		return nil, errors.New("api-finance: CTX_TOKEN_SECRET env var is required")
+	}
+	return auth.NewContextTokenSigner([]byte(secret))
+}
+
+// devTokenVerifier parses JWT claims without signature verification.
+// ONLY active when APP_ENV=dev. See cmd/api/main.go for the production
+// (Keycloak JWKS) counterpart; this binary shares the same policy.
+type devTokenVerifier struct{}
+
+func newTokenVerifier() (auth.TokenVerifier, error) {
+	env := envOr("APP_ENV", "")
+	if env == "dev" {
+		return devTokenVerifier{}, nil
+	}
+
+	issuerURL := envOr("KEYCLOAK_ISSUER_URL", "")
+	audience := envOr("KEYCLOAK_AUDIENCE", "")
+	if issuerURL == "" || audience == "" {
+		return nil, fmt.Errorf("api-finance: KEYCLOAK_ISSUER_URL and KEYCLOAK_AUDIENCE are required when APP_ENV=%q", env)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	verifier, err := auth.NewKeycloakVerifier(ctx, auth.KeycloakVerifierConfig{
+		IssuerURL: issuerURL,
+		JWKSURL:   envOr("KEYCLOAK_JWKS_URL", ""),
+		Audience:  audience,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api-finance: build keycloak verifier: %w", err)
+	}
+	return verifier, nil
+}
+
+func (devTokenVerifier) Verify(_ context.Context, rawToken string) (*auth.KeycloakClaims, error) {
+	parts := strings.SplitN(rawToken, ".", 3)
+	if len(parts) != 3 {
+		return nil, errors.New("auth: invalid JWT format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("auth: decode JWT payload: %w", err)
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("auth: unmarshal JWT claims: %w", err)
+	}
+	if claims.Sub == "" {
+		return nil, errors.New("auth: missing sub claim")
+	}
+	return &auth.KeycloakClaims{Sub: claims.Sub}, nil
 }

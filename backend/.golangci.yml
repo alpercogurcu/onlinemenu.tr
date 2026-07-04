@@ -16,12 +16,28 @@ linters:
     - exhaustive
     - wrapcheck
     - contextcheck
+    - forbidigo
   disable:
     - depguard
 
 linters-settings:
   goimports:
     local-prefixes: onlinemenu.tr
+
+  # forbidigo enforces ADR-SEC-001/002 in CI: module code must never reach the raw
+  # pgxpool.Pool (the RLS-bypass path) and must always go through WithTenantTx /
+  # WithTenantReadTx / WithAllTenantsTx. analyze-types is required so that the
+  # patterns match by resolved receiver type (db.Pool, pgxpool.Pool), not by the
+  # literal source text — otherwise renaming a local variable would silently
+  # defeat the rule. See docs/lessons-from-b2b.md item 1: "kural var" != "kural
+  # zorlanıyor" -- without this, `pool.Query`/`.Inner()` bans were prose only.
+  forbidigo:
+    analyze-types: true
+    forbid:
+      - p: '^db\.Pool\.Inner$'
+        msg: "module code must not call db.Pool.Inner() — it returns the raw pgxpool.Pool and bypasses RLS tenant scoping. Use WithTenantTx/WithTenantReadTx/WithAllTenantsTx (ADR-SEC-001/002)."
+      - p: '^pgxpool\.Pool\.(Query|QueryRow|Exec|SendBatch)$'
+        msg: "module code must not query the raw pgxpool.Pool directly — it bypasses RLS tenant scoping. Use WithTenantTx/WithTenantReadTx/WithAllTenantsTx (ADR-SEC-001/002)."
 
   revive:
     rules:
@@ -78,6 +94,16 @@ issues:
     - path: internal/platform/outbox/dispatcher\.go
       linters:
         - contextcheck
+
+    # forbidigo (db.Pool.Inner / raw pgxpool.Pool queries) only applies to module
+    # code (internal/modules/**). Platform packages and composition roots are the
+    # legitimate implementers of the RLS-tenant-scoping escape hatch itself.
+    - path: internal/platform/
+      linters:
+        - forbidigo
+    - path: cmd/
+      linters:
+        - forbidigo
 
   # Maximum issues per linter before the run fails.
   max-issues-per-linter: 50

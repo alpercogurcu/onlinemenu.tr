@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: '1.24'
+  # Must satisfy backend/go.mod (go 1.25.0).
+  GO_VERSION: '1.25'
 
 jobs:
   lint:
@@ -27,7 +28,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pinned: .golangci.yml uses the v1 config schema; "latest" resolves
+          # to golangci-lint v2.x which cannot parse it (no linter would run).
+          version: v1.64.8
           working-directory: backend
 
       - name: Install go-arch-lint
@@ -36,6 +39,10 @@ jobs:
       - name: go-arch-lint check
         working-directory: backend
         run: go-arch-lint check
+
+      - name: SQL invariant lint (RLS / outbox rules)
+        working-directory: backend
+        run: ./scripts/lint_sql_rules.sh
 
   security:
     name: Security

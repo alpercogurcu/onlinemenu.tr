@@ -55,6 +55,7 @@ tasks:
     cmds:
       - golangci-lint run
       - go-arch-lint check
+      - ./scripts/lint_sql_rules.sh
 
   fmt:
     desc: "Go kod formatla"

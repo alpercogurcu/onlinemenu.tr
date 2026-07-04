@@ -5,6 +5,7 @@ package public
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 
@@ -19,3 +20,12 @@ type InvoiceReader interface {
 	// ListInvoices returns invoices for a tenant with pagination.
 	ListInvoices(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]domain.Invoice, error)
 }
+
+// ErrBranchForbidden is returned when the acting principal attempts a
+// branch-scoped invoice action (generate, retry submission) on/for a branch
+// it does not have access to (ADR-AUTH-001, layer 3). Tenant-wide principals
+// (OPA scope "tenant", e.g. manager) are exempt. The resource (or requested
+// branch_id) is already known to be tenant-visible (RLS, layer 1, already
+// passed) so this is not treated as a not-found — the HTTP layer maps it to
+// 403 Forbidden.
+var ErrBranchForbidden = errors.New("billing: forbidden for this branch")

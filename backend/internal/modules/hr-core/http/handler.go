@@ -22,6 +22,7 @@ import (
 type Handler struct {
 	hr     *service.HRService
 	logger *zap.Logger
+	engine *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -30,21 +31,28 @@ type Params struct {
 
 	HR     *service.HRService
 	Logger *zap.Logger
+	Engine *auth.Engine
 }
 
 // New constructs a Handler.
 func New(p Params) *Handler {
-	return &Handler{hr: p.HR, logger: p.Logger}
+	return &Handler{hr: p.HR, logger: p.Logger, engine: p.Engine}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts hr endpoints on the provided router.
+// Faz 1: employee records are manager-only (see configs/opa/bundles/authz.rego).
 func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/employees", func(r chi.Router) {
-		r.Post("/", h.create)
-		r.Get("/", h.list)
-		r.Get("/{id}", h.get)
-		r.Put("/{id}", h.update)
-		r.Post("/{id}/terminate", h.terminate)
+		r.With(h.permit("hrcore.employee.create")).Post("/", h.create)
+		r.With(h.permit("hrcore.employee.read")).Get("/", h.list)
+		r.With(h.permit("hrcore.employee.read")).Get("/{id}", h.get)
+		r.With(h.permit("hrcore.employee.update")).Put("/{id}", h.update)
+		r.With(h.permit("hrcore.employee.terminate")).Post("/{id}/terminate", h.terminate)
 	})
 }
 

@@ -23,6 +23,7 @@ import (
 type Handler struct {
 	svc    *service.InventoryService
 	logger *zap.Logger
+	engine *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -31,20 +32,26 @@ type Params struct {
 
 	Svc    *service.InventoryService
 	Logger *zap.Logger
+	Engine *auth.Engine
 }
 
 // NewHandler constructs a Handler for fx injection.
 func NewHandler(p Params) *Handler {
-	return &Handler{svc: p.Svc, logger: p.Logger}
+	return &Handler{svc: p.Svc, logger: p.Logger, engine: p.Engine}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts inventory endpoints on the router.
 func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/inventory", func(r chi.Router) {
-		r.Get("/levels", h.listLevels)
-		r.Get("/levels/{productID}", h.getLevel)
-		r.Post("/transactions", h.recordAdjustment)
-		r.Get("/transactions", h.listTransactions)
+		r.With(h.permit("inventory.level.read")).Get("/levels", h.listLevels)
+		r.With(h.permit("inventory.level.read")).Get("/levels/{productID}", h.getLevel)
+		r.With(h.permit("inventory.transaction.create")).Post("/transactions", h.recordAdjustment)
+		r.With(h.permit("inventory.transaction.read")).Get("/transactions", h.listTransactions)
 	})
 }
 

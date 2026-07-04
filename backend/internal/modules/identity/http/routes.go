@@ -22,6 +22,7 @@ type Handler struct {
 	memberships *service.MembershipService
 	contexts    *service.ContextService
 	logger      *zap.Logger
+	engine      *auth.Engine
 }
 
 func NewHandler(
@@ -30,6 +31,7 @@ func NewHandler(
 	memberships *service.MembershipService,
 	contexts *service.ContextService,
 	logger *zap.Logger,
+	engine *auth.Engine,
 ) *Handler {
 	return &Handler{
 		persons:     persons,
@@ -37,9 +39,22 @@ func NewHandler(
 		memberships: memberships,
 		contexts:    contexts,
 		logger:      logger,
+		engine:      engine,
 	}
 }
 
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
+}
+
+// RegisterRoutes mounts identity endpoints on the provided router.
+//
+// /me, /me/contexts and /auth/context are the pre-context flow (ADR-AUTH-001
+// step 1-3): the caller only holds a Keycloak-verified Principal with no
+// TenantID/RoleIDs yet, so OPA authorization does not apply — authentication
+// alone (the global auth.Middleware) gates these three routes. Every other
+// route requires a resolved context token and is behind RequirePermission.
 func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	r.Route("/v1/identity", func(r chi.Router) {
 		r.Get("/me", h.GetMe)
@@ -54,13 +69,13 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 		r.Route("/{tenantID}", func(r chi.Router) {
 			r.Use(h.tenantAccessMiddleware)
 
-			r.Get("/roles", h.ListRoles)
-			r.Post("/roles", h.CreateRole)
-			r.Delete("/roles/{roleID}", h.DeleteRole)
+			r.With(h.permit("identity.role.read")).Get("/roles", h.ListRoles)
+			r.With(h.permit("identity.role.create")).Post("/roles", h.CreateRole)
+			r.With(h.permit("identity.role.delete")).Delete("/roles/{roleID}", h.DeleteRole)
 
-			r.Get("/memberships", h.ListMemberships)
-			r.Post("/memberships", h.CreateMembership)
-			r.Put("/memberships/{membershipID}", h.UpdateMembershipStatus)
+			r.With(h.permit("identity.membership.read")).Get("/memberships", h.ListMemberships)
+			r.With(h.permit("identity.membership.create")).Post("/memberships", h.CreateMembership)
+			r.With(h.permit("identity.membership.update")).Put("/memberships/{membershipID}", h.UpdateMembershipStatus)
 		})
 	})
 }

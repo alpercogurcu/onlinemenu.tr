@@ -24,6 +24,7 @@ import (
 type Handler struct {
 	billing *service.BillingService
 	logger  *zap.Logger
+	engine  *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -33,6 +34,7 @@ type Params struct {
 	Billing *service.BillingService
 	Logger  *zap.Logger
 	Cache   *redis.Client
+	Engine  *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client for idempotency middleware.
@@ -44,18 +46,24 @@ type HandlerWithCache struct {
 // New constructs a HandlerWithCache.
 func New(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{billing: p.Billing, logger: p.Logger},
+		h:     &Handler{billing: p.Billing, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
 
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
+}
+
 // RegisterRoutes mounts billing endpoints on the provided router.
+// Faz 1: invoices are manager-only (see configs/opa/bundles/authz.rego).
 func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/invoices", func(r chi.Router) {
-		r.With(httpx.Idempotency(hwc.cache)).Post("/", hwc.h.generate)
-		r.Get("/", hwc.h.list)
-		r.Get("/{id}", hwc.h.get)
-		r.Post("/{id}/retry", hwc.h.retry)
+		r.With(hwc.h.permit("billing.invoice.create"), httpx.Idempotency(hwc.cache)).Post("/", hwc.h.generate)
+		r.With(hwc.h.permit("billing.invoice.read")).Get("/", hwc.h.list)
+		r.With(hwc.h.permit("billing.invoice.read")).Get("/{id}", hwc.h.get)
+		r.With(hwc.h.permit("billing.invoice.retry")).Post("/{id}/retry", hwc.h.retry)
 	})
 }
 

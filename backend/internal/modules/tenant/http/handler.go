@@ -26,11 +26,17 @@ const dateLayout = "2006-01-02"
 type Handler struct {
 	svc    *service.Service
 	logger *zap.Logger
+	engine *auth.Engine
 }
 
 // NewHandler constructs a Handler for fx injection.
-func NewHandler(svc *service.Service, logger *zap.Logger) *Handler {
-	return &Handler{svc: svc, logger: logger}
+func NewHandler(svc *service.Service, logger *zap.Logger, engine *auth.Engine) *Handler {
+	return &Handler{svc: svc, logger: logger, engine: engine}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // tenantAccessMiddleware verifies that the authenticated principal owns the tenant

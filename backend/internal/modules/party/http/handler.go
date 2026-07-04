@@ -21,6 +21,7 @@ import (
 type Handler struct {
 	parties *service.PartyService
 	logger  *zap.Logger
+	engine  *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
@@ -29,23 +30,30 @@ type Params struct {
 
 	Parties *service.PartyService
 	Logger  *zap.Logger
+	Engine  *auth.Engine
 }
 
 // New constructs a Handler.
 func New(p Params) *Handler {
-	return &Handler{parties: p.Parties, logger: p.Logger}
+	return &Handler{parties: p.Parties, logger: p.Logger, engine: p.Engine}
+}
+
+// permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
+func (h *Handler) permit(action string) func(http.Handler) http.Handler {
+	return auth.RequirePermission(h.engine, action)
 }
 
 // RegisterRoutes mounts party endpoints on the provided router.
+// Faz 1: party/CRM is manager-only (see configs/opa/bundles/authz.rego).
 func (h *Handler) RegisterRoutes(r *chi.Mux) {
 	r.Route("/api/v1/parties", func(r chi.Router) {
-		r.Post("/", h.create)
-		r.Get("/", h.list)
-		r.Get("/search", h.search)
-		r.Get("/{id}", h.get)
-		r.Put("/{id}", h.update)
-		r.Post("/{id}/contacts", h.addContact)
-		r.Delete("/{id}/contacts/{contactId}", h.deleteContact)
+		r.With(h.permit("party.party.create")).Post("/", h.create)
+		r.With(h.permit("party.party.read")).Get("/", h.list)
+		r.With(h.permit("party.party.read")).Get("/search", h.search)
+		r.With(h.permit("party.party.read")).Get("/{id}", h.get)
+		r.With(h.permit("party.party.update")).Put("/{id}", h.update)
+		r.With(h.permit("party.contact.create")).Post("/{id}/contacts", h.addContact)
+		r.With(h.permit("party.contact.delete")).Delete("/{id}/contacts/{contactId}", h.deleteContact)
 	})
 }
 

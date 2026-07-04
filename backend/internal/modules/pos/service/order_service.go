@@ -93,11 +93,21 @@ func (s *OrderService) ListByCheck(ctx context.Context, tenantID, checkID uuid.U
 }
 
 // Accept marks an order as accepted by staff.
+// The current status is read with a row lock (GetForUpdate) so the
+// transition check and the guarded UPDATE are race-free against any other
+// concurrent transition attempt on the same order.
 func (s *OrderService) Accept(ctx context.Context, tenantID, orderID, acceptedBy uuid.UUID) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
-		o, err = s.orderRepo.Accept(ctx, tx, orderID, acceptedBy)
+		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+		if err := domain.TransitionOrderStatus(current.Status, domain.OrderStatusAccepted); err != nil {
+			return err
+		}
+
+		o, err = s.orderRepo.Accept(ctx, tx, orderID, acceptedBy, current.Status)
 		if err != nil {
 			return err
 		}
@@ -117,8 +127,15 @@ func (s *OrderService) Accept(ctx context.Context, tenantID, orderID, acceptedBy
 func (s *OrderService) Reject(ctx context.Context, tenantID, orderID, rejectedBy uuid.UUID, reason string) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
-		o, err = s.orderRepo.Reject(ctx, tx, orderID, rejectedBy, reason)
+		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+		if err := domain.TransitionOrderStatus(current.Status, domain.OrderStatusRejected); err != nil {
+			return err
+		}
+
+		o, err = s.orderRepo.Reject(ctx, tx, orderID, rejectedBy, reason, current.Status)
 		if err != nil {
 			return err
 		}
@@ -135,15 +152,23 @@ func (s *OrderService) Reject(ctx context.Context, tenantID, orderID, rejectedBy
 	return o, nil
 }
 
-// AdvanceStatus transitions an accepted order through preparing → ready → delivered.
+// AdvanceStatus transitions an accepted order through preparing → ready → delivered
+// (or cancels it), validating the move against the order status machine.
 func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID, orderID uuid.UUID, status domain.OrderStatus) (domain.Order, error) {
 	if !status.Valid() {
 		return domain.Order{}, fmt.Errorf("pos/service/order: invalid status %q", status)
 	}
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
-		o, err = s.orderRepo.AdvanceStatus(ctx, tx, orderID, status)
+		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+		if err := domain.TransitionOrderStatus(current.Status, status); err != nil {
+			return err
+		}
+
+		o, err = s.orderRepo.AdvanceStatus(ctx, tx, orderID, status, current.Status)
 		if err != nil {
 			return err
 		}

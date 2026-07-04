@@ -15,6 +15,10 @@ import (
 // ErrNotFound is returned when a requested resource does not exist.
 var ErrNotFound = errors.New("pos: not found")
 
+// ErrInvalidTransition is returned when a requested status change is not
+// allowed from the resource's current status.
+var ErrInvalidTransition = errors.New("pos: invalid status transition")
+
 // CheckReader allows other modules to read check state without importing POS internals.
 type CheckReader interface {
 	GetByID(ctx context.Context, tenantID, checkID uuid.UUID) (Check, error)

@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +45,34 @@ func (s OrderStatus) Valid() bool {
 		return true
 	}
 	return false
+}
+
+// ErrInvalidTransition is returned when a status transition is not allowed
+// from the order's current status (e.g. pending → delivered, or any move out
+// of a terminal status).
+var ErrInvalidTransition = errors.New("pos/domain: invalid order status transition")
+
+// allowedOrderTransitions is the single source of truth for the order status
+// machine. rejected, delivered and cancelled are terminal: no edges leave them.
+var allowedOrderTransitions = map[OrderStatus][]OrderStatus{
+	OrderStatusPending:   {OrderStatusAccepted, OrderStatusRejected, OrderStatusCancelled},
+	OrderStatusAccepted:  {OrderStatusPreparing, OrderStatusCancelled},
+	OrderStatusPreparing: {OrderStatusReady, OrderStatusCancelled},
+	OrderStatusReady:     {OrderStatusDelivered, OrderStatusCancelled},
+}
+
+// TransitionOrderStatus validates a proposed order status transition and
+// returns ErrInvalidTransition if it is not allowed from the current status.
+func TransitionOrderStatus(from, to OrderStatus) error {
+	if !to.Valid() {
+		return fmt.Errorf("pos/domain: invalid target status %q: %w", to, ErrInvalidTransition)
+	}
+	for _, next := range allowedOrderTransitions[from] {
+		if next == to {
+			return nil
+		}
+	}
+	return fmt.Errorf("pos/domain: %s -> %s: %w", from, to, ErrInvalidTransition)
 }
 
 // OrderItem is a single line on an order with product data snapshotted at order time.

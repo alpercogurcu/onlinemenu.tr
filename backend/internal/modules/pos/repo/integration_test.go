@@ -216,7 +216,7 @@ func TestCheckRepo_CRUD(t *testing.T) {
 	var closed domain.Check
 	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
 		var err error
-		closed, err = checkRepo.UpdateStatus(ctx, tx, created.ID, domain.CheckStatusClosed, &staffA)
+		closed, err = checkRepo.UpdateStatus(ctx, tx, created.ID, domain.CheckStatusClosed, domain.CheckStatusOpen, &staffA)
 		return err
 	})
 	require.NoError(t, err)
@@ -391,7 +391,7 @@ func TestOrderRepo_Accept_Reject(t *testing.T) {
 	var accepted domain.Order
 	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
 		var err error
-		accepted, err = orderRepo.Accept(ctx, tx, deliveryOrderID, staffA)
+		accepted, err = orderRepo.Accept(ctx, tx, deliveryOrderID, staffA, domain.OrderStatusPending)
 		return err
 	})
 	require.NoError(t, err)
@@ -429,7 +429,7 @@ func TestOrderRepo_Accept_Reject(t *testing.T) {
 	var rejected domain.Order
 	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
 		var err error
-		rejected, err = orderRepo.Reject(ctx, tx, rejectOrderID, staffA, "ürün stokta yok")
+		rejected, err = orderRepo.Reject(ctx, tx, rejectOrderID, staffA, "ürün stokta yok", domain.OrderStatusPending)
 		return err
 	})
 	require.NoError(t, err)

@@ -70,6 +70,27 @@ func (r *OrderRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 	return o, nil
 }
 
+// GetForUpdate locks the order row (without items) for the duration of the
+// caller's transaction, so a status-transition check-then-write sequence is
+// race-free against other transactions attempting the same transition.
+func (r *OrderRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Order, error) {
+	const q = `
+		SELECT id, tenant_id, branch_id, check_id, order_channel,
+		       delivery_integrator_id, status, accept_deadline_at,
+		       accepted_at, accepted_by, rejected_at, rejected_by,
+		       rejection_reason, note, created_at, updated_at
+		FROM orders WHERE id = $1 FOR UPDATE`
+
+	o, err := scanOrder(tx.QueryRow(ctx, q, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Order{}, ErrNotFound
+		}
+		return domain.Order{}, fmt.Errorf("pos/repo/order: get for update: %w", err)
+	}
+	return o, nil
+}
+
 // ListByCheck returns all orders for a given check, oldest first.
 func (r *OrderRepo) ListByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) ([]domain.Order, error) {
 	const q = `
@@ -107,63 +128,67 @@ func (r *OrderRepo) ListByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUI
 	return orders, nil
 }
 
-// Accept transitions an order to accepted.
-func (r *OrderRepo) Accept(ctx context.Context, tx pgx.Tx, id uuid.UUID, acceptedBy uuid.UUID) (domain.Order, error) {
+// Accept transitions an order to accepted, guarded on its expected current
+// status. Returns ErrInvalidTransition if the row's status no longer matches
+// expectedStatus (see GetForUpdate — the guard is defense-in-depth, since the
+// row lock already serializes concurrent transitions within one transaction).
+func (r *OrderRepo) Accept(ctx context.Context, tx pgx.Tx, id uuid.UUID, acceptedBy uuid.UUID, expectedStatus domain.OrderStatus) (domain.Order, error) {
 	const q = `
 		UPDATE orders
 		SET status = 'accepted', accepted_at = NOW(), accepted_by = $2, updated_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND status = $3
 		RETURNING id, tenant_id, branch_id, check_id, order_channel,
 		          delivery_integrator_id, status, accept_deadline_at,
 		          accepted_at, accepted_by, rejected_at, rejected_by,
 		          rejection_reason, note, created_at, updated_at`
 
-	o, err := scanOrder(tx.QueryRow(ctx, q, id, acceptedBy))
+	o, err := scanOrder(tx.QueryRow(ctx, q, id, acceptedBy, string(expectedStatus)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Order{}, ErrNotFound
+			return domain.Order{}, ErrInvalidTransition
 		}
 		return domain.Order{}, fmt.Errorf("pos/repo/order: accept: %w", err)
 	}
 	return o, nil
 }
 
-// Reject transitions an order to rejected.
-func (r *OrderRepo) Reject(ctx context.Context, tx pgx.Tx, id uuid.UUID, rejectedBy uuid.UUID, reason string) (domain.Order, error) {
+// Reject transitions an order to rejected, guarded on its expected current status.
+func (r *OrderRepo) Reject(ctx context.Context, tx pgx.Tx, id uuid.UUID, rejectedBy uuid.UUID, reason string, expectedStatus domain.OrderStatus) (domain.Order, error) {
 	const q = `
 		UPDATE orders
 		SET status = 'rejected', rejected_at = NOW(), rejected_by = $2,
 		    rejection_reason = $3, updated_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND status = $4
 		RETURNING id, tenant_id, branch_id, check_id, order_channel,
 		          delivery_integrator_id, status, accept_deadline_at,
 		          accepted_at, accepted_by, rejected_at, rejected_by,
 		          rejection_reason, note, created_at, updated_at`
 
-	o, err := scanOrder(tx.QueryRow(ctx, q, id, rejectedBy, reason))
+	o, err := scanOrder(tx.QueryRow(ctx, q, id, rejectedBy, reason, string(expectedStatus)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Order{}, ErrNotFound
+			return domain.Order{}, ErrInvalidTransition
 		}
 		return domain.Order{}, fmt.Errorf("pos/repo/order: reject: %w", err)
 	}
 	return o, nil
 }
 
-// AdvanceStatus transitions order through preparing → ready → delivered.
-func (r *OrderRepo) AdvanceStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status domain.OrderStatus) (domain.Order, error) {
+// AdvanceStatus transitions order through preparing → ready → delivered,
+// guarded on its expected current status.
+func (r *OrderRepo) AdvanceStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status, expectedStatus domain.OrderStatus) (domain.Order, error) {
 	const q = `
 		UPDATE orders SET status = $2, updated_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND status = $3
 		RETURNING id, tenant_id, branch_id, check_id, order_channel,
 		          delivery_integrator_id, status, accept_deadline_at,
 		          accepted_at, accepted_by, rejected_at, rejected_by,
 		          rejection_reason, note, created_at, updated_at`
 
-	o, err := scanOrder(tx.QueryRow(ctx, q, id, string(status)))
+	o, err := scanOrder(tx.QueryRow(ctx, q, id, string(status), string(expectedStatus)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Order{}, ErrNotFound
+			return domain.Order{}, ErrInvalidTransition
 		}
 		return domain.Order{}, fmt.Errorf("pos/repo/order: advance status: %w", err)
 	}

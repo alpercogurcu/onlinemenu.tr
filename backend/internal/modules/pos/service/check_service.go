@@ -99,6 +99,17 @@ func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID) ([]domain.C
 
 // Close closes a check after verifying total payments cover the check total.
 // Returns ErrInsufficientPayment if the paid amount is less than the order total.
+//
+// The check row is locked (GetForUpdate) before the open-status check. That
+// lock — not the UpdateStatus guard alone — is what makes two concurrent
+// Close calls emit exactly one check.closed event: both could otherwise read
+// "open" before either had updated it. The second caller blocks on the lock,
+// then observes the already-closed status and returns ErrInvalidTransition.
+//
+// Known residual race (out of scope for this fix): the payment total is read
+// via SaleReader in a separate transaction before the lock is acquired, so a
+// payment arriving between that read and the lock is not reflected in this
+// Close call. This addresses double-close, not that TOCTOU window.
 func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uuid.UUID) (domain.Check, error) {
 	// SaleReader manages its own transaction; call outside the write tx.
 	paid, err := s.saleReader.TotalPaidForCheck(ctx, tenantID, checkID)
@@ -108,6 +119,14 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 
 	var closed domain.Check
 	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		current, err := s.checkRepo.GetForUpdate(ctx, tx, checkID)
+		if err != nil {
+			return err
+		}
+		if current.Status != domain.CheckStatusOpen {
+			return repo.ErrInvalidTransition
+		}
+
 		total, err := s.checkRepo.GetTotal(ctx, tx, checkID)
 		if err != nil {
 			return err
@@ -116,7 +135,7 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 			return ErrInsufficientPayment
 		}
 
-		closed, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusClosed, &closedBy)
+		closed, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusClosed, domain.CheckStatusOpen, &closedBy)
 		if err != nil {
 			return err
 		}
@@ -132,11 +151,20 @@ func (s *CheckService) Close(ctx context.Context, tenantID, checkID, closedBy uu
 	return closed, nil
 }
 
+// Cancel cancels an open check. Like Close, the row lock (GetForUpdate) is
+// what serializes concurrent Cancel/Close attempts against the same check.
 func (s *CheckService) Cancel(ctx context.Context, tenantID, checkID, cancelledBy uuid.UUID) (domain.Check, error) {
 	var cancelled domain.Check
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
-		cancelled, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusCancelled, &cancelledBy)
+		current, err := s.checkRepo.GetForUpdate(ctx, tx, checkID)
+		if err != nil {
+			return err
+		}
+		if current.Status != domain.CheckStatusOpen {
+			return repo.ErrInvalidTransition
+		}
+
+		cancelled, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusCancelled, domain.CheckStatusOpen, &cancelledBy)
 		if err != nil {
 			return err
 		}
@@ -168,9 +196,15 @@ func (s *CheckService) GetPublic(ctx context.Context, tenantID, checkID uuid.UUI
 	}, nil
 }
 
+// wrapErr maps repo/domain sentinel errors to their pub equivalents so HTTP
+// handlers can translate them (404 for not-found, 409 for invalid transitions);
+// anything else is wrapped with operation context via format.
 func wrapErr(err error, format string) error {
 	if errors.Is(err, repo.ErrNotFound) {
 		return pub.ErrNotFound
+	}
+	if errors.Is(err, repo.ErrInvalidTransition) || errors.Is(err, domain.ErrInvalidTransition) {
+		return pub.ErrInvalidTransition
 	}
 	return fmt.Errorf(format, err)
 }

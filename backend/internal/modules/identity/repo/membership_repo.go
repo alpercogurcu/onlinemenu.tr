@@ -91,24 +91,38 @@ func (r *MembershipRepo) ListForTenant(
 }
 
 // ListContextsForPerson returns a ContextItem for every active membership the person holds
-// across all tenants. This is a platform-level query: the caller must use a bootstrap tx
-// (uuid.Nil tenant context) so that the persons RLS policy allows cross-tenant visibility.
+// across all tenants. This is a platform-level query: the caller must use
+// db.WithAllTenantsTx/WithAllTenantsReadTx (app.tenant_scope = 'all_tenants')
+// so that the memberships RLS policy allows cross-tenant visibility.
+//
+// tenants and roles are LEFT JOINed rather than INNER JOINed on purpose: the
+// tenants table (owned by the tenant module) and tenant/branch-scoped custom
+// roles have their own RLS policies keyed on app.tenant_id, which is NOT set
+// under WithAllTenantsReadTx (only app.tenant_scope is). An INNER JOIN would
+// silently drop every cross-tenant membership row whose tenant/role name
+// happens to be invisible under the caller's current RLS context, which
+// defeats the whole point of a cross-tenant listing. TenantName/RoleName may
+// come back empty for a tenant/role the caller cannot otherwise see; callers
+// must not treat an empty name as an error. MembershipID/TenantID/BranchID/
+// RoleID (the fields actually used by ContextService.SelectContext to resolve
+// which tenant+branch to issue a token for) always come from the memberships
+// row itself and are never affected by this.
 func (r *MembershipRepo) ListContextsForPerson(ctx context.Context, tx pgx.Tx, personID uuid.UUID) ([]domain.ContextItem, error) {
 	const q = `
 		SELECT
 			m.id,
 			m.tenant_id,
-			t.name,
+			COALESCE(t.name, ''),
 			m.branch_id,
 			COALESCE(b.name, ''),
 			m.role_id,
-			r.name
+			COALESCE(r.name, '')
 		FROM memberships m
-		JOIN tenants  t ON t.id = m.tenant_id
-		JOIN roles    r ON r.id = m.role_id
+		LEFT JOIN tenants  t ON t.id = m.tenant_id
+		LEFT JOIN roles    r ON r.id = m.role_id
 		LEFT JOIN branches b ON b.id = m.branch_id
 		WHERE m.person_id = $1 AND m.status = 'active'
-		ORDER BY t.name, COALESCE(b.name, ''), r.name`
+		ORDER BY COALESCE(t.name, ''), COALESCE(b.name, ''), COALESCE(r.name, '')`
 
 	rows, err := tx.Query(ctx, q, personID)
 	if err != nil {

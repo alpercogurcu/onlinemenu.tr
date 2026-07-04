@@ -201,7 +201,7 @@ func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.Handle
 		var personID uuid.UUID
 		var fullName, email string
 
-		err := pool.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+		err := pool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx,
 				`SELECT id, full_name, email FROM persons WHERE email = $1`, req.Email,
 			).Scan(&personID, &fullName, &email)
@@ -215,12 +215,13 @@ func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.Handle
 			return
 		}
 
-		// Find the first active membership (cross-tenant via uuid.Nil context).
+		// Find the first active membership (cross-tenant via the explicit
+		// all-tenants scope; dev-only handler).
 		var tenantID uuid.UUID
 		var branchID uuid.UUID // uuid.Nil means chain-wide
 		var membershipFound bool
 
-		err = pool.WithTenantReadTx(ctx, uuid.Nil, func(tx pgx.Tx) error {
+		err = pool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 			var rawBranchID *uuid.UUID
 			err := tx.QueryRow(ctx,
 				`SELECT tenant_id, branch_id FROM memberships

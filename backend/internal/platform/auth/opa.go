@@ -33,6 +33,11 @@ type opaInput struct {
 	Principal principal `json:"principal"`
 }
 
+// principal is the OPA input shape. Roles carries role UUIDs (Principal.RoleIDs),
+// not role names — the rego policy matches against the well-known system role IDs
+// seeded in identity/000006_seed_system_roles.up.sql. Resolving custom tenant-role
+// UUIDs to human-readable names requires identity module internals (PermSet /
+// PermissionRepo) and is deferred; see docs note in configs/opa/bundles/authz.rego.
 type principal struct {
 	Sub       string   `json:"sub"`
 	TenantID  string   `json:"tenant_id"`

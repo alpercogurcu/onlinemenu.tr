@@ -8,7 +8,9 @@ import {
   FileText,
   LayoutDashboard,
   Package,
+  Receipt,
   Settings,
+  ShieldCheck,
   ShoppingBag,
   Table2,
   Tag,
@@ -97,6 +99,16 @@ export function getInventoryMenuConfig(
       title: t("navigation.stockMovements"),
       url: "/inventory/movements",
       icon: BarChart3,
+    },
+    {
+      title: t("navigation.supplyPolicies"),
+      url: "/inventory/supply-policies",
+      icon: ShieldCheck,
+    },
+    {
+      title: t("navigation.purchaseReceipts"),
+      url: "/inventory/purchase-receipts",
+      icon: Receipt,
     },
   ]
 }

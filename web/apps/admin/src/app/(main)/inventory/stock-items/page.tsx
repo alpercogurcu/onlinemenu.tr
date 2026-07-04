@@ -1,6 +1,6 @@
 "use client"
 
-import { Boxes, Plus } from "lucide-react"
+import { Boxes, Lock, Plus } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -32,8 +32,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useCreateStockItem, useStockItems } from "@/hooks/use-inventory"
-import type { StockItemKind } from "@/types"
+import { isRestrictedStockItem, useCreateStockItem, useStockItems } from "@/hooks/use-inventory"
+import type { StockItem, StockItemKind, SupplyMode } from "@/types"
 
 // No canonical unit enum exists on the backend (free string); this list
 // covers the common units used across the platform's stock items.
@@ -51,6 +51,21 @@ const KIND_BADGE_CLASS: Record<StockItemKind, string> = {
   intermediate: "bg-blue-100 text-blue-700 border-blue-200",
   packaging: "bg-purple-100 text-purple-700 border-purple-200",
   finished: "bg-green-100 text-green-700 border-green-200",
+}
+
+// ADR-DATA-007: supply_mode is only resolved (and only meaningful) on the
+// list endpoint. A restricted row has no supply_mode key at all — it IS an
+// exclusive_hq item (that is why the caller only sees the BTO-catalog shape).
+const SUPPLY_MODE_LABELS: Record<SupplyMode, string> = {
+  exclusive_hq: "Merkez",
+  approved_suppliers: "Onaylı tedarikçi",
+  free: "Serbest",
+}
+
+const SUPPLY_MODE_BADGE_CLASS: Record<SupplyMode, string> = {
+  exclusive_hq: "bg-slate-100 text-slate-700 border-slate-200",
+  approved_suppliers: "bg-sky-100 text-sky-700 border-sky-200",
+  free: "bg-emerald-100 text-emerald-700 border-emerald-200",
 }
 
 interface StockItemFormState {
@@ -152,36 +167,73 @@ export default function StockItemsPage() {
                   <TableHead>Birim</TableHead>
                   <TableHead>Kategori</TableHead>
                   <TableHead>Durum</TableHead>
+                  <TableHead>Tedarik</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {item.sku}
-                    </TableCell>
-                    <TableCell className="font-medium">{item.name}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={KIND_BADGE_CLASS[item.kind]}>
-                        {KIND_LABELS[item.kind]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{item.canonical_unit}</TableCell>
-                    <TableCell className="text-muted-foreground">{item.category || "—"}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          item.is_active
-                            ? "bg-green-100 text-green-700 border-green-200"
-                            : "bg-gray-100 text-gray-600 border-gray-200"
-                        }
-                      >
-                        {item.is_active ? "Aktif" : "Pasif"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {items.map((item) => {
+                  // `full` is null for a restricted (exclusive_hq) row: the
+                  // backend omits kind/category/is_active/supply_mode
+                  // entirely for those. isRestrictedStockItem only returns a
+                  // boolean here (not a narrowed type) because StockItem is
+                  // structurally a superset of RestrictedStockItem — TS's
+                  // type-guard exclusion would otherwise narrow the "full"
+                  // branch to `never`; the cast is safe given the boolean.
+                  const restricted = isRestrictedStockItem(item)
+                  const full = restricted ? null : (item as StockItem)
+                  // A restricted row structurally cannot be anything but
+                  // exclusive_hq (that's exactly why the branch principal
+                  // only sees the BTO-catalog projection for it).
+                  const supplyMode: SupplyMode = full
+                    ? (full.supply_mode ?? "exclusive_hq")
+                    : "exclusive_hq"
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {item.sku}
+                      </TableCell>
+                      <TableCell className="font-medium">{item.name}</TableCell>
+                      <TableCell>
+                        {full ? (
+                          <Badge variant="outline" className={KIND_BADGE_CLASS[full.kind]}>
+                            {KIND_LABELS[full.kind]}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{item.canonical_unit}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {full ? full.category || "—" : "—"}
+                      </TableCell>
+                      <TableCell>
+                        {full ? (
+                          <Badge
+                            variant="outline"
+                            className={
+                              full.is_active
+                                ? "bg-green-100 text-green-700 border-green-200"
+                                : "bg-gray-100 text-gray-600 border-gray-200"
+                            }
+                          >
+                            {full.is_active ? "Aktif" : "Pasif"}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={`gap-1 ${SUPPLY_MODE_BADGE_CLASS[supplyMode]}`}
+                        >
+                          {supplyMode === "exclusive_hq" && <Lock className="size-3" />}
+                          {SUPPLY_MODE_LABELS[supplyMode]}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}

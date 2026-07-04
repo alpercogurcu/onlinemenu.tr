@@ -26,3 +26,9 @@ func SignedDeltaForTest(t domain.MovementType, quantity float64) float64 {
 func RequireBranchForTest(ctx context.Context, principal auth.Principal, branchID uuid.UUID) error {
 	return requireBranch(ctx, principal, branchID)
 }
+
+// ValidateSupplyPolicyForTest exposes the unexported validateSupplyPolicy
+// (ADR-DATA-007) for unit tests.
+func ValidateSupplyPolicyForTest(req CreateSupplyPolicyRequest) error {
+	return validateSupplyPolicy(req)
+}

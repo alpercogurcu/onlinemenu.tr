@@ -40,21 +40,56 @@ func (t MovementType) AffectsOnHand() bool {
 	return false
 }
 
+// CostSource classifies where StockLevel.LastUnitCost was recorded from
+// (ADR-DATA-007). CostSourceTransfer is written from a received shipment's
+// frozen unit price (ShipmentService.Receive); CostSourcePurchaseReceipt is
+// written from a purchase_receipt line on create
+// (PurchaseReceiptService.Create, ADR-DATA-007 karar 3). CostSourcePurchaseOrder
+// remains reserved for the Faz 2 invoiced purchase-order path.
+type CostSource string
+
+const (
+	CostSourceTransfer        CostSource = "transfer"
+	CostSourcePurchaseOrder   CostSource = "purchase_order"
+	CostSourcePurchaseReceipt CostSource = "purchase_receipt"
+)
+
+// Valid reports whether c is a recognised cost source.
+func (c CostSource) Valid() bool {
+	switch c {
+	case CostSourceTransfer, CostSourcePurchaseOrder, CostSourcePurchaseReceipt:
+		return true
+	}
+	return false
+}
+
 // StockLevel is the materialized current stock for one stock item in one
 // warehouse. Available is derived (on_hand - reserved) by the database
 // (STORED GENERATED column); application code must never compute or persist
 // it independently (see migrations/inventory/000003 for the rationale).
+//
+// LastUnitCost/LastCostCurrency/LastCostSource/LastCostAt are the
+// branch-local cost of this (warehouse, stock_item) pair (ADR-DATA-007).
+// LastCostSource is "transfer" from a received shipment's frozen unit price
+// (ShipmentService.Receive) or "purchase_receipt" from a purchase receipt
+// line (PurchaseReceiptService.Create); "purchase_order" remains reserved
+// for the Faz 2 invoiced purchase-order path. All four fields are nil until
+// a cost has been recorded.
 type StockLevel struct {
-	ID           uuid.UUID
-	TenantID     uuid.UUID
-	WarehouseID  uuid.UUID
-	StockItemID  uuid.UUID
-	OnHand       float64
-	Reserved     float64
-	Available    float64
-	ReorderPoint *float64
-	Unit         string
-	UpdatedAt    time.Time
+	ID               uuid.UUID
+	TenantID         uuid.UUID
+	WarehouseID      uuid.UUID
+	StockItemID      uuid.UUID
+	OnHand           float64
+	Reserved         float64
+	Available        float64
+	ReorderPoint     *float64
+	Unit             string
+	LastUnitCost     *float64
+	LastCostCurrency *string
+	LastCostSource   *string
+	LastCostAt       *time.Time
+	UpdatedAt        time.Time
 }
 
 // StockMovement is an immutable ledger entry for a stock movement.

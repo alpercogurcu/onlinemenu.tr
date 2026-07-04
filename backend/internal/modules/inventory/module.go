@@ -1,7 +1,7 @@
 // Package inventory manages warehouse-scoped stock: stock items, warehouses,
-// stock levels/movements, shipments and branch transfer orders (ADR-DATA-005,
-// ADR-DATA-006). All persistence goes through platform/db.WithTenantTx;
-// direct pool access is forbidden.
+// stock levels/movements, shipments, branch transfer orders and supply
+// policies (ADR-DATA-005, ADR-DATA-006, ADR-DATA-007). All persistence goes
+// through platform/db.WithTenantTx; direct pool access is forbidden.
 package inventory
 
 import (
@@ -25,13 +25,19 @@ var Module = fx.Module("inventory",
 		repo.NewShipmentItemRepo,
 		repo.NewTransferOrderRepo,
 		repo.NewTransferOrderItemRepo,
+		repo.NewSupplyPolicyRepo,
+		repo.NewPurchaseReceiptRepo,
+		repo.NewPurchaseReceiptItemRepo,
 		service.NewInventoryService,
 		service.NewStockItemService,
 		service.NewWarehouseService,
 		service.NewTransferOrderService,
 		service.NewShipmentService,
+		service.NewSupplyPolicyService,
+		service.NewPurchaseReceiptService,
 		inventoryhttp.NewHandler,
 		fx.Annotate(service.NewStockReader, fx.As(new(pub.StockReader))),
+		fx.Annotate(service.NewSupplyPolicyResolver, fx.As(new(pub.SupplyPolicyResolver))),
 	),
 	fx.Invoke(func(h *inventoryhttp.Handler, r *chi.Mux) {
 		h.RegisterRoutes(r)

@@ -14,6 +14,11 @@ type shipmentItemRequest struct {
 	StockItemID  uuid.UUID `json:"stock_item_id"`
 	RequestedQty float64   `json:"requested_qty"`
 	Unit         string    `json:"unit"`
+	// UnitPrice/Currency are an optional per-line override (ADR-DATA-006
+	// eklenti): when omitted and the shipment is linked to a BTO, the price
+	// is copied from the matching branch_transfer_order_items row instead.
+	UnitPrice *float64 `json:"unit_price,omitempty"`
+	Currency  string   `json:"currency,omitempty"`
 }
 
 type createShipmentRequest struct {
@@ -31,6 +36,8 @@ type shipmentItemResponse struct {
 	ShippedQty   float64   `json:"shipped_qty"`
 	ReceivedQty  float64   `json:"received_qty"`
 	Unit         string    `json:"unit"`
+	UnitPrice    *float64  `json:"unit_price,omitempty"`
+	Currency     *string   `json:"currency,omitempty"`
 }
 
 type shipmentResponse struct {
@@ -70,6 +77,8 @@ func (h *Handler) createShipment(w http.ResponseWriter, r *http.Request) {
 			StockItemID:  it.StockItemID,
 			RequestedQty: it.RequestedQty,
 			Unit:         it.Unit,
+			UnitPrice:    it.UnitPrice,
+			Currency:     it.Currency,
 		}
 	}
 
@@ -250,6 +259,8 @@ func toShipmentResponse(sh domain.Shipment, items []domain.ShipmentItem) shipmen
 				ShippedQty:   it.ShippedQty,
 				ReceivedQty:  it.ReceivedQty,
 				Unit:         it.Unit,
+				UnitPrice:    it.UnitPrice,
+				Currency:     it.Currency,
 			}
 		}
 	}

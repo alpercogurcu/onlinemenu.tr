@@ -154,22 +154,24 @@ type ShipmentItemRepo struct{}
 // NewShipmentItemRepo constructs a ShipmentItemRepo for fx injection.
 func NewShipmentItemRepo() *ShipmentItemRepo { return &ShipmentItemRepo{} }
 
-// Add inserts a shipment line item.
+// Add inserts a shipment line item. UnitPrice/Currency are copied from the
+// linked BTO item (or overridden) by ShipmentService.Create and frozen from
+// then on (ADR-DATA-006 eklenti).
 func (r *ShipmentItemRepo) Add(ctx context.Context, tx pgx.Tx, item domain.ShipmentItem) (domain.ShipmentItem, error) {
 	const q = `
-		INSERT INTO shipment_items (shipment_id, tenant_id, stock_item_id, requested_qty, shipped_qty, received_qty, unit)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		RETURNING shipment_id, tenant_id, stock_item_id, requested_qty, shipped_qty, received_qty, unit`
+		INSERT INTO shipment_items (shipment_id, tenant_id, stock_item_id, requested_qty, shipped_qty, received_qty, unit, unit_price, currency)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING shipment_id, tenant_id, stock_item_id, requested_qty, shipped_qty, received_qty, unit, unit_price, currency`
 
 	row := tx.QueryRow(ctx, q, item.ShipmentID, item.TenantID, item.StockItemID,
-		item.RequestedQty, item.ShippedQty, item.ReceivedQty, item.Unit)
+		item.RequestedQty, item.ShippedQty, item.ReceivedQty, item.Unit, item.UnitPrice, item.Currency)
 	return scanShipmentItem(row)
 }
 
 // ListByShipment returns all line items for a shipment.
 func (r *ShipmentItemRepo) ListByShipment(ctx context.Context, tx pgx.Tx, shipmentID uuid.UUID) ([]domain.ShipmentItem, error) {
 	const q = `
-		SELECT shipment_id, tenant_id, stock_item_id, requested_qty, shipped_qty, received_qty, unit
+		SELECT shipment_id, tenant_id, stock_item_id, requested_qty, shipped_qty, received_qty, unit, unit_price, currency
 		FROM shipment_items
 		WHERE shipment_id = $1
 		ORDER BY stock_item_id`
@@ -222,7 +224,8 @@ func (r *ShipmentItemRepo) SetReceivedQty(ctx context.Context, tx pgx.Tx, shipme
 func scanShipmentItem(s pgx.Row) (domain.ShipmentItem, error) {
 	var item domain.ShipmentItem
 	err := s.Scan(&item.ShipmentID, &item.TenantID, &item.StockItemID,
-		&item.RequestedQty, &item.ShippedQty, &item.ReceivedQty, &item.Unit)
+		&item.RequestedQty, &item.ShippedQty, &item.ReceivedQty, &item.Unit,
+		&item.UnitPrice, &item.Currency)
 	if err != nil {
 		return domain.ShipmentItem{}, err
 	}

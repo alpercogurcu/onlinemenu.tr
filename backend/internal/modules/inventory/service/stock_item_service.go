@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,29 +13,49 @@ import (
 	"onlinemenu.tr/internal/modules/inventory/domain"
 	pub "onlinemenu.tr/internal/modules/inventory/public"
 	"onlinemenu.tr/internal/modules/inventory/repo"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
 // StockItemService manages the canonical stock item catalog (raw materials,
 // packaging, intermediates, finished goods). See ADR-DATA-005.
 type StockItemService struct {
-	db     *db.Pool
-	repo   *repo.StockItemRepo
-	logger *zap.Logger
+	db               *db.Pool
+	repo             *repo.StockItemRepo
+	supplyPolicyRepo *repo.SupplyPolicyRepo
+	logger           *zap.Logger
 }
 
 // StockItemParams groups fx-injected dependencies for NewStockItemService.
 type StockItemParams struct {
 	fx.In
 
-	DB     *db.Pool
-	Repo   *repo.StockItemRepo
-	Logger *zap.Logger
+	DB               *db.Pool
+	Repo             *repo.StockItemRepo
+	SupplyPolicyRepo *repo.SupplyPolicyRepo
+	Logger           *zap.Logger
 }
 
 // NewStockItemService constructs a StockItemService for fx injection.
 func NewStockItemService(p StockItemParams) *StockItemService {
-	return &StockItemService{db: p.DB, repo: p.Repo, logger: p.Logger}
+	return &StockItemService{db: p.DB, repo: p.Repo, supplyPolicyRepo: p.SupplyPolicyRepo, logger: p.Logger}
+}
+
+// StockItemView pairs a stock item with its ADR-DATA-007 resolved supply
+// mode and whether the acting principal's branch view of it must be
+// restricted to the BTO-catalog-only projection (Restricted == true).
+// Restricted is always false for a tenant-wide-scoped principal (OPA
+// scope=="tenant", e.g. manager): visibility filtering is a branch-facing
+// concern only (ADR-DATA-007 İlke, DATA-005 İlke 4 revizyonu).
+//
+// The HTTP layer, not this service, is responsible for actually omitting
+// cost/supplier JSON fields for a restricted item — Restricted is a signal,
+// never itself the enforcement (docs/lessons-from-b2b.md: field absence must
+// happen at the DTO boundary).
+type StockItemView struct {
+	Item       domain.StockItem
+	Mode       domain.SupplyMode
+	Restricted bool
 }
 
 // CreateStockItemRequest carries the parameters for creating a stock item.
@@ -92,18 +113,50 @@ func (s *StockItemService) Get(ctx context.Context, tenantID, id uuid.UUID) (dom
 	return item, nil
 }
 
-// List returns stock items, optionally filtered by kind.
-func (s *StockItemService) List(ctx context.Context, tenantID uuid.UUID, kind domain.StockItemKind) ([]domain.StockItem, error) {
-	var items []domain.StockItem
+// List returns stock items, optionally filtered by kind, together with each
+// item's ADR-DATA-007 resolved supply policy visibility for the acting
+// principal (ADR-AUTH-001 layer 3 / DTO projection is layer 4, applied by
+// the HTTP layer using StockItemView.Restricted).
+//
+// Visibility is keyed on the OPA-derived scope (auth.ScopeFromContext), not
+// on the principal's role: a tenant-wide-scoped principal (scope=="tenant",
+// e.g. manager) sees every item unrestricted. Any other scope resolves each
+// item's policy against principal.BranchID; exclusive_hq items are marked
+// Restricted so the HTTP layer renders only the BTO catalog fields for them.
+func (s *StockItemService) List(ctx context.Context, tenantID uuid.UUID, kind domain.StockItemKind, principal auth.Principal) ([]StockItemView, error) {
+	var (
+		items    []domain.StockItem
+		policies []domain.SupplyPolicy
+	)
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		items, err = s.repo.List(ctx, tx, kind)
+		if err != nil {
+			return err
+		}
+		policies, err = s.supplyPolicyRepo.ListCandidates(ctx, tx, principal.BranchID)
 		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory/service: list stock items: %w", err)
 	}
-	return items, nil
+
+	tenantWide := false
+	if scope, ok := auth.ScopeFromContext(ctx); ok && scope == "tenant" {
+		tenantWide = true
+	}
+
+	now := time.Now()
+	out := make([]StockItemView, len(items))
+	for i, item := range items {
+		mode, _ := domain.ResolvePolicy(policies, item, principal.BranchID, now)
+		out[i] = StockItemView{
+			Item:       item,
+			Mode:       mode,
+			Restricted: !tenantWide && mode == domain.SupplyModeExclusiveHQ,
+		}
+	}
+	return out, nil
 }
 
 // UpdateStockItemRequest carries the parameters for updating a stock item.

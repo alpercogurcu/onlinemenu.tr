@@ -27,6 +27,26 @@ type StockReader interface {
 	GetLevel(ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID) (StockLevel, error)
 }
 
+// SupplyMode mirrors domain.SupplyMode (ADR-DATA-007) for cross-module
+// consumers that must not import inventory/domain.
+type SupplyMode string
+
+const (
+	SupplyModeExclusiveHQ       SupplyMode = "exclusive_hq"
+	SupplyModeApprovedSuppliers SupplyMode = "approved_suppliers"
+	SupplyModeFree              SupplyMode = "free"
+)
+
+// SupplyPolicyResolver lets other modules (e.g. Wave B's purchase_receipts,
+// ADR-DATA-007 Şema bölüm 3) resolve the effective supply mode for a stock
+// item at a branch — exclusive_hq, approved_suppliers, or free — without
+// importing inventory internals or re-implementing the resolution priority
+// (branch+item > branch+category > tenant+item > tenant+category >
+// tenant_default > exclusive_hq default).
+type SupplyPolicyResolver interface {
+	EffectivePolicyFor(ctx context.Context, tenantID, stockItemID, branchID uuid.UUID) (SupplyMode, []uuid.UUID, error)
+}
+
 // ErrNotFound is returned when a requested inventory resource does not exist.
 var ErrNotFound = inventoryNotFoundError{}
 
@@ -47,6 +67,17 @@ func (e *ValidationError) Error() string { return "inventory: " + e.Msg }
 type TransitionError struct{ Msg string }
 
 func (e *TransitionError) Error() string { return "inventory: " + e.Msg }
+
+// ErrSupplyPolicyViolation is returned when a purchase_receipt line item
+// would violate the effective supply policy for its stock item at the
+// receiving branch (ADR-DATA-007 karar 3): the resolved SupplyMode is
+// exclusive_hq (the item may only be sourced via BTO/transfer, never a local
+// purchase), or the mode is approved_suppliers and the line's supplier is
+// missing or not in the approved list. The HTTP layer checks for it with
+// errors.As and returns 422 Unprocessable Entity, mirroring ValidationError.
+type ErrSupplyPolicyViolation struct{ Msg string }
+
+func (e *ErrSupplyPolicyViolation) Error() string { return "inventory: " + e.Msg }
 
 // ErrBranchForbidden is returned when the acting principal attempts a
 // branch-scoped action (ADR-DATA-006: BTO submit/approve/reject/cancel/

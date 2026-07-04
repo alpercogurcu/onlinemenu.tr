@@ -122,6 +122,70 @@ export interface StockItem {
   is_active: boolean
   created_at: string
   updated_at: string
+  // Only populated by GET /stock-items (list) — resolved ADR-DATA-007 supply
+  // mode for the acting principal. Absent on single-item Create/Get/Update.
+  supply_mode?: SupplyMode
+}
+
+// restrictedStockItemResponse projection (ADR-DATA-007 / DATA-005 İlke 4
+// revizyonu): the BTO-catalog-only shape the backend serializes for an
+// exclusive_hq item viewed by a branch-scoped principal. Cost/category/
+// status fields are not merely empty — the JSON keys are absent, so this is
+// a distinct, narrower type rather than StockItem with optional fields.
+export interface RestrictedStockItem {
+  id: string
+  sku: string
+  name: string
+  canonical_unit: string
+}
+
+// GET /stock-items renders each row as EITHER the full or restricted shape
+// per item, depending on its resolved supply mode for the acting principal.
+export type StockItemListEntry = StockItem | RestrictedStockItem
+
+// Tedarik politikası (ADR-DATA-007). Immutable: no update/delete — a new
+// row with a later effective_from supersedes the previous one.
+export type SupplyScope = "stock_item" | "category" | "tenant_default"
+export type SupplyMode = "exclusive_hq" | "approved_suppliers" | "free"
+
+export interface SupplyPolicy {
+  id: string
+  branch_id?: string
+  scope: SupplyScope
+  stock_item_id?: string
+  category?: string
+  mode: SupplyMode
+  approved_supplier_ids?: string[]
+  effective_from: string
+  created_at: string
+}
+
+// Elden fiş / faturasız alım (ADR-DATA-007 karar 3). Immutable documents —
+// no update/delete route; a correction is a new receipt.
+export interface PurchaseReceiptItem {
+  id: string
+  stock_item_id: string
+  quantity: number
+  unit: string
+  unit_price: number
+  line_total: number
+  brand?: string
+}
+
+export interface PurchaseReceipt {
+  id: string
+  warehouse_id: string
+  supplier_party_id?: string
+  supplier_name?: string
+  receipt_no?: string
+  receipt_date: string
+  total: number
+  currency: string
+  note?: string
+  // Only populated by POST (create) and GET /{id} — the list endpoint omits
+  // line items.
+  items?: PurchaseReceiptItem[]
+  created_at: string
 }
 
 export type WarehouseType = "depo" | "imalat"

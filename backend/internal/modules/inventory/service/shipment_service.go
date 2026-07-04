@@ -66,11 +66,17 @@ func NewShipmentService(p ShipmentParams) *ShipmentService {
 	}
 }
 
-// CreateShipmentItemRequest is one shipment line item.
+// CreateShipmentItemRequest is one shipment line item. UnitPrice/Currency
+// are an optional per-line override (ADR-DATA-006 eklenti): when the
+// shipment is linked to a BTO (TransferOrderID) and UnitPrice is nil here,
+// Create copies the price from the matching branch_transfer_order_items row
+// instead. Both are frozen onto the shipment_items row at create time.
 type CreateShipmentItemRequest struct {
 	StockItemID  uuid.UUID
 	RequestedQty float64
 	Unit         string
+	UnitPrice    *float64
+	Currency     string
 }
 
 // CreateShipmentRequest carries the parameters for creating a shipment.
@@ -122,13 +128,49 @@ func (s *ShipmentService) Create(ctx context.Context, tenantID uuid.UUID, princi
 			return fmt.Errorf("create shipment: %w", err)
 		}
 
+		// BTO price copy (ADR-DATA-006 eklenti): when this shipment is linked
+		// to a BTO, each line's price defaults to the matching BTO item's
+		// unit_price/currency (set at BTO approve time), unless the caller
+		// supplies an explicit per-line override in req.Items. Frozen here,
+		// never re-read from the BTO after this point.
+		btoPriceByStockItem := map[uuid.UUID]domain.BranchTransferOrderItem{}
+		if req.TransferOrderID != nil {
+			btoItems, err := s.transferItem.ListByTransferOrder(ctx, tx, *req.TransferOrderID)
+			if err != nil {
+				return fmt.Errorf("list transfer order items for price copy: %w", err)
+			}
+			for _, it := range btoItems {
+				btoPriceByStockItem[it.StockItemID] = it
+			}
+		}
+
 		for _, it := range req.Items {
+			unitPrice := it.UnitPrice
+			currency := it.Currency
+			if unitPrice == nil {
+				if btoItem, ok := btoPriceByStockItem[it.StockItemID]; ok && btoItem.UnitPrice != nil {
+					unitPrice = btoItem.UnitPrice
+					if btoItem.Currency != nil {
+						currency = *btoItem.Currency
+					}
+				}
+			}
+			var currencyPtr *string
+			if unitPrice != nil {
+				if currency == "" {
+					currency = "TRY"
+				}
+				currencyPtr = &currency
+			}
+
 			created, err := s.itemRepo.Add(ctx, tx, domain.ShipmentItem{
 				ShipmentID:   shipment.ID,
 				TenantID:     tenantID,
 				StockItemID:  it.StockItemID,
 				RequestedQty: it.RequestedQty,
 				Unit:         it.Unit,
+				UnitPrice:    unitPrice,
+				Currency:     currencyPtr,
 			})
 			if err != nil {
 				return fmt.Errorf("add shipment item: %w", err)
@@ -368,6 +410,22 @@ func (s *ShipmentService) Receive(ctx context.Context, tenantID uuid.UUID, princ
 				signedDelta(domain.MovementTypeIn, qty), item.Unit); err != nil {
 				return fmt.Errorf("adjust destination level: %w", err)
 			}
+			// Branch-local cost (ADR-DATA-007): only when this line carries a
+			// transfer price -- a priceless transfer must never clobber a
+			// previously-recorded cost with NULL, so this is skipped
+			// entirely (not called with a nil/zero value) when UnitPrice is
+			// unset. AdjustOnHand above guarantees the stock_levels row
+			// already exists for this UPDATE to find.
+			if item.UnitPrice != nil {
+				currency := "TRY"
+				if item.Currency != nil && *item.Currency != "" {
+					currency = *item.Currency
+				}
+				if err := s.lvlRepo.SetLastCost(ctx, tx, tenantID, toWarehouseID, item.StockItemID,
+					*item.UnitPrice, currency, domain.CostSourceTransfer); err != nil {
+					return fmt.Errorf("set last cost: %w", err)
+				}
+			}
 			if err := s.itemRepo.SetReceivedQty(ctx, tx, id, item.StockItemID, qty); err != nil {
 				return fmt.Errorf("set received qty: %w", err)
 			}
@@ -385,14 +443,30 @@ func (s *ShipmentService) Receive(ctx context.Context, tenantID uuid.UUID, princ
 		}
 
 		if sh.TransferOrderID != nil {
-			if err := s.transitionLinkedBTO(ctx, tx, *sh.TransferOrderID, domain.BTOStatusReceived); err != nil {
-				return err
-			}
+			// Quantity-gated received transition (ADR-DATA-006 Açık Karar #1,
+			// closed 2026-07-04): a BTO may be fulfilled by N interleaved
+			// shipments, so this shipment's own receive event must NOT push
+			// the BTO to 'received' until every line item of the BTO has
+			// received_qty >= approved_qty across ALL of its shipments
+			// (AllReceived aggregates the denormalized received_qty already
+			// summed by AddReceivedQty above, cumulative across shipments).
+			// Moving to 'received' unconditionally here — as a prior version
+			// of this code did — closed off allowedBTOTransitions[received]
+			// = {closed} and left a second, still-partial shipment for the
+			// same BTO unable to Advance (fulfilling/shipped -> shipped is
+			// the no-op guarded by transitionLinkedBTO's status==to check,
+			// but shipped -> received a second time from an out-of-order
+			// prior 'received' state failed the transition guard). Until
+			// full receipt, the BTO simply stays at its current status
+			// (shipped) — no new status is introduced.
 			allReceived, err := s.transferItem.AllReceived(ctx, tx, *sh.TransferOrderID)
 			if err != nil {
 				return fmt.Errorf("check all received: %w", err)
 			}
 			if allReceived {
+				if err := s.transitionLinkedBTO(ctx, tx, *sh.TransferOrderID, domain.BTOStatusReceived); err != nil {
+					return err
+				}
 				if err := s.transitionLinkedBTO(ctx, tx, *sh.TransferOrderID, domain.BTOStatusClosed); err != nil {
 					return err
 				}
@@ -477,6 +551,9 @@ func validateCreateShipment(req CreateShipmentRequest) error {
 		}
 		if it.RequestedQty <= 0 {
 			return &pub.ValidationError{Msg: "item requested_qty must be positive"}
+		}
+		if it.UnitPrice != nil && *it.UnitPrice < 0 {
+			return &pub.ValidationError{Msg: "item unit_price must not be negative"}
 		}
 	}
 	return nil

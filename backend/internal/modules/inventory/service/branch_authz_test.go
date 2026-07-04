@@ -410,6 +410,50 @@ func TestShipmentAuthz_Receive(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Purchase receipt authz
+// ---------------------------------------------------------------------------
+
+// TestPurchaseReceiptAuthz_CreateReceipt proves ADR-DATA-007 karar 3's
+// branch-scope rule: a purchase receipt is authorized off its
+// warehouse_id's branch (requireBranch), exactly like ShipmentService.Create
+// off from_warehouse_id.
+func TestPurchaseReceiptAuthz_CreateReceipt(t *testing.T) {
+	ctx := context.Background()
+	wh := createTestWarehouse(t, ctx, tenantA, branchSrc)
+	item := createTestStockItem(t, ctx, tenantA)
+	rcptSvc := newPurchaseReceiptService()
+
+	policySvc := newSupplyPolicyService()
+	_, err := policySvc.Create(ctx, tenantA, service.CreateSupplyPolicyRequest{
+		Scope: domain.SupplyScopeStockItem, StockItemID: &item.ID, Mode: domain.SupplyModeFree,
+	})
+	require.NoError(t, err)
+
+	newReq := func() service.CreateReceiptRequest {
+		return service.CreateReceiptRequest{
+			WarehouseID: wh.ID,
+			Currency:    "TRY",
+			Items:       []service.CreateReceiptItemRequest{{StockItemID: item.ID, Quantity: 1, Unit: "kg", UnitPrice: 5}},
+		}
+	}
+
+	t.Run("warehouse's branch may create a receipt", func(t *testing.T) {
+		_, _, err := rcptSvc.CreateReceipt(ctx, tenantA, branchPrincipal(branchSrc), newReq())
+		require.NoError(t, err)
+	})
+
+	t.Run("foreign branch is forbidden from creating a receipt", func(t *testing.T) {
+		_, _, err := rcptSvc.CreateReceipt(ctx, tenantA, branchPrincipal(branchReq), newReq())
+		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
+	})
+
+	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+		_, _, err := rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), newReq())
+		require.NoError(t, err)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Stock movement authz
 // ---------------------------------------------------------------------------
 

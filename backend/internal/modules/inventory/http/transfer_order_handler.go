@@ -36,6 +36,8 @@ type transferOrderItemResponse struct {
 	ShippedQty   float64   `json:"shipped_qty"`
 	ReceivedQty  float64   `json:"received_qty"`
 	Unit         string    `json:"unit"`
+	UnitPrice    *float64  `json:"unit_price,omitempty"`
+	Currency     *string   `json:"currency,omitempty"`
 	Note         string    `json:"note,omitempty"`
 }
 
@@ -57,6 +59,8 @@ type approveTransferOrderRequest struct {
 	Items      []struct {
 		StockItemID uuid.UUID `json:"stock_item_id"`
 		ApprovedQty float64   `json:"approved_qty"`
+		UnitPrice   *float64  `json:"unit_price,omitempty"`
+		Currency    string    `json:"currency,omitempty"`
 	} `json:"items"`
 }
 
@@ -225,7 +229,12 @@ func (h *Handler) approveTransferOrder(w http.ResponseWriter, r *http.Request) {
 
 	approvals := make([]service.ApprovalItem, len(req.Items))
 	for i, it := range req.Items {
-		approvals[i] = service.ApprovalItem{StockItemID: it.StockItemID, ApprovedQty: it.ApprovedQty}
+		approvals[i] = service.ApprovalItem{
+			StockItemID: it.StockItemID,
+			ApprovedQty: it.ApprovedQty,
+			UnitPrice:   it.UnitPrice,
+			Currency:    it.Currency,
+		}
 	}
 
 	order, err := h.transfers.Approve(r.Context(), p.TenantID, p, id, approvedBy, approvals)
@@ -281,6 +290,8 @@ func toTransferOrderResponse(o domain.BranchTransferOrder, items []domain.Branch
 				ShippedQty:   it.ShippedQty,
 				ReceivedQty:  it.ReceivedQty,
 				Unit:         it.Unit,
+				UnitPrice:    it.UnitPrice,
+				Currency:     it.Currency,
 				Note:         it.Note,
 			}
 		}

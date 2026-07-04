@@ -21,38 +21,44 @@ import (
 
 // Handler is the inventory HTTP handler.
 type Handler struct {
-	svc        *service.InventoryService
-	stockItems *service.StockItemService
-	warehouses *service.WarehouseService
-	transfers  *service.TransferOrderService
-	shipments  *service.ShipmentService
-	logger     *zap.Logger
-	engine     *auth.Engine
+	svc              *service.InventoryService
+	stockItems       *service.StockItemService
+	warehouses       *service.WarehouseService
+	transfers        *service.TransferOrderService
+	shipments        *service.ShipmentService
+	supplyPolicies   *service.SupplyPolicyService
+	purchaseReceipts *service.PurchaseReceiptService
+	logger           *zap.Logger
+	engine           *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
 type Params struct {
 	fx.In
 
-	Svc        *service.InventoryService
-	StockItems *service.StockItemService
-	Warehouses *service.WarehouseService
-	Transfers  *service.TransferOrderService
-	Shipments  *service.ShipmentService
-	Logger     *zap.Logger
-	Engine     *auth.Engine
+	Svc              *service.InventoryService
+	StockItems       *service.StockItemService
+	Warehouses       *service.WarehouseService
+	Transfers        *service.TransferOrderService
+	Shipments        *service.ShipmentService
+	SupplyPolicies   *service.SupplyPolicyService
+	PurchaseReceipts *service.PurchaseReceiptService
+	Logger           *zap.Logger
+	Engine           *auth.Engine
 }
 
 // NewHandler constructs a Handler for fx injection.
 func NewHandler(p Params) *Handler {
 	return &Handler{
-		svc:        p.Svc,
-		stockItems: p.StockItems,
-		warehouses: p.Warehouses,
-		transfers:  p.Transfers,
-		shipments:  p.Shipments,
-		logger:     p.Logger,
-		engine:     p.Engine,
+		svc:              p.Svc,
+		stockItems:       p.StockItems,
+		warehouses:       p.Warehouses,
+		transfers:        p.Transfers,
+		shipments:        p.Shipments,
+		supplyPolicies:   p.SupplyPolicies,
+		purchaseReceipts: p.PurchaseReceipts,
+		logger:           p.Logger,
+		engine:           p.Engine,
 	}
 }
 
@@ -106,6 +112,21 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 		r.With(h.permit("inventory.shipment.advance")).Post("/shipments/{id}/advance", h.advanceShipment)
 		r.With(h.permit("inventory.shipment.receive")).Post("/shipments/{id}/receive", h.receiveShipment)
 		r.With(h.permit("inventory.shipment.cancel")).Post("/shipments/{id}/cancel", h.cancelShipment)
+
+		// Supply policies (ADR-DATA-007): create is manager-only (authz.rego
+		// grants "inventory.supply_policy.create" only via the manager
+		// wildcard, not to the warehouse role); read is manager+warehouse,
+		// mirroring the rest of inventory management.
+		r.With(h.permit("inventory.supply_policy.create")).Post("/supply-policies", h.createSupplyPolicy)
+		r.With(h.permit("inventory.supply_policy.read")).Get("/supply-policies", h.listSupplyPolicies)
+		r.With(h.permit("inventory.supply_policy.read")).Get("/supply-policies/effective/{stockItemID}", h.getEffectiveSupplyPolicy)
+
+		// Purchase receipts (ADR-DATA-007 karar 3): elden fiş / faturasız
+		// alım. Immutable documents — no update/delete route (a correction
+		// is a new receipt).
+		r.With(h.permit("inventory.purchase_receipt.create")).Post("/purchase-receipts", h.createPurchaseReceipt)
+		r.With(h.permit("inventory.purchase_receipt.read")).Get("/purchase-receipts", h.listPurchaseReceipts)
+		r.With(h.permit("inventory.purchase_receipt.read")).Get("/purchase-receipts/{id}", h.getPurchaseReceipt)
 	})
 }
 
@@ -314,6 +335,11 @@ func (h *Handler) logError(w http.ResponseWriter, _ *http.Request, err error) {
 	var ve *pub.ValidationError
 	if errors.As(err, &ve) {
 		http.Error(w, ve.Msg, http.StatusUnprocessableEntity)
+		return
+	}
+	var spv *pub.ErrSupplyPolicyViolation
+	if errors.As(err, &spv) {
+		http.Error(w, spv.Msg, http.StatusUnprocessableEntity)
 		return
 	}
 	var te *pub.TransitionError

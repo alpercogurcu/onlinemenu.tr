@@ -50,17 +50,20 @@ func (r *TenantRepo) Create(ctx context.Context, tx pgx.Tx, t pub.Tenant) (pub.T
 		return pub.Tenant{}, fmt.Errorf("tenant/repo: marshal enabled_modules: %w", err)
 	}
 
+	// The id is supplied by the caller so the INSERT can run inside
+	// WithTenantTx(newID): the tenants RLS WITH CHECK (id = app.tenant_id)
+	// then passes without any sentinel/bypass path.
 	const q = `
 		INSERT INTO tenants (
-			name, legal_name, trade_name, slug, plan, enabled_modules,
+			id, name, legal_name, trade_name, slug, plan, enabled_modules,
 			identity_type, tax_no, tax_office, mersis_no,
 			address, city, district, postal_code, country,
 			phone, contact_email, is_active
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10,
-			$11, $12, $13, $14, $15,
-			$16, $17, $18
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			$12, $13, $14, $15, $16,
+			$17, $18, $19
 		)
 		RETURNING id, name, legal_name, trade_name, slug, plan, enabled_modules,
 		          identity_type, tax_no, tax_office, mersis_no,
@@ -68,7 +71,7 @@ func (r *TenantRepo) Create(ctx context.Context, tx pgx.Tx, t pub.Tenant) (pub.T
 		          phone, contact_email, is_active`
 
 	row := tx.QueryRow(ctx, q,
-		t.Name, t.LegalName, t.TradeName, t.Slug, string(t.Plan), string(modulesJSON),
+		t.ID, t.Name, t.LegalName, t.TradeName, t.Slug, string(t.Plan), string(modulesJSON),
 		string(t.IdentityType), t.TaxNo, t.TaxOffice, t.MersisNo,
 		t.Address.Line1, t.Address.City, t.Address.District, t.Address.PostalCode, countryOrDefault(t.Address.Country),
 		t.Phone, t.ContactEmail, t.IsActive,

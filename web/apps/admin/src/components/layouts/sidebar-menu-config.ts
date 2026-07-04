@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Boxes,
   Building2,
   ChefHat,
   ClipboardList,
@@ -81,6 +82,11 @@ export function getInventoryMenuConfig(
       title: t("navigation.warehouses"),
       url: "/inventory/warehouses",
       icon: Warehouse,
+    },
+    {
+      title: t("navigation.stockItems"),
+      url: "/inventory/stock-items",
+      icon: Boxes,
     },
     {
       title: t("navigation.stockLevels"),

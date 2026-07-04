@@ -91,6 +91,11 @@ type BranchTransferOrder struct {
 // BranchTransferOrderItem is a line item on a branch transfer order.
 // ShippedQty/ReceivedQty are denormalized from Shipment (ADR-DATA-006): the
 // service layer writes them only in reaction to a shipment status transition.
+//
+// UnitPrice/Currency are the imalathane/HQ -> franchise transfer (sale)
+// price (ADR-DATA-006 eklenti / ADR-DATA-007 SS4). They are nil at request
+// time -- the requesting branch never sets a price -- and are set only by
+// the source branch as part of TransferOrderService.Approve.
 type BranchTransferOrderItem struct {
 	ID              uuid.UUID
 	TenantID        uuid.UUID
@@ -101,5 +106,7 @@ type BranchTransferOrderItem struct {
 	ShippedQty      float64
 	ReceivedQty     float64
 	Unit            string
+	UnitPrice       *float64
+	Currency        *string
 	Note            string
 }

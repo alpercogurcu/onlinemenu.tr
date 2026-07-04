@@ -30,7 +30,8 @@ func (r *StockLevelRepo) AdjustOnHand(ctx context.Context, tx pgx.Tx, tenantID, 
 			on_hand    = GREATEST(0, stock_levels.on_hand + $4::numeric),
 			updated_at = NOW()
 		RETURNING id, tenant_id, warehouse_id, stock_item_id, on_hand, reserved, available,
-		          reorder_point, unit, updated_at`
+		          reorder_point, unit, last_unit_cost, last_cost_currency, last_cost_source,
+		          last_cost_at, updated_at`
 
 	row := tx.QueryRow(ctx, q, tenantID, warehouseID, stockItemID, delta, unit)
 	return scanLevel(row)
@@ -47,7 +48,8 @@ func (r *StockLevelRepo) AdjustReserved(ctx context.Context, tx pgx.Tx, tenantID
 			reserved   = GREATEST(0, stock_levels.reserved + $4::numeric),
 			updated_at = NOW()
 		RETURNING id, tenant_id, warehouse_id, stock_item_id, on_hand, reserved, available,
-		          reorder_point, unit, updated_at`
+		          reorder_point, unit, last_unit_cost, last_cost_currency, last_cost_source,
+		          last_cost_at, updated_at`
 
 	row := tx.QueryRow(ctx, q, tenantID, warehouseID, stockItemID, delta, unit)
 	return scanLevel(row)
@@ -57,7 +59,8 @@ func (r *StockLevelRepo) AdjustReserved(ctx context.Context, tx pgx.Tx, tenantID
 func (r *StockLevelRepo) GetByStockItem(ctx context.Context, tx pgx.Tx, warehouseID, stockItemID uuid.UUID) (domain.StockLevel, error) {
 	const q = `
 		SELECT id, tenant_id, warehouse_id, stock_item_id, on_hand, reserved, available,
-		       reorder_point, unit, updated_at
+		       reorder_point, unit, last_unit_cost, last_cost_currency, last_cost_source,
+		       last_cost_at, updated_at
 		FROM stock_levels
 		WHERE warehouse_id = $1 AND stock_item_id = $2`
 
@@ -76,7 +79,8 @@ func (r *StockLevelRepo) GetByStockItem(ctx context.Context, tx pgx.Tx, warehous
 func (r *StockLevelRepo) ListByWarehouse(ctx context.Context, tx pgx.Tx, warehouseID uuid.UUID) ([]domain.StockLevel, error) {
 	const q = `
 		SELECT id, tenant_id, warehouse_id, stock_item_id, on_hand, reserved, available,
-		       reorder_point, unit, updated_at
+		       reorder_point, unit, last_unit_cost, last_cost_currency, last_cost_source,
+		       last_cost_at, updated_at
 		FROM stock_levels
 		WHERE warehouse_id = $1
 		ORDER BY stock_item_id`
@@ -98,12 +102,38 @@ func (r *StockLevelRepo) ListByWarehouse(ctx context.Context, tx pgx.Tx, warehou
 	return levels, rows.Err()
 }
 
+// SetLastCost records the branch-local cost of a (warehouse, stock_item)
+// pair (ADR-DATA-007). It is an UPDATE, not an upsert: the caller is expected
+// to have already established the stock_levels row in the same transaction
+// (e.g. via AdjustOnHand) before recording its cost.
+func (r *StockLevelRepo) SetLastCost(ctx context.Context, tx pgx.Tx, tenantID, warehouseID, stockItemID uuid.UUID, unitCost float64, currency string, source domain.CostSource) error {
+	const q = `
+		UPDATE stock_levels SET
+			last_unit_cost     = $1,
+			last_cost_currency = $2,
+			last_cost_source   = $3,
+			last_cost_at       = NOW(),
+			updated_at         = NOW()
+		WHERE tenant_id = $4 AND warehouse_id = $5 AND stock_item_id = $6`
+
+	tag, err := tx.Exec(ctx, q, unitCost, currency, string(source), tenantID, warehouseID, stockItemID)
+	if err != nil {
+		return fmt.Errorf("inventory/repo: set last cost: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func scanLevel(s pgx.Row) (domain.StockLevel, error) {
 	var l domain.StockLevel
 	err := s.Scan(
 		&l.ID, &l.TenantID, &l.WarehouseID, &l.StockItemID,
 		&l.OnHand, &l.Reserved, &l.Available,
-		&l.ReorderPoint, &l.Unit, &l.UpdatedAt,
+		&l.ReorderPoint, &l.Unit,
+		&l.LastUnitCost, &l.LastCostCurrency, &l.LastCostSource, &l.LastCostAt,
+		&l.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

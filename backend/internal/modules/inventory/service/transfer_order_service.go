@@ -175,14 +175,25 @@ func (s *TransferOrderService) Submit(ctx context.Context, tenantID uuid.UUID, p
 	return s.transition(ctx, tenantID, principal, id, domain.BTOStatusSubmitted, requestingBranchOf, transitionOpts{setSubmittedAt: true})
 }
 
-// ApprovalItem carries the approved quantity for one BTO line item.
+// ApprovalItem carries the approved quantity for one BTO line item, and
+// optionally the transfer (sale) price for that item (ADR-DATA-006 eklenti /
+// ADR-DATA-007 SS4). UnitPrice is nil when the source branch does not price
+// the item at approval time (e.g. free/approved_suppliers policy items,
+// whose branch-local cost comes from a local purchase, not a transfer
+// price). Currency defaults to "TRY" (matching the billing module's
+// convention) when UnitPrice is set but Currency is left empty.
 type ApprovalItem struct {
 	StockItemID uuid.UUID
 	ApprovedQty float64
+	UnitPrice   *float64
+	Currency    string
 }
 
 // Approve transitions a BTO from submitted to approved (source branch action),
-// recording per-item approved quantities (partial approval supported).
+// recording per-item approved quantities (partial approval supported) and,
+// where the source branch supplies one, the per-item transfer price
+// (ADR-DATA-006 eklenti / ADR-DATA-007 SS4). The requesting branch never
+// sets a price; only the approving (source) branch may.
 func (s *TransferOrderService) Approve(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, id, approvedBy uuid.UUID, approvals []ApprovalItem) (domain.BranchTransferOrder, error) {
 	var updated domain.BranchTransferOrder
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -212,6 +223,18 @@ func (s *TransferOrderService) Approve(ctx context.Context, tenantID uuid.UUID, 
 			}
 			if err := s.itemRepo.SetApprovedQty(ctx, tx, itemID, a.ApprovedQty); err != nil {
 				return fmt.Errorf("set approved qty: %w", err)
+			}
+			if a.UnitPrice != nil {
+				if *a.UnitPrice < 0 {
+					return &pub.ValidationError{Msg: fmt.Sprintf("unit_price for stock_item_id %s must not be negative", a.StockItemID)}
+				}
+				currency := a.Currency
+				if currency == "" {
+					currency = "TRY"
+				}
+				if err := s.itemRepo.SetUnitPrice(ctx, tx, itemID, *a.UnitPrice, currency); err != nil {
+					return fmt.Errorf("set unit price: %w", err)
+				}
 			}
 		}
 

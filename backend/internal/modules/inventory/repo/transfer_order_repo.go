@@ -161,14 +161,16 @@ type TransferOrderItemRepo struct{}
 // NewTransferOrderItemRepo constructs a TransferOrderItemRepo for fx injection.
 func NewTransferOrderItemRepo() *TransferOrderItemRepo { return &TransferOrderItemRepo{} }
 
-// Add inserts a BTO line item.
+// Add inserts a BTO line item. unit_price/currency are always NULL at
+// insert time (ADR-DATA-007: "talep asamasinda fiyat yok") -- they are set
+// later, only via SetUnitPrice, as part of TransferOrderService.Approve.
 func (r *TransferOrderItemRepo) Add(ctx context.Context, tx pgx.Tx, item domain.BranchTransferOrderItem) (domain.BranchTransferOrderItem, error) {
 	const q = `
 		INSERT INTO branch_transfer_order_items
 		    (tenant_id, transfer_order_id, stock_item_id, requested_qty, approved_qty, unit, note)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING id, tenant_id, transfer_order_id, stock_item_id, requested_qty, approved_qty,
-		          shipped_qty, received_qty, unit, COALESCE(note, '')`
+		          shipped_qty, received_qty, unit, unit_price, currency, COALESCE(note, '')`
 
 	row := tx.QueryRow(ctx, q, item.TenantID, item.TransferOrderID, item.StockItemID,
 		item.RequestedQty, item.ApprovedQty, item.Unit, emptyToNil(item.Note))
@@ -179,7 +181,7 @@ func (r *TransferOrderItemRepo) Add(ctx context.Context, tx pgx.Tx, item domain.
 func (r *TransferOrderItemRepo) ListByTransferOrder(ctx context.Context, tx pgx.Tx, transferOrderID uuid.UUID) ([]domain.BranchTransferOrderItem, error) {
 	const q = `
 		SELECT id, tenant_id, transfer_order_id, stock_item_id, requested_qty, approved_qty,
-		       shipped_qty, received_qty, unit, COALESCE(note, '')
+		       shipped_qty, received_qty, unit, unit_price, currency, COALESCE(note, '')
 		FROM branch_transfer_order_items
 		WHERE transfer_order_id = $1
 		ORDER BY stock_item_id`
@@ -207,6 +209,22 @@ func (r *TransferOrderItemRepo) SetApprovedQty(ctx context.Context, tx pgx.Tx, i
 	tag, err := tx.Exec(ctx, q, qty, id)
 	if err != nil {
 		return fmt.Errorf("inventory/repo/transfer_order_item: set approved qty: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetUnitPrice sets the transfer (sale) price for a BTO line item
+// (ADR-DATA-006 eklenti / ADR-DATA-007 SS4). Called only by
+// TransferOrderService.Approve -- the source branch is the sole writer of a
+// BTO item's price, never the requesting branch and never at request time.
+func (r *TransferOrderItemRepo) SetUnitPrice(ctx context.Context, tx pgx.Tx, id uuid.UUID, unitPrice float64, currency string) error {
+	const q = `UPDATE branch_transfer_order_items SET unit_price = $1, currency = $2 WHERE id = $3`
+	tag, err := tx.Exec(ctx, q, unitPrice, currency, id)
+	if err != nil {
+		return fmt.Errorf("inventory/repo/transfer_order_item: set unit price: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -268,7 +286,7 @@ func scanTransferOrderItem(s pgx.Row) (domain.BranchTransferOrderItem, error) {
 	var item domain.BranchTransferOrderItem
 	err := s.Scan(&item.ID, &item.TenantID, &item.TransferOrderID, &item.StockItemID,
 		&item.RequestedQty, &item.ApprovedQty, &item.ShippedQty, &item.ReceivedQty,
-		&item.Unit, &item.Note)
+		&item.Unit, &item.UnitPrice, &item.Currency, &item.Note)
 	if err != nil {
 		return domain.BranchTransferOrderItem{}, err
 	}

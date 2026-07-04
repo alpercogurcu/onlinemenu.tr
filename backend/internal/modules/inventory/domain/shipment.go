@@ -96,6 +96,11 @@ type Shipment struct {
 }
 
 // ShipmentItem is a line item on a shipment.
+//
+// UnitPrice/Currency are copied from the linked BranchTransferOrderItem at
+// shipment create time and may be overridden per line; they are frozen
+// thereafter (ADR-DATA-006 eklenti). They remain nil for ad-hoc shipments
+// with no BTO link, or when the linked BTO item carries no price.
 type ShipmentItem struct {
 	ShipmentID   uuid.UUID
 	TenantID     uuid.UUID
@@ -104,4 +109,6 @@ type ShipmentItem struct {
 	ShippedQty   float64
 	ReceivedQty  float64
 	Unit         string
+	UnitPrice    *float64
+	Currency     *string
 }

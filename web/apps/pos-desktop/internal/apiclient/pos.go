@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -15,12 +16,11 @@ import (
 //   - backend/internal/modules/pos/http/handler.go
 //   - backend/internal/modules/payment/http/handler.go + domain/payment.go
 //
-// One deliberate asymmetry, called out where it applies: POST /api/v1/payments
-// (registerSale) and GET /api/v1/payments/{id} (getPayment) respond with the
-// raw domain.Payment struct (no json tags -> Go's default PascalCase field
-// names), while GET /api/v1/payments (listPayments) responds with the
-// snake_case paymentResponse DTO. registerSaleResponse below matches the
-// PascalCase shape because that's the endpoint this client calls.
+// All three payment endpoints (registerSale, getPayment, listPayments) now
+// respond with the same snake_case paymentResponse DTO — the previous
+// PascalCase-vs-snake_case asymmetry (registerSale/getPayment serializing
+// the raw untagged domain.Payment struct) was a backend bug, fixed
+// alongside this client update.
 
 // --- Catalog ---
 
@@ -148,13 +148,13 @@ func (c *Client) GetCheck(ctx context.Context, checkID string) (Check, error) {
 }
 
 // CloseCheck calls POST /api/v1/pos/checks/{id}/close (Idempotency-Key
-// required — ADR-SEC-003). The backend rejects this with a plain 500 (not
-// a distinguishable 4xx) when the check is underpaid — see
-// pos/service.CheckService.Close's ErrInsufficientPayment, which is not
-// mapped through wrapErr's pub.Err* sentinels the HTTP handler recognizes.
-// That is a backend gap outside this app's scope; callers here only get an
-// opaque *APIError with StatusCode 500 for that case, same as any other
-// server error.
+// required — ADR-SEC-003). When the check is underpaid, the backend now
+// returns 409 Conflict (pos/service.CheckService.Close's
+// ErrInsufficientPayment, mapped by the HTTP handler) — a distinguishable
+// *APIError with StatusCode 409, not the opaque 500 an earlier backend
+// version returned. Since 409 < 500, doIdempotent correctly does not retry
+// it (see that method's doc comment): retrying a still-underpaid check
+// cannot change the outcome.
 func (c *Client) CloseCheck(ctx context.Context, checkID string) (Check, error) {
 	var out Check
 	path := fmt.Sprintf("/api/v1/pos/checks/%s/close", checkID)
@@ -249,21 +249,19 @@ func (c *Client) PlaceOrder(ctx context.Context, branchID, checkID string, items
 
 // --- Payments ---
 
-// Payment is what POST /api/v1/payments (registerSale) actually returns —
-// domain.Payment has no json tags, so its field names serialize verbatim in
-// PascalCase. This intentionally does NOT match GET /api/v1/payments'
-// snake_case paymentResponse; see the file-level doc comment.
+// Payment mirrors payment/http paymentResponse — the single snake_case DTO
+// now shared by registerSale, getPayment, and listPayments alike.
 type Payment struct {
-	ID              string     `json:"ID"`
-	BranchID        string     `json:"BranchID"`
-	CheckID         *string    `json:"CheckID"`
-	Method          string     `json:"Method"`
-	Status          string     `json:"Status"`
-	AmountTotal     int64      `json:"AmountTotal"`
-	Currency        string     `json:"Currency"`
-	FiscalReceiptID *string    `json:"FiscalReceiptID"`
-	CreatedAt       time.Time  `json:"CreatedAt"`
-	CompletedAt     *time.Time `json:"CompletedAt"`
+	ID              string     `json:"id"`
+	BranchID        string     `json:"branch_id"`
+	CheckID         *string    `json:"check_id"`
+	Method          string     `json:"method"`
+	Status          string     `json:"status"`
+	AmountTotal     int64      `json:"amount_total"`
+	Currency        string     `json:"currency"`
+	FiscalReceiptID *string    `json:"fiscal_receipt_id"`
+	CreatedAt       time.Time  `json:"created_at"`
+	CompletedAt     *time.Time `json:"completed_at"`
 }
 
 type registerSaleRequest struct {
@@ -300,4 +298,30 @@ func (c *Client) RegisterCashPayment(ctx context.Context, branchID, checkID stri
 		return Payment{}, fmt.Errorf("apiclient: register cash payment: %w", err)
 	}
 	return out, nil
+}
+
+// listPaymentsResponse mirrors payment/http listPayments' envelope
+// (map[string]any{"payments": out}).
+type listPaymentsResponse struct {
+	Payments []Payment `json:"payments"`
+}
+
+// ListCheckPayments calls GET /api/v1/payments?check_id={checkID} — completed
+// payments already recorded against a check. This is the read a cashier
+// needs before accepting a new cash payment on a reopened adisyon: without
+// it, a check that was already partially or fully paid (e.g. the station
+// crashed/restarted after RegisterCashPayment succeeded but before
+// CloseCheck) offers no way to see that from the client, risking the
+// cashier registering the same amount twice. Requires "payment.payment.read"
+// — see pos.go's ListCheckPayments doc comment for the role-grant caveat.
+func (c *Client) ListCheckPayments(ctx context.Context, checkID string) ([]Payment, error) {
+	if checkID == "" {
+		return nil, fmt.Errorf("apiclient: list check payments: check_id is required")
+	}
+	var out listPaymentsResponse
+	path := "/api/v1/payments?" + url.Values{"check_id": {checkID}}.Encode()
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("apiclient: list check payments: %w", err)
+	}
+	return out.Payments, nil
 }

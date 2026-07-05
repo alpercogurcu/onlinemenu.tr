@@ -4,6 +4,7 @@ import {
   GetCheck,
   ListCategories,
   ListCheckOrders,
+  ListCheckPayments,
   ListOpenChecks,
   Login,
   Logout,
@@ -45,6 +46,7 @@ function App() {
   const [confirmedOrders, setConfirmedOrders] = useState<main.OrderDTO[]>([])
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
   const [paidChecks, setPaidChecks] = useState<Record<string, boolean>>({})
+  const [alreadyPaidTotal, setAlreadyPaidTotal] = useState(0)
 
   const [sendingOrder, setSendingOrder] = useState(false)
   const [receiptError, setReceiptError] = useState('')
@@ -94,17 +96,48 @@ function App() {
     setConfirmedOrders([])
     setPendingLines([])
     setOpenChecks([])
+    setAlreadyPaidTotal(0)
   }
 
   async function handleSelectCheck(checkId: string) {
     setReceiptError('')
     setPendingLines([])
+    setAlreadyPaidTotal(0)
     try {
       const [check, orders] = await Promise.all([GetCheck(checkId), ListCheckOrders(checkId)])
       setSelectedCheck(check)
       setConfirmedOrders(orders)
     } catch (err) {
       setReceiptError(describeError(err))
+      return
+    }
+
+    // Double-payment guard (see pos.go's ListCheckPayments doc comment): a
+    // check reopened after a payment was already recorded (e.g. the app
+    // restarted between RegisterCashPayment and CloseCheck) must not be
+    // offered "Nakit al" again.
+    //
+    // IMPORTANT: this is a UI-only guard — the backend's CloseCheck does not
+    // reject overpayment, only underpayment, so this frontend check is the
+    // only thing standing between a reopened check and a double payment.
+    // It is also currently inert for a plain "cashier" session: this call
+    // needs "payment.payment.read", which cashier does not have (see the
+    // pos.go doc comment for why that's not a one-line permission grant).
+    // The read is fail-open on ANY error (403 included) so a permission gap
+    // or a transient failure never blocks selecting the check — it just
+    // means the cashier won't see this line or get this guard.
+    try {
+      const payments = await ListCheckPayments(checkId)
+      const paidSoFar = payments.reduce((sum, p) => sum + p.amount_total, 0)
+      setAlreadyPaidTotal(paidSoFar)
+      if (paidSoFar > 0) {
+        setPaidChecks((paid) => ({ ...paid, [checkId]: true }))
+      }
+    } catch (err) {
+      // Fail-open — see comment above. Logged (not surfaced to
+      // receiptError) so the gap is visible in devtools without
+      // interrupting the cashier's flow.
+      console.warn('ListCheckPayments failed — double-payment guard inactive for this check', err)
     }
   }
 
@@ -147,8 +180,9 @@ function App() {
     if (!selectedCheck || !session?.branch_id) return
     setReceiptError('')
     try {
-      await RegisterCashPayment(session.branch_id, selectedCheck.id, amountTotal)
+      const payment = await RegisterCashPayment(session.branch_id, selectedCheck.id, amountTotal)
       setPaidChecks((paid) => ({ ...paid, [selectedCheck.id]: true }))
+      setAlreadyPaidTotal((total) => total + payment.amount_total)
     } catch (err) {
       setReceiptError(describeError(err))
       throw err
@@ -163,6 +197,7 @@ function App() {
       setSelectedCheck(null)
       setConfirmedOrders([])
       setPendingLines([])
+      setAlreadyPaidTotal(0)
       refreshOpenChecks()
     } catch (err) {
       setReceiptError(describeError(err))
@@ -214,6 +249,7 @@ function App() {
           confirmedTotal={confirmedOrdersTotal(confirmedOrders)}
           pendingTotal={sumPendingTotal(pendingLines)}
           hasPaid={selectedCheck ? Boolean(paidChecks[selectedCheck.id]) : false}
+          alreadyPaidTotal={alreadyPaidTotal}
           onRegisterPayment={handleRegisterPayment}
           onCloseCheck={handleCloseCheck}
           errorMessage={receiptError}

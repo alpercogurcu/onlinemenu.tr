@@ -189,6 +189,55 @@ func newPaymentService() *service.PaymentService {
 }
 
 // ---------------------------------------------------------------------------
+// ListByCheck (double-payment guard)
+// ---------------------------------------------------------------------------
+
+// TestListByCheck_ReturnsOnlyCompletedForCheck exercises the service surface
+// POS uses to show already-recorded payments when a cashier reopens a check.
+// A completed payment on the target check, a pending payment on the same
+// check (idempotency reservation without a completed fiscal cycle — not
+// modeled directly here since RegisterSale always completes synchronously in
+// this service, so the "second check has none" case stands in for the
+// tenant/check scoping guarantee), and a completed payment on a different
+// check must not bleed into each other's result.
+func TestListByCheck_ReturnsOnlyCompletedForCheck(t *testing.T) {
+	ctx := context.Background()
+	svc := newPaymentService()
+
+	checkID := uuid.New()
+	otherCheckID := uuid.New()
+
+	paid, err := svc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID:       tenantA,
+		BranchID:       branchA,
+		CheckID:        &checkID,
+		IdempotencyKey: uuid.New().String(),
+		Method:         domain.PaymentMethodCash,
+		AmountTotal:    4200,
+		Currency:       "TRY",
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.PaymentStatusCompleted, paid.Status)
+
+	_, err = svc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID:       tenantA,
+		BranchID:       branchA,
+		CheckID:        &otherCheckID,
+		IdempotencyKey: uuid.New().String(),
+		Method:         domain.PaymentMethodCash,
+		AmountTotal:    9900,
+		Currency:       "TRY",
+	})
+	require.NoError(t, err)
+
+	payments, err := svc.ListByCheck(ctx, tenantA, checkID)
+	require.NoError(t, err)
+	require.Len(t, payments, 1, "must only return payments for the requested check")
+	assert.Equal(t, paid.ID, payments[0].ID)
+	assert.Equal(t, int64(4200), payments[0].AmountTotal)
+}
+
+// ---------------------------------------------------------------------------
 // Idempotency race tests
 // ---------------------------------------------------------------------------
 

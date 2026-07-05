@@ -18,6 +18,14 @@ type ReceiptProps = {
   confirmedTotal: number
   pendingTotal: number
   hasPaid: boolean
+  /**
+   * Sum of completed payments already recorded against this check (from
+   * App's ListCheckPayments call on selection) — shown so a cashier
+   * reopening an adisyon that was already paid (e.g. after an app restart
+   * between payment and close) sees that immediately, instead of risking a
+   * second cash payment for the same check.
+   */
+  alreadyPaidTotal: number
   onRegisterPayment: (amountTotal: number) => Promise<void>
   onCloseCheck: () => Promise<void>
   errorMessage: string
@@ -40,6 +48,7 @@ export function Receipt({
   confirmedTotal,
   pendingTotal,
   hasPaid,
+  alreadyPaidTotal,
   onRegisterPayment,
   onCloseCheck,
   errorMessage,
@@ -127,6 +136,15 @@ export function Receipt({
                 {formatMoney(grandTotal)}
               </span>
             </div>
+
+            {alreadyPaidTotal > 0 && (
+              <div className="flex items-baseline justify-between rounded-md bg-teal/10 px-2 py-1 text-sm">
+                <span className="text-ink-dim">Önceden ödenen</span>
+                <span className="money font-semibold tabular-nums text-teal">
+                  {formatMoney(alreadyPaidTotal)}
+                </span>
+              </div>
+            )}
 
             <ErrorBanner message={errorMessage} />
 

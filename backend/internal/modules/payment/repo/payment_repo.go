@@ -141,6 +141,36 @@ func (r *PaymentRepo) ListByTenant(ctx context.Context, tx pgx.Tx, tenantID uuid
 	return payments, rows.Err()
 }
 
+// ListByCheck returns completed payments for a check, newest first. Used by
+// POS to show already-recorded payments when a cashier reopens a check,
+// guarding against double payment on the same check. Only completed payments
+// are returned — pending/failed rows carry no money and would be misleading
+// in that display, mirroring TotalPaidForCheck's status filter.
+func (r *PaymentRepo) ListByCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) ([]domain.Payment, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
+		       method, status, amount_total, currency, fiscal_receipt_id,
+		       created_at, completed_at
+		FROM payments
+		WHERE tenant_id = $1 AND check_id = $2 AND status = 'completed'
+		ORDER BY created_at DESC
+	`, tenantID, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: list by check: %w", err)
+	}
+	defer rows.Close()
+
+	var payments []domain.Payment
+	for rows.Next() {
+		p, err := scanPayment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("payment/repo: list by check scan: %w", err)
+		}
+		payments = append(payments, p)
+	}
+	return payments, rows.Err()
+}
+
 // TotalPaidForCheck returns the sum of completed payments for a check.
 func (r *PaymentRepo) TotalPaidForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
 	var total int64

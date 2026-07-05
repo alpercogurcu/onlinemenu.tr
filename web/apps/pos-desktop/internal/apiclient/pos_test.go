@@ -227,14 +227,16 @@ func TestClient_CloseCheck_DoesNotRetry4xx(t *testing.T) {
 	}
 }
 
-// TestClient_RegisterCashPayment_ReplaysIdempotentResponse simulates the
-// scenario ADR-SEC-003 exists for: the first attempt succeeds server-side
-// but the response never reaches the client (here modelled directly as a
-// second call with the same semantics reusing the same key), and the
-// server replays the original response instead of creating a second
-// payment. This exercises the request shape / PascalCase Payment decoding
-// against the backend's actual (untagged domain.Payment) response shape.
-func TestClient_RegisterCashPayment_DecodesPascalCasePaymentResponse(t *testing.T) {
+// TestClient_RegisterCashPayment_DecodesSnakeCasePaymentResponse simulates
+// the scenario ADR-SEC-003 exists for: the first attempt succeeds
+// server-side but the response never reaches the client (here modelled
+// directly as a second call with the same semantics reusing the same key),
+// and the server replays the original response instead of creating a
+// second payment. This also exercises the request/response shape against
+// the backend's actual paymentResponse DTO — snake_case on every payment
+// endpoint (registerSale, getPayment, listPayments) after the DTO-casing
+// fix; there is no longer a PascalCase asymmetry to model here.
+func TestClient_RegisterCashPayment_DecodesSnakeCasePaymentResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/payments" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -250,8 +252,7 @@ func TestClient_RegisterCashPayment_DecodesPascalCasePaymentResponse(t *testing.
 			t.Fatalf("Method = %q, want cash", req.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		// domain.Payment has no json tags -> PascalCase on the wire.
-		_, _ = w.Write([]byte(`{"ID":"pay-1","BranchID":"branch-1","CheckID":"check-1","Method":"cash","Status":"completed","AmountTotal":1500,"Currency":"TRY"}`))
+		_, _ = w.Write([]byte(`{"id":"pay-1","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":1500,"currency":"TRY"}`))
 	}))
 	defer srv.Close()
 
@@ -282,5 +283,48 @@ func TestClient_RegisterCashPayment_RejectsMissingCheckIDBeforeCallingServer(t *
 	}
 	if !strings.Contains(err.Error(), "check_id") {
 		t.Fatalf("error = %q, want to mention check_id", err.Error())
+	}
+}
+
+// TestClient_ListCheckPayments_DecodesEnvelope verifies the query string
+// shape and the {"payments": [...]} envelope payment/http listPayments
+// actually returns.
+func TestClient_ListCheckPayments_DecodesEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/payments" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("check_id"); got != "check-1" {
+			t.Fatalf("check_id query param = %q, want check-1", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"payments":[{"id":"pay-1","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":1500,"currency":"TRY"}]}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	payments, err := c.ListCheckPayments(t.Context(), "check-1")
+	if err != nil {
+		t.Fatalf("ListCheckPayments: %v", err)
+	}
+	if len(payments) != 1 || payments[0].ID != "pay-1" || payments[0].AmountTotal != 1500 {
+		t.Fatalf("unexpected payments: %+v", payments)
+	}
+}
+
+func TestClient_ListCheckPayments_RejectsMissingCheckIDBeforeCallingServer(t *testing.T) {
+	var called atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called.Store(true)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.ListCheckPayments(t.Context(), "")
+	if err == nil {
+		t.Fatal("expected error for empty check_id")
+	}
+	if called.Load() {
+		t.Fatal("server should not have been called")
 	}
 }

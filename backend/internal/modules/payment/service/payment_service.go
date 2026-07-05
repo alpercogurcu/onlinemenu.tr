@@ -194,6 +194,22 @@ func (s *PaymentService) ListByTenant(ctx context.Context, tenantID uuid.UUID, l
 	return payments, nil
 }
 
+// ListByCheck returns completed payments for a check, newest first — used by
+// POS to surface previously recorded payments when a cashier reopens a check
+// (double-payment guard).
+func (s *PaymentService) ListByCheck(ctx context.Context, tenantID, checkID uuid.UUID) ([]domain.Payment, error) {
+	var payments []domain.Payment
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		payments, err = s.paymentRepo.ListByCheck(ctx, tx, tenantID, checkID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: list by check: %w", err)
+	}
+	return payments, nil
+}
+
 // TotalPaidForCheck returns the sum of completed payments for a check.
 func (s *PaymentService) TotalPaidForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
 	var total int64

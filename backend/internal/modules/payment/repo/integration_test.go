@@ -343,6 +343,97 @@ func TestPaymentRepo_TotalPaidForCheck(t *testing.T) {
 	assert.Equal(t, int64(15000), total)
 }
 
+// TestPaymentRepo_ListByCheck verifies the double-payment-guard read path:
+// only completed payments for the given check are returned, pending ones
+// (e.g. a payment created but not yet fiscally completed) are excluded,
+// mirroring TotalPaidForCheck's status filter.
+func TestPaymentRepo_ListByCheck(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewPaymentRepo()
+	checkID := uuid.New()
+	otherCheckID := uuid.New()
+
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		// Completed payment on the target check — must be returned.
+		p1, err := r.Create(ctx, tx, domain.Payment{
+			TenantID:       tenantA,
+			BranchID:       branchA,
+			CheckID:        &checkID,
+			IdempotencyKey: "list-by-check-key-1",
+			Method:         domain.PaymentMethodCash,
+			AmountTotal:    7000,
+			Currency:       "TRY",
+		})
+		if err != nil {
+			return err
+		}
+		receiptID, err := r.InsertFiscalReceipt(ctx, tx, domain.FiscalReceipt{
+			TenantID:      tenantA,
+			PaymentID:     p1.ID,
+			DeviceType:    "mock",
+			ReceiptNumber: "MOCK-LBC-1",
+			ReceiptData:   map[string]any{},
+		})
+		if err != nil {
+			return err
+		}
+		if err := r.Complete(ctx, tx, p1.ID, receiptID); err != nil {
+			return err
+		}
+
+		// Pending payment on the target check (never completed) — must be excluded.
+		_, err = r.Create(ctx, tx, domain.Payment{
+			TenantID:       tenantA,
+			BranchID:       branchA,
+			CheckID:        &checkID,
+			IdempotencyKey: "list-by-check-key-2-pending",
+			Method:         domain.PaymentMethodCash,
+			AmountTotal:    3000,
+			Currency:       "TRY",
+		})
+		if err != nil {
+			return err
+		}
+
+		// Completed payment on a different check — must be excluded.
+		p3, err := r.Create(ctx, tx, domain.Payment{
+			TenantID:       tenantA,
+			BranchID:       branchA,
+			CheckID:        &otherCheckID,
+			IdempotencyKey: "list-by-check-key-3-other-check",
+			Method:         domain.PaymentMethodCash,
+			AmountTotal:    9000,
+			Currency:       "TRY",
+		})
+		if err != nil {
+			return err
+		}
+		receiptID3, err := r.InsertFiscalReceipt(ctx, tx, domain.FiscalReceipt{
+			TenantID:      tenantA,
+			PaymentID:     p3.ID,
+			DeviceType:    "mock",
+			ReceiptNumber: "MOCK-LBC-3",
+			ReceiptData:   map[string]any{},
+		})
+		if err != nil {
+			return err
+		}
+		return r.Complete(ctx, tx, p3.ID, receiptID3)
+	})
+	require.NoError(t, err)
+
+	var payments []domain.Payment
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		payments, err = r.ListByCheck(ctx, tx, tenantA, checkID)
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, payments, 1, "only the completed payment on the target check must be returned")
+	assert.Equal(t, int64(7000), payments[0].AmountTotal)
+	assert.Equal(t, domain.PaymentStatusCompleted, payments[0].Status)
+}
+
 func TestPaymentRepo_RLSIsolation(t *testing.T) {
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()

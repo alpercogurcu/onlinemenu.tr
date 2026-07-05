@@ -233,9 +233,60 @@ func (a *App) RegisterCashPayment(branchID, checkID string, amountTotal int64) (
 	return dto, nil
 }
 
+// ListCheckPayments returns the completed payments already recorded against
+// a check (payment.payment.read). The cashier UI calls this when selecting a
+// check — before offering "Nakit al" — so a check that already has a
+// completed payment (e.g. the station restarted after RegisterCashPayment
+// succeeded but before CloseCheck) is not paid a second time.
+//
+// IMPORTANT — this is a UI-only guard, not a backend one:
+// pos/service.CheckService.Close only rejects paid < total (underpayment);
+// it does not reject paid > total, so nothing server-side stops a second
+// RegisterCashPayment call from succeeding and overpaying a check. This
+// frontend check is the only thing preventing that today.
+//
+// It is also currently inert for the plain "cashier" role: this call
+// requires "payment.payment.read" (backend/configs/opa authz.rego), which
+// today is granted to shift_manager/manager only — NOT to "cashier", which
+// only has "payment.sale.register" (see that rego file's pos_counter_actions
+// / payment rules). A cashier-only session gets a 403 here, which the
+// frontend fails open on (see App.tsx's handleSelectCheck) rather than
+// blocking check selection — so a cashier-only station shows no
+// "önceden ödenen" line and has no double-payment guard at all.
+//
+// This is not a one-line permission grant: GET /api/v1/payments gates both
+// this check-scoped read AND the tenant-wide reconciliation listing
+// (ListByTenant) under the same "payment.payment.read" action, and that
+// tenant-wide view is deliberately reserved for shift_manager/manager per
+// the rego comment. Granting cashier that action would over-expose the full
+// payment history, not just this check's. Closing this gap needs a
+// narrower permission (e.g. a check-scoped read distinct from the
+// tenant-wide list) — a policy design decision outside this change's scope,
+// flagged here for follow-up.
+func (a *App) ListCheckPayments(checkID string) ([]PaymentDTO, error) {
+	payments, err := a.api.ListCheckPayments(a.ctx, checkID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PaymentDTO, len(payments))
+	for i, p := range payments {
+		out[i] = PaymentDTO{
+			ID:          p.ID,
+			Method:      p.Method,
+			Status:      p.Status,
+			AmountTotal: p.AmountTotal,
+			Currency:    p.Currency,
+		}
+		if p.CheckID != nil {
+			out[i].CheckID = *p.CheckID
+		}
+	}
+	return out, nil
+}
+
 // CloseCheck closes a check once it has been paid in full. See
-// apiclient.Client.CloseCheck's doc comment for the underpaid-check error
-// shape caveat (backend returns an opaque 500, not a distinguishable 4xx).
+// apiclient.Client.CloseCheck's doc comment for the underpaid-check 409
+// response shape.
 func (a *App) CloseCheck(checkID string) (CheckDTO, error) {
 	c, err := a.api.CloseCheck(a.ctx, checkID)
 	if err != nil {

@@ -78,37 +78,78 @@ func requirePrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, b
 	return p, true
 }
 
+// paymentResponse is the single snake_case wire shape for every payment
+// endpoint (listPayments, registerSale, getPayment). Before this fix,
+// registerSale/getPayment serialized the domain.Payment struct directly —
+// which has no json tags, so its fields went out verbatim in Go's default
+// PascalCase — while listPayments alone went through this DTO. Routing all
+// three through toPaymentResponse closes that inconsistency (see
+// docs/lessons-from-b2b.md: handlers must not serialize domain structs).
 type paymentResponse struct {
-	ID          uuid.UUID  `json:"id"`
-	TenantID    uuid.UUID  `json:"tenant_id"`
-	BranchID    uuid.UUID  `json:"branch_id"`
-	CheckID     *uuid.UUID `json:"check_id"`
-	Method      string     `json:"method"`
-	Status      string     `json:"status"`
-	AmountTotal int64      `json:"amount_total"`
-	Currency    string     `json:"currency"`
-	CreatedAt   string     `json:"created_at"`
+	ID              uuid.UUID  `json:"id"`
+	TenantID        uuid.UUID  `json:"tenant_id"`
+	BranchID        uuid.UUID  `json:"branch_id"`
+	CheckID         *uuid.UUID `json:"check_id"`
+	Method          string     `json:"method"`
+	Status          string     `json:"status"`
+	AmountTotal     int64      `json:"amount_total"`
+	Currency        string     `json:"currency"`
+	FiscalReceiptID *uuid.UUID `json:"fiscal_receipt_id"`
+	CreatedAt       string     `json:"created_at"`
+	CompletedAt     *string    `json:"completed_at"`
 }
 
 func toPaymentResponse(p domain.Payment) paymentResponse {
-	return paymentResponse{
-		ID:          p.ID,
-		TenantID:    p.TenantID,
-		BranchID:    p.BranchID,
-		CheckID:     p.CheckID,
-		Method:      string(p.Method),
-		Status:      string(p.Status),
-		AmountTotal: p.AmountTotal,
-		Currency:    p.Currency,
-		CreatedAt:   p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	resp := paymentResponse{
+		ID:              p.ID,
+		TenantID:        p.TenantID,
+		BranchID:        p.BranchID,
+		CheckID:         p.CheckID,
+		Method:          string(p.Method),
+		Status:          string(p.Status),
+		AmountTotal:     p.AmountTotal,
+		Currency:        p.Currency,
+		FiscalReceiptID: p.FiscalReceiptID,
+		CreatedAt:       p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+	if p.CompletedAt != nil {
+		completedAt := p.CompletedAt.Format("2006-01-02T15:04:05Z07:00")
+		resp.CompletedAt = &completedAt
+	}
+	return resp
 }
 
+// listPayments calls either PaymentService.ListByCheck (when ?check_id= is
+// present — completed payments only, used by POS to guard against double
+// payment on a reopened check) or PaymentService.ListByTenant (tenant-wide
+// reconciliation view, paginated). Both share the "payment.payment.read"
+// permission — a check-scoped read is a strict subset of a tenant-wide one.
 func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
 		return
 	}
+
+	if v := r.URL.Query().Get("check_id"); v != "" {
+		checkID, err := uuid.Parse(v)
+		if err != nil {
+			http.Error(w, "invalid check_id", http.StatusBadRequest)
+			return
+		}
+		payments, err := h.payments.ListByCheck(r.Context(), p.TenantID, checkID)
+		if err != nil {
+			h.logger.Error("payment: list by check", zap.Error(err))
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		out := make([]paymentResponse, len(payments))
+		for i, pay := range payments {
+			out[i] = toPaymentResponse(pay)
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"payments": out})
+		return
+	}
+
 	limit := 50
 	offset := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -174,7 +215,7 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	respondJSON(w, http.StatusCreated, payment)
+	respondJSON(w, http.StatusCreated, toPaymentResponse(payment))
 }
 
 func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +238,7 @@ func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	respondJSON(w, http.StatusOK, payment)
+	respondJSON(w, http.StatusOK, toPaymentResponse(payment))
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {

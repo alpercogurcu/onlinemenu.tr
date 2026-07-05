@@ -82,15 +82,38 @@ func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (
 	return c, nil
 }
 
-// List returns all checks visible to the current tenant (open first, then by opened_at desc).
-func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Check, error) {
+// ListFilter narrows CheckRepo.List's result set. Both fields are optional
+// (nil = no filter on that column) — mirroring service.ZonePatch/TablePatch's
+// pointer-field convention for "not supplied" — so a caller can filter on
+// status, branch_id, both, or neither without three near-duplicate queries.
+// Tenant scoping is unaffected: RLS (SET LOCAL app.tenant_id via
+// db.WithTenantReadTx) already restricts every row to the current tenant
+// before either of these predicates is applied.
+type ListFilter struct {
+	Status   *domain.CheckStatus
+	BranchID *uuid.UUID
+}
+
+// List returns checks visible to the current tenant (open first, then by
+// opened_at desc), optionally narrowed by ListFilter. A nil field in filter
+// is a NULL-guarded no-op predicate rather than a second/third query — see
+// ListFilter's doc comment.
+func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx, filter ListFilter) ([]domain.Check, error) {
 	const q = `
 		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks
+		WHERE ($1::text IS NULL OR status = $1::text)
+		  AND ($2::uuid IS NULL OR branch_id = $2::uuid)
 		ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, opened_at DESC`
 
-	rows, err := tx.Query(ctx, q)
+	var status *string
+	if filter.Status != nil {
+		s := string(*filter.Status)
+		status = &s
+	}
+
+	rows, err := tx.Query(ctx, q, status, filter.BranchID)
 	if err != nil {
 		return nil, fmt.Errorf("pos/repo/check: list: %w", err)
 	}

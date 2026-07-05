@@ -2,16 +2,8 @@
 
 import { useEffect, useRef, useState } from "react"
 
-import api, { clearAccessToken, getAccessToken } from "@/lib/api"
-import {
-  applyKitchenMessage,
-  isActiveKitchenStatus,
-  isSnapshotMessage,
-  type KitchenOrderEvent,
-  type KitchenMessage,
-  type KitchenOrderMap,
-} from "@/lib/kitchen-events"
-import type { Check, Order } from "@/types"
+import { clearAccessToken, getAccessToken } from "@/lib/api"
+import { applyKitchenMessage, type KitchenMessage, type KitchenOrderMap } from "@/lib/kitchen-events"
 
 export type KitchenConnectionStatus = "connecting" | "live" | "reconnecting" | "error"
 
@@ -30,60 +22,20 @@ interface UseKitchenStreamResult {
   errorMessage: string | null
 }
 
-// hydrateReadyOrders backfills "ready" orders after every snapshot.
-//
-// backend/internal/modules/pos/repo/order_repo.go's ListActiveByBranch (the
-// query behind the WS snapshot) deliberately scopes "live for the kitchen"
-// to pending/accepted/preparing — "ready" orders are NOT included. Live
-// order.status_changed events into/out of "ready" still arrive normally, so
-// this only matters on (re)connect: a fresh snapshot clears the board and
-// would silently drop any order that was already sitting in "ready",
-// because nothing ever re-announces it. Reconnects are routine here (every
-// network blip triggers one via the backoff loop below), so without this
-// backfill a kitchen's "ready, waiting for pickup" orders would vanish from
-// the screen on any hiccup. Backend is out of scope for this change
-// (KAPSAM: web/apps/admin/**), so this closes the gap client-side using the
-// existing checks/orders REST endpoints — best-effort: a failure here just
-// means the next live event (if any) is what restores that one order.
-async function hydrateReadyOrders(branchId: string): Promise<KitchenOrderEvent[]> {
-  const { data: checks } = await api.get<Check[]>("/api/v1/pos/checks")
-  const branchChecks = (checks ?? []).filter((c) => c.branch_id === branchId && c.status === "open")
-
-  const perCheck = await Promise.all(
-    branchChecks.map(async (check): Promise<KitchenOrderEvent[]> => {
-      try {
-        const { data: orders } = await api.get<Order[]>(`/api/v1/pos/checks/${check.id}/orders`)
-        return (orders ?? [])
-          .filter((o) => o.status === "ready")
-          .map((o) => ({
-            type: "order.status_changed" as const,
-            order_id: o.id,
-            check_id: o.check_id,
-            table_label: check.table_label,
-            status: o.status,
-            // seq: 0 mirrors the snapshot convention (kitchen-events.ts
-            // treats seq 0 as "always apply, this is a state re-sync, not a
-            // sequenced event") so a concurrent live event for the same
-            // order (which carries a real seq) is never clobbered by this
-            // best-effort backfill.
-            seq: 0,
-            occurred_at: o.updated_at,
-          }))
-      } catch {
-        return []
-      }
-    }),
-  )
-  return perCheck.flat()
-}
-
 // useKitchenStream consumes the /api/pos/kitchen-stream bridge route (see
 // that route's header comment for why a bridge exists at all) and maintains
 // KDS board state: an order_id-keyed map merged via seq last-writer-wins,
 // plus a reconnect state machine with exponential backoff + jitter. A fresh
 // snapshot (sent by the backend immediately on every (re)connect) fully
-// replaces prior state, so a dropped connection self-heals with no gap
-// (modulo the "ready" backfill above).
+// replaces prior state, so a dropped connection self-heals with no gap.
+//
+// Note: this hook used to backfill "ready" orders client-side after every
+// snapshot, because backend/internal/modules/pos/repo/order_repo.go's
+// ListActiveByBranch (the query behind the WS snapshot) excluded "ready"
+// from what it considered "live for the kitchen". That backend gap is now
+// fixed (domain.KitchenActiveOrderStatuses includes "ready"), so the
+// snapshot itself carries ready orders and the client-side compensation
+// was removed — see git history for the old hydrateReadyOrders.
 export function useKitchenStream(branchId: string | null): UseKitchenStreamResult {
   const [status, setStatus] = useState<KitchenConnectionStatus>("connecting")
   const [orders, setOrders] = useState<KitchenOrderMap>(() => new Map())
@@ -105,24 +57,6 @@ export function useKitchenStream(branchId: string | null): UseKitchenStreamResul
     let abortController: AbortController | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     const highlightTimers = new Set<ReturnType<typeof setTimeout>>()
-    // Guards against a narrow race: hydrateReadyOrders() is an async REST
-    // round-trip running concurrently with the live stream. If an order
-    // reaches a terminal status (e.g. ready -> delivered) via a live event
-    // *while that fetch is in flight*, the fetch's snapshot-in-time view can
-    // still say "ready" and would otherwise resurrect a phantom card with no
-    // future event to ever clear it again (unlike the backend's own
-    // acknowledged snapshot/broadcast race, which self-heals on the next
-    // status change). Any order_id seen leaving the active set is recorded
-    // here and the hydration result for it is dropped instead of applied.
-    const terminalIds = new Set<string>()
-    // Guards a second, rarer instance of the same class of race: a
-    // hydration fetch from snapshot N is still in flight when a *second*
-    // reconnect (snapshot N+1) starts a newer hydration; if fetch N resolves
-    // after fetch N+1, it would apply stale "ready" data on top of the
-    // current, more-recent state. Each hydration captures the current
-    // generation before awaiting and discards its result if a newer
-    // snapshot has since arrived.
-    let hydrationGeneration = 0
 
     const clearNewOrderHighlight = (orderId: string) => {
       const timer = setTimeout(() => {
@@ -160,9 +94,6 @@ export function useKitchenStream(branchId: string | null): UseKitchenStreamResul
     }
 
     const applyAndBroadcast = (msg: KitchenMessage) => {
-      if (!isSnapshotMessage(msg) && !isActiveKitchenStatus(msg.status)) {
-        terminalIds.add(msg.order_id)
-      }
       const newOrderId = applyKitchenMessage(mapRef.current, msg)
       setOrders(new Map(mapRef.current))
       if (newOrderId) {
@@ -237,22 +168,6 @@ export function useKitchenStream(branchId: string | null): UseKitchenStreamResul
             applyAndBroadcast(msg)
             attempt = 0
             setStatus("live")
-
-            if (msg.type === "snapshot") {
-              terminalIds.clear()
-              const generation = ++hydrationGeneration
-              hydrateReadyOrders(branchId)
-                .then((readyEvents) => {
-                  if (cancelled || generation !== hydrationGeneration) return
-                  for (const evt of readyEvents) {
-                    if (terminalIds.has(evt.order_id)) continue
-                    applyAndBroadcast(evt)
-                  }
-                })
-                .catch(() => {
-                  // Best-effort — see hydrateReadyOrders's doc comment.
-                })
-            }
           }
         }
       } catch (err) {

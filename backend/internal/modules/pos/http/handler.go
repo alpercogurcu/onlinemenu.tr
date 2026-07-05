@@ -116,12 +116,35 @@ func requirePrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, b
 // Check handlers
 // ---------------------------------------------------------------------------
 
+// listChecks supports two optional query filters, status and branch_id (both
+// narrowing, not restricting, the tenant-wide result set — see
+// CheckService.List's doc comment on why branch_id is not enforced against
+// the principal here). Either or both may be present; absent means "no
+// filter on that column", so an empty query string must not be treated as an
+// invalid value — only a *present but malformed* value is a 422.
 func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
 		return
 	}
-	checks, err := h.checks.List(r.Context(), p.TenantID)
+	var filter service.CheckListFilter
+	if raw := r.URL.Query().Get("status"); raw != "" {
+		status := domain.CheckStatus(raw)
+		if !status.Valid() {
+			http.Error(w, "invalid status", http.StatusUnprocessableEntity)
+			return
+		}
+		filter.Status = &status
+	}
+	if raw := r.URL.Query().Get("branch_id"); raw != "" {
+		branchID, err := uuid.Parse(raw)
+		if err != nil {
+			http.Error(w, "invalid branch_id", http.StatusUnprocessableEntity)
+			return
+		}
+		filter.BranchID = &branchID
+	}
+	checks, err := h.checks.List(r.Context(), p.TenantID, filter)
 	if err != nil {
 		h.error(w, r, err)
 		return

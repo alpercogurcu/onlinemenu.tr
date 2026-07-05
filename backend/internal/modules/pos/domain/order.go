@@ -83,6 +83,18 @@ func TransitionOrderStatus(from, to OrderStatus) error {
 // callers must not repeat these values as inline string literals.
 var InactiveOrderStatuses = []OrderStatus{OrderStatusRejected, OrderStatusCancelled}
 
+// KitchenActiveOrderStatuses are order statuses still "live" for a kitchen
+// display: the order has been placed and has not yet reached a terminal
+// status (delivered/rejected/cancelled). This is the single source of truth
+// for what pos/repo.OrderRepo.ListActiveByBranch selects for the WebSocket
+// snapshot sent to a newly (re)connected kitchen display — callers must not
+// repeat these values as inline string literals. Note this is NOT simply the
+// complement of InactiveOrderStatuses: "delivered" is terminal but not
+// "inactive" for billing purposes, and must not appear here.
+var KitchenActiveOrderStatuses = []OrderStatus{
+	OrderStatusPending, OrderStatusAccepted, OrderStatusPreparing, OrderStatusReady,
+}
+
 // OrderItem is a single line on an order with product data snapshotted at order time.
 type OrderItem struct {
 	ID                 uuid.UUID

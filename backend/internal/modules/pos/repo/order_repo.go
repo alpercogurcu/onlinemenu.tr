@@ -129,9 +129,13 @@ func (r *OrderRepo) ListByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUI
 }
 
 // ListActiveByBranch returns all orders for a branch whose status is still
-// "live" for the kitchen (pending/accepted/preparing) — used to build the
-// WebSocket snapshot sent to a newly (re)connected kitchen display so it can
-// rebuild state without having missed any NATS events during a disconnect.
+// "live" for the kitchen (domain.KitchenActiveOrderStatuses:
+// pending/accepted/preparing/ready) — used to build the WebSocket snapshot
+// sent to a newly (re)connected kitchen display so it can rebuild state
+// without having missed any NATS events during a disconnect. "ready" orders
+// are included so a reconnect does not drop orders that are cooked and
+// waiting for pickup/delivery — see domain.KitchenActiveOrderStatuses's doc
+// comment.
 func (r *OrderRepo) ListActiveByBranch(ctx context.Context, tx pgx.Tx, branchID uuid.UUID) ([]domain.Order, error) {
 	const q = `
 		SELECT id, tenant_id, branch_id, check_id, order_channel,
@@ -142,10 +146,9 @@ func (r *OrderRepo) ListActiveByBranch(ctx context.Context, tx pgx.Tx, branchID 
 		WHERE branch_id = $1 AND status = ANY($2)
 		ORDER BY created_at`
 
-	statuses := []string{
-		string(domain.OrderStatusPending),
-		string(domain.OrderStatusAccepted),
-		string(domain.OrderStatusPreparing),
+	statuses := make([]string, len(domain.KitchenActiveOrderStatuses))
+	for i, s := range domain.KitchenActiveOrderStatuses {
+		statuses[i] = string(s)
 	}
 
 	rows, err := tx.Query(ctx, q, branchID, statuses)

@@ -509,6 +509,70 @@ func TestKitchenWS_Snapshot_Then_LiveOrderEvents(t *testing.T) {
 	require.Equal(t, "Masa 7", msg["table_label"])
 }
 
+// TestKitchenWS_Snapshot_IncludesReadyOrder is the regression test for task
+// #25 item 2: OrderRepo.ListActiveByBranch previously scoped "live for the
+// kitchen" to pending/accepted/preparing only, so an order sitting in
+// "ready" (cooked, waiting for pickup/delivery) vanished from the snapshot
+// on every (re)connect. domain.KitchenActiveOrderStatuses now includes
+// "ready" — assert it actually reaches the wire.
+func TestKitchenWS_Snapshot_IncludesReadyOrder(t *testing.T) {
+	env := newTestEnv(t)
+
+	tenantID := uuid.New()
+	branchID := uuid.New()
+
+	principal := auth.Principal{
+		PersonID: uuid.New(),
+		Ctx:      auth.ContextStaff,
+		TenantID: tenantID,
+		BranchID: branchID,
+		RoleIDs:  []uuid.UUID{kitchenRoleID},
+	}
+	srv := newAuthedServer(t, env.mux, map[string]auth.Principal{"kitchen-token": principal})
+	defer srv.Close()
+
+	chk, err := env.checks.Open(context.Background(), tenantID, principal, domain.Check{
+		BranchID:   branchID,
+		TableLabel: "Masa 9",
+		OpenedBy:   principal.PersonID,
+	})
+	require.NoError(t, err)
+
+	order, err := env.orders.Place(context.Background(), tenantID, principal, domain.Order{
+		BranchID:     branchID,
+		CheckID:      &chk.ID,
+		OrderChannel: domain.OrderChannelDineIn,
+		Items: []domain.OrderItem{
+			{ProductID: uuid.New(), ProductName: "Lahmacun", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 8000},
+		},
+	})
+	require.NoError(t, err)
+
+	// Drive the order all the way to "ready" BEFORE connecting, so only the
+	// snapshot (not a live event) can be what surfaces it.
+	_, err = env.orders.Accept(context.Background(), tenantID, principal, order.ID, principal.PersonID)
+	require.NoError(t, err)
+	_, err = env.orders.AdvanceStatus(context.Background(), tenantID, principal, order.ID, domain.OrderStatusPreparing)
+	require.NoError(t, err)
+	_, err = env.orders.AdvanceStatus(context.Background(), tenantID, principal, order.ID, domain.OrderStatusReady)
+	require.NoError(t, err)
+
+	conn, _, err := dialKitchenWS(t, srv, "kitchen-token", branchID.String())
+	require.NoError(t, err)
+	defer conn.CloseNow()
+
+	snapshot := readOne(t, conn, 5*time.Second)
+	require.Equal(t, "snapshot", snapshot["type"])
+	orders, _ := snapshot["orders"].([]any)
+	require.Len(t, orders, 1, "the ready order must still appear in the snapshot")
+	row := orders[0].(map[string]any)
+	require.Equal(t, order.ID.String(), row["order_id"])
+	require.Equal(t, "ready", row["status"])
+	// eventTypeForStatus normalizes every non-pending status to
+	// order.status_changed — there is no originating subject for a snapshot row.
+	require.Equal(t, "order.status_changed", row["type"])
+}
+
 func TestKitchenWS_NoPermission_Forbidden(t *testing.T) {
 	env := newTestEnv(t)
 

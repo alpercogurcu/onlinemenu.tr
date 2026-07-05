@@ -99,8 +99,9 @@ func (s *OrderService) ListByCheck(ctx context.Context, tenantID, checkID uuid.U
 	return orders, nil
 }
 
-// ListActiveByBranch returns pending/accepted/preparing orders for a branch.
-// Used by ws.Hub to build the kitchen WebSocket snapshot sent on connect.
+// ListActiveByBranch returns domain.KitchenActiveOrderStatuses orders
+// (pending/accepted/preparing/ready) for a branch. Used by ws.Hub to build
+// the kitchen WebSocket snapshot sent on connect.
 // No principal is required: callers within the pos module (the WS hub
 // reacting to its own outbox events) already know tenantID/branchID are
 // trustworthy — HTTP-facing callers must gate this behind their own

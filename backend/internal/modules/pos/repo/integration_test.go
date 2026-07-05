@@ -225,6 +225,116 @@ func TestCheckRepo_CRUD(t *testing.T) {
 	assert.Equal(t, &staffA, closed.ClosedBy)
 }
 
+// TestCheckRepo_List_FiltersByStatusAndBranch is the regression test for
+// listChecks previously ignoring the status/branch_id query filters (task
+// #25 item 1): it seeds two branches and a mix of open/closed checks, then
+// asserts each optional ListFilter field narrows the result set
+// independently, and that a nil filter still returns everything (unchanged
+// prior behavior).
+func TestCheckRepo_List_FiltersByStatusAndBranch(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	branchOther := uuid.New()
+
+	var openA, closedA, openOther domain.Check
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		openA, err = checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchA, TableLabel: "Masa Open A",
+			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		if err != nil {
+			return err
+		}
+		closedA, err = checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchA, TableLabel: "Masa Closed A",
+			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		if err != nil {
+			return err
+		}
+		closedA, err = checkRepo.UpdateStatus(ctx, tx, closedA.ID, domain.CheckStatusClosed, domain.CheckStatusOpen, &staffA)
+		if err != nil {
+			return err
+		}
+		openOther, err = checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchOther, TableLabel: "Masa Other Branch",
+			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	// No filter: every check for the tenant comes back.
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		all, err := checkRepo.List(ctx, tx, repo.ListFilter{})
+		if err != nil {
+			return err
+		}
+		ids := checkIDs(all)
+		assert.Contains(t, ids, openA.ID)
+		assert.Contains(t, ids, closedA.ID)
+		assert.Contains(t, ids, openOther.ID)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// status=open must exclude closedA.
+	openStatus := domain.CheckStatusOpen
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		open, err := checkRepo.List(ctx, tx, repo.ListFilter{Status: &openStatus})
+		if err != nil {
+			return err
+		}
+		ids := checkIDs(open)
+		assert.Contains(t, ids, openA.ID)
+		assert.Contains(t, ids, openOther.ID)
+		assert.NotContains(t, ids, closedA.ID)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// branch_id=branchA must exclude openOther (a different branch).
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		branchAOnly, err := checkRepo.List(ctx, tx, repo.ListFilter{BranchID: &branchA})
+		if err != nil {
+			return err
+		}
+		ids := checkIDs(branchAOnly)
+		assert.Contains(t, ids, openA.ID)
+		assert.Contains(t, ids, closedA.ID)
+		assert.NotContains(t, ids, openOther.ID)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// Combined: status=open AND branch_id=branchA must include openA but
+	// exclude both closedA (wrong status) and openOther (wrong branch).
+	// (Not asserting an exact result set: branchA/tenantA are shared fixture
+	// IDs reused by sibling tests in this file, so other open checks in
+	// branchA may legitimately coexist.)
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		combined, err := checkRepo.List(ctx, tx, repo.ListFilter{Status: &openStatus, BranchID: &branchA})
+		if err != nil {
+			return err
+		}
+		ids := checkIDs(combined)
+		assert.Contains(t, ids, openA.ID)
+		assert.NotContains(t, ids, closedA.ID)
+		assert.NotContains(t, ids, openOther.ID)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func checkIDs(checks []domain.Check) []uuid.UUID {
+	ids := make([]uuid.UUID, len(checks))
+	for i, c := range checks {
+		ids[i] = c.ID
+	}
+	return ids
+}
+
 func TestCheckRepo_RLSIsolation(t *testing.T) {
 	ctx := context.Background()
 	checkRepo := repo.NewCheckRepo()

@@ -140,11 +140,32 @@ func (s *CheckService) GetByID(ctx context.Context, tenantID, checkID uuid.UUID)
 	return c, nil
 }
 
-func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID) ([]domain.Check, error) {
+// CheckListFilter narrows CheckService.List's result set. Both fields are
+// optional (nil = no filter on that column), mirroring ZonePatch/TablePatch's
+// pointer-field "not supplied" convention. Validation (is Status a known
+// value, is BranchID a well-formed uuid) is the HTTP layer's job — see
+// Handler.listChecks — this type only carries already-validated values.
+type CheckListFilter struct {
+	Status   *domain.CheckStatus
+	BranchID *uuid.UUID
+}
+
+// List returns the tenant's checks, optionally narrowed by filter (status
+// and/or branch_id — both optional, see CheckListFilter). branch_id here is
+// a convenience filter, not an isolation boundary: unlike the write paths
+// (Open/Close/Cancel), this read endpoint does not enforce that the acting
+// principal belongs to the requested branch — RLS (tenant scope) already
+// bounds visibility, and a branch-scoped principal calling without a
+// branch_id filter simply sees every branch's checks, same as before this
+// filter existed.
+func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID, filter CheckListFilter) ([]domain.Check, error) {
 	var checks []domain.Check
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		checks, err = s.checkRepo.List(ctx, tx)
+		checks, err = s.checkRepo.List(ctx, tx, repo.ListFilter{
+			Status:   filter.Status,
+			BranchID: filter.BranchID,
+		})
 		return err
 	})
 	if err != nil {

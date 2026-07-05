@@ -361,6 +361,80 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 	require.ErrorIs(t, err, possvc.ErrInsufficientPayment)
 }
 
+// TestPOSSpine_ClosePaysOnlyForActiveOrders is the regression test for the
+// money bug: a rejected order's items must not count toward the check total
+// used to gate CloseCheck. Two orders are placed (1500 kuruş and 3000
+// kuruş); the second is rejected. Paying only the first order's amount
+// (1500) must be enough to close the check — with the pre-fix query (which
+// summed ALL orders regardless of status), this same payment would leave
+// the check underpaid (1500 < 4500) and Close would fail.
+func TestPOSSpine_ClosePaysOnlyForActiveOrders(t *testing.T) {
+	ctx := context.Background()
+	checkSvc, orderSvc, paySvc := buildServices()
+
+	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
+		BranchID:   branchID,
+		TableLabel: "T4",
+		OpenedBy:   staffID,
+	})
+	require.NoError(t, err)
+
+	// Order 1: stays active (pending), 1500 kuruş.
+	_, err = orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
+		BranchID:     branchID,
+		CheckID:      &check.ID,
+		OrderChannel: posdomain.OrderChannelDineIn,
+		Items: []posdomain.OrderItem{
+			{
+				ProductID:       prodID,
+				ProductName:     "Ayran",
+				Quantity:        1,
+				UnitPriceAmount: 1500,
+				TaxRateBPS:      800,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Order 2: will be rejected, 3000 kuruş.
+	rejectedOrder, err := orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
+		BranchID:     branchID,
+		CheckID:      &check.ID,
+		OrderChannel: posdomain.OrderChannelDineIn,
+		Items: []posdomain.OrderItem{
+			{
+				ProductID:       uuid.New(),
+				ProductName:     "Künefe",
+				Quantity:        1,
+				UnitPriceAmount: 3000,
+				TaxRateBPS:      800,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = orderSvc.Reject(ctx, tenantID, staffPrincipal(), rejectedOrder.ID, staffID, "mutfakta stok yok")
+	require.NoError(t, err)
+
+	// Pay only the active order's amount (1500), not the rejected order's.
+	_, err = paySvc.RegisterSale(ctx, paymentsvc.RegisterSaleRequest{
+		TenantID:       tenantID,
+		BranchID:       branchID,
+		CheckID:        &check.ID,
+		IdempotencyKey: "spine-test-active-only-pay-001",
+		Method:         paymentdomain.PaymentMethodCash,
+		AmountTotal:    1500,
+		Currency:       "TRY",
+	})
+	require.NoError(t, err)
+
+	// Close must succeed: the rejected order's 3000 kuruş must not be part
+	// of the check total gating this close.
+	closed, err := checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
+	require.NoError(t, err, "close must succeed once the only active order is paid in full, regardless of the rejected order")
+	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
+}
+
 func TestPOSSpine_IdempotentPayment(t *testing.T) {
 	ctx := context.Background()
 	checkSvc, _, paySvc := buildServices()

@@ -481,6 +481,10 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if errors.Is(err, service.ErrInsufficientPayment) {
+		http.Error(w, "payment insufficient to close check", http.StatusConflict)
+		return
+	}
 	h.logger.Error("pos handler error", zap.Error(err))
 	http.Error(w, "internal server error", http.StatusInternalServerError)
 }

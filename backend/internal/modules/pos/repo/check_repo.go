@@ -93,16 +93,24 @@ func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Check, error)
 	return out, rows.Err()
 }
 
-// GetTotal returns the sum of all order items (quantity × unit_price_amount) for a check.
-// Returns 0 if the check has no orders.
+// GetTotal returns the sum of all order items (quantity × unit_price_amount)
+// for a check, counting only orders whose status is not one of
+// domain.InactiveOrderStatuses (rejected/cancelled). A rejected or cancelled
+// order's items must never be billed to the customer — see that variable's
+// doc comment. Returns 0 if the check has no active orders.
 func (r *CheckRepo) GetTotal(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) (int64, error) {
+	excluded := make([]string, len(domain.InactiveOrderStatuses))
+	for i, s := range domain.InactiveOrderStatuses {
+		excluded[i] = string(s)
+	}
+
 	var total int64
 	err := tx.QueryRow(ctx, `
 		SELECT COALESCE(SUM(oi.quantity * oi.unit_price_amount), 0)
 		FROM orders o
 		JOIN order_items oi ON oi.order_id = o.id
-		WHERE o.check_id = $1
-	`, checkID).Scan(&total)
+		WHERE o.check_id = $1 AND o.status <> ALL($2::text[])
+	`, checkID, excluded).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("pos/repo/check: get total: %w", err)
 	}

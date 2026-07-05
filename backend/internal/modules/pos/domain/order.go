@@ -75,6 +75,14 @@ func TransitionOrderStatus(from, to OrderStatus) error {
 	return fmt.Errorf("pos/domain: %s -> %s: %w", from, to, ErrInvalidTransition)
 }
 
+// InactiveOrderStatuses are order statuses whose line items must be excluded
+// from a check's payable total (pos/repo.CheckRepo.GetTotal): the order was
+// either rejected before ever reaching the kitchen or cancelled after being
+// accepted. Charging the customer for either would bill them for items they
+// never received. This is the single source of truth for that exclusion —
+// callers must not repeat these values as inline string literals.
+var InactiveOrderStatuses = []OrderStatus{OrderStatusRejected, OrderStatusCancelled}
+
 // OrderItem is a single line on an order with product data snapshotted at order time.
 type OrderItem struct {
 	ID                 uuid.UUID

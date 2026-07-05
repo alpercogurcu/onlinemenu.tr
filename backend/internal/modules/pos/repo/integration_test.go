@@ -252,6 +252,207 @@ func TestCheckRepo_RLSIsolation(t *testing.T) {
 	assert.ErrorIs(t, err, repo.ErrNotFound, "tenantB must not see tenantA's check")
 }
 
+// TestCheckRepo_GetTotal is the regression test for the money bug: GetTotal
+// must sum only orders whose status is not in domain.InactiveOrderStatuses
+// (rejected/cancelled). Every order row is inserted directly via
+// OrderRepo.Create with its final status set verbatim (Create writes o.Status
+// as given — no transition machine involved), so this table exercises the
+// repo query in isolation from the order status state machine.
+func TestCheckRepo_GetTotal(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	orderRepo := repo.NewOrderRepo()
+
+	newOrderWithStatus := func(t *testing.T, checkID uuid.UUID, status domain.OrderStatus, unitPrice int64, qty int) {
+		t.Helper()
+		err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+			_, err := orderRepo.Create(ctx, tx, domain.Order{
+				TenantID:     tenantA,
+				BranchID:     branchA,
+				CheckID:      &checkID,
+				OrderChannel: domain.OrderChannelDineIn,
+				Status:       status,
+				Items: []domain.OrderItem{
+					{
+						ProductID:          uuid.New(),
+						ProductName:        "Test Item",
+						ProductPriceAmount: unitPrice,
+						ProductCurrency:    "TRY",
+						TaxRateBPS:         1000,
+						Quantity:           qty,
+						UnitPriceAmount:    unitPrice,
+					},
+				},
+			})
+			return err
+		})
+		require.NoError(t, err)
+	}
+
+	getTotal := func(t *testing.T, checkID uuid.UUID) int64 {
+		t.Helper()
+		var total int64
+		err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+			var err error
+			total, err = checkRepo.GetTotal(ctx, tx, checkID)
+			return err
+		})
+		require.NoError(t, err)
+		return total
+	}
+
+	tests := []struct {
+		name   string
+		orders []struct {
+			status    domain.OrderStatus
+			unitPrice int64
+			qty       int
+		}
+		wantTotal int64
+	}{
+		{
+			name:      "no orders",
+			orders:    nil,
+			wantTotal: 0,
+		},
+		{
+			name: "single active order",
+			orders: []struct {
+				status    domain.OrderStatus
+				unitPrice int64
+				qty       int
+			}{
+				{domain.OrderStatusPending, 1500, 2},
+			},
+			wantTotal: 3000,
+		},
+		{
+			name: "rejected order excluded",
+			orders: []struct {
+				status    domain.OrderStatus
+				unitPrice int64
+				qty       int
+			}{
+				{domain.OrderStatusPending, 1500, 1},
+				{domain.OrderStatusRejected, 5000, 1},
+			},
+			wantTotal: 1500,
+		},
+		{
+			name: "cancelled order excluded",
+			orders: []struct {
+				status    domain.OrderStatus
+				unitPrice int64
+				qty       int
+			}{
+				{domain.OrderStatusAccepted, 2000, 1},
+				{domain.OrderStatusCancelled, 9000, 3},
+			},
+			wantTotal: 2000,
+		},
+		{
+			name: "mixed active statuses all counted, only inactive excluded",
+			orders: []struct {
+				status    domain.OrderStatus
+				unitPrice int64
+				qty       int
+			}{
+				{domain.OrderStatusPending, 1000, 1},
+				{domain.OrderStatusAccepted, 1000, 1},
+				{domain.OrderStatusPreparing, 1000, 1},
+				{domain.OrderStatusReady, 1000, 1},
+				{domain.OrderStatusDelivered, 1000, 1},
+				{domain.OrderStatusRejected, 1000, 1},
+				{domain.OrderStatusCancelled, 1000, 1},
+			},
+			wantTotal: 5000,
+		},
+		{
+			name: "all orders rejected or cancelled",
+			orders: []struct {
+				status    domain.OrderStatus
+				unitPrice int64
+				qty       int
+			}{
+				{domain.OrderStatusRejected, 4000, 1},
+				{domain.OrderStatusCancelled, 6000, 1},
+			},
+			wantTotal: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			check := newTestCheck(t, ctx, tenantA)
+			for _, o := range tt.orders {
+				newOrderWithStatus(t, check.ID, o.status, o.unitPrice, o.qty)
+			}
+			assert.Equal(t, tt.wantTotal, getTotal(t, check.ID))
+		})
+	}
+}
+
+// TestCheckRepo_GetTotal_DropsAfterRejection is the "toplam düştü" regression
+// scenario called out explicitly by the bug report: an order that counted
+// toward the total while pending must stop counting once rejected — the
+// customer must not be charged for it.
+func TestCheckRepo_GetTotal_DropsAfterRejection(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	orderRepo := repo.NewOrderRepo()
+
+	check := newTestCheck(t, ctx, tenantA)
+
+	var orderID uuid.UUID
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		o, err := orderRepo.Create(ctx, tx, domain.Order{
+			TenantID:     tenantA,
+			BranchID:     branchA,
+			CheckID:      &check.ID,
+			OrderChannel: domain.OrderChannelDineIn,
+			Status:       domain.OrderStatusPending,
+			Items: []domain.OrderItem{
+				{
+					ProductID:          uuid.New(),
+					ProductName:        "İskender",
+					ProductPriceAmount: 18000,
+					ProductCurrency:    "TRY",
+					TaxRateBPS:         1000,
+					Quantity:           1,
+					UnitPriceAmount:    18000,
+				},
+			},
+		})
+		orderID = o.ID
+		return err
+	})
+	require.NoError(t, err)
+
+	var beforeReject int64
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		beforeReject, err = checkRepo.GetTotal(ctx, tx, check.ID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(18000), beforeReject, "pending order must count toward the total")
+
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		_, err := orderRepo.Reject(ctx, tx, orderID, staffA, "kitchen out of stock", domain.OrderStatusPending)
+		return err
+	})
+	require.NoError(t, err)
+
+	var afterReject int64
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		afterReject, err = checkRepo.GetTotal(ctx, tx, check.ID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), afterReject, "total must drop to 0 once the only order is rejected")
+}
+
 // ---------------------------------------------------------------------------
 // Order repo tests
 // ---------------------------------------------------------------------------

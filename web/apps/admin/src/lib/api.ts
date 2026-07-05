@@ -13,6 +13,14 @@ export function clearAccessToken() {
   inMemoryToken = null
 }
 
+// Exposed read-only so callers that cannot go through the axios instance
+// (e.g. a raw `fetch` to the kitchen-stream bridge route, which needs to set
+// the Authorization header itself) can reuse the same in-memory token
+// without duplicating its storage.
+export function getAccessToken(): string | null {
+  return inMemoryToken
+}
+
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_CORE_URL ?? "/api/core",
   headers: { "Content-Type": "application/json" },

@@ -17,23 +17,37 @@ type CheckRepo struct{}
 func NewCheckRepo() *CheckRepo { return &CheckRepo{} }
 
 // Create inserts a new open check and returns it with server-assigned fields.
+//
+// A unique_violation on checks_open_table_id_uidx is translated to
+// ErrTableOccupied rather than left as a raw pg error: it can only happen
+// when a table's status was manually reset to empty/reserved
+// (TableService.SetStatus) while some other check still held it open — a
+// state CheckService.Open's row lock cannot observe, since the lock is on
+// the table row, not on "does any check already reference this table".
 func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (domain.Check, error) {
 	const q = `
-		INSERT INTO checks (tenant_id, branch_id, table_label, status, opened_by, note)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, tenant_id, branch_id, table_label, status, opened_by,
+		INSERT INTO checks (tenant_id, branch_id, table_id, table_label, status, opened_by, note)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, tenant_id, branch_id, table_id, table_label, status, opened_by,
 		          closed_by, note, opened_at, closed_at, created_at, updated_at`
 
 	row := tx.QueryRow(ctx, q,
-		c.TenantID, c.BranchID, c.TableLabel, string(c.Status), c.OpenedBy, c.Note,
+		c.TenantID, c.BranchID, c.TableID, c.TableLabel, string(c.Status), c.OpenedBy, c.Note,
 	)
-	return scanCheck(row)
+	created, err := scanCheck(row)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.Check{}, ErrTableOccupied
+		}
+		return domain.Check{}, err
+	}
+	return created, nil
 }
 
 // GetByID returns a check visible to the current tenant context.
 func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_label, status, opened_by,
+		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks WHERE id = $1`
 
@@ -54,7 +68,7 @@ func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 // observes the already-updated status.
 func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_label, status, opened_by,
+		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks WHERE id = $1 FOR UPDATE`
 
@@ -71,7 +85,7 @@ func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (
 // List returns all checks visible to the current tenant (open first, then by opened_at desc).
 func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_label, status, opened_by,
+		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks
 		ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, opened_at DESC`
@@ -129,7 +143,7 @@ func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, s
 		                  closed_at = CASE WHEN $2 IN ('closed','cancelled') THEN NOW() ELSE closed_at END,
 		                  updated_at = NOW()
 		WHERE id = $1 AND status = $3
-		RETURNING id, tenant_id, branch_id, table_label, status, opened_by,
+		RETURNING id, tenant_id, branch_id, table_id, table_label, status, opened_by,
 		          closed_by, note, opened_at, closed_at, created_at, updated_at`
 
 	c, err := scanCheck(tx.QueryRow(ctx, q, id, string(status), string(expectedStatus), closedBy))
@@ -149,7 +163,7 @@ func scanCheck(s interface {
 	var c domain.Check
 	var status string
 	if err := s.Scan(
-		&c.ID, &c.TenantID, &c.BranchID, &c.TableLabel, &status, &c.OpenedBy,
+		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &status, &c.OpenedBy,
 		&c.ClosedBy, &c.Note, &c.OpenedAt, &c.ClosedAt, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return domain.Check{}, err

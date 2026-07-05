@@ -252,6 +252,39 @@ func TestCheckRepo_RLSIsolation(t *testing.T) {
 	assert.ErrorIs(t, err, repo.ErrNotFound, "tenantB must not see tenantA's check")
 }
 
+// TestCheckRepo_Create_SecondOpenCheckOnSameTable_MapsUniqueViolation is the
+// regression test for checks_open_table_id_uidx's backstop role: it
+// exercises the DB constraint directly (bypassing CheckService.Open's row
+// lock, which is what a manual table-status reset + concurrent Open would
+// effectively do) and asserts the resulting unique_violation is translated
+// to repo.ErrTableOccupied rather than surfacing as a raw, unmapped pg error
+// (which service.CheckService.Open would otherwise return as an
+// unrecognized 500).
+func TestCheckRepo_Create_SecondOpenCheckOnSameTable_MapsUniqueViolation(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+	tbl := newTestTable(t, ctx, tenantA, branchA, z.ID)
+
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		_, err := checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchA, TableID: &tbl.ID, TableLabel: tbl.Name,
+			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		_, err := checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchA, TableID: &tbl.ID, TableLabel: tbl.Name,
+			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		return err
+	})
+	assert.ErrorIs(t, err, repo.ErrTableOccupied)
+}
+
 // TestCheckRepo_GetTotal is the regression test for the money bug: GetTotal
 // must sum only orders whose status is not in domain.InactiveOrderStatuses
 // (rejected/cancelled). Every order row is inserted directly via
@@ -673,4 +706,225 @@ func TestOrderRepo_RLSIsolation(t *testing.T) {
 		return err
 	})
 	assert.ErrorIs(t, err, repo.ErrNotFound, "tenantB must not see tenantA's order")
+}
+
+// ---------------------------------------------------------------------------
+// Table plan repo tests (Sprint-5 Wave 1)
+// ---------------------------------------------------------------------------
+
+func newTestZone(t *testing.T, ctx context.Context, tenantID, branchID uuid.UUID) domain.TableZone {
+	t.Helper()
+	tableRepo := repo.NewTableRepo()
+	var z domain.TableZone
+	err := sharedPool.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		z, err = tableRepo.CreateZone(ctx, tx, domain.TableZone{
+			TenantID: tenantID,
+			BranchID: branchID,
+			Name:     "Zemin Kat",
+			Floor:    0,
+			IsActive: true,
+		})
+		return err
+	})
+	require.NoError(t, err)
+	return z
+}
+
+func newTestTable(t *testing.T, ctx context.Context, tenantID, branchID, zoneID uuid.UUID) domain.Table {
+	t.Helper()
+	tableRepo := repo.NewTableRepo()
+	var tbl domain.Table
+	err := sharedPool.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		tbl, err = tableRepo.CreateTable(ctx, tx, domain.Table{
+			TenantID: tenantID,
+			BranchID: branchID,
+			ZoneID:   zoneID,
+			Name:     "Masa 1",
+			Capacity: 4,
+			IsActive: true,
+		})
+		return err
+	})
+	require.NoError(t, err)
+	return tbl
+}
+
+func TestTableRepo_ZoneCRUD(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+
+	z := newTestZone(t, ctx, tenantA, branchA)
+	assert.NotEqual(t, uuid.Nil, z.ID)
+	assert.Equal(t, "Zemin Kat", z.Name)
+
+	var fetched domain.TableZone
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = tableRepo.GetZoneByID(ctx, tx, z.ID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, z.ID, fetched.ID)
+
+	var updated domain.TableZone
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		updated, err = tableRepo.UpdateZone(ctx, tx, domain.TableZone{ID: z.ID, Name: "Teras", Floor: 1, IsActive: false})
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Teras", updated.Name)
+	assert.Equal(t, 1, updated.Floor)
+	assert.False(t, updated.IsActive)
+}
+
+func TestTableRepo_ZoneRLSIsolation(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+
+	err := sharedPool.WithTenantReadTx(ctx, tenantB, func(tx pgx.Tx) error {
+		_, err := tableRepo.GetZoneByID(ctx, tx, z.ID)
+		return err
+	})
+	assert.ErrorIs(t, err, repo.ErrNotFound, "tenantB must not see tenantA's zone")
+}
+
+func TestTableRepo_TableCRUD(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+
+	tbl := newTestTable(t, ctx, tenantA, branchA, z.ID)
+	assert.NotEqual(t, uuid.Nil, tbl.ID)
+	assert.Equal(t, domain.TableStatusEmpty, tbl.Status)
+	assert.Equal(t, 4, tbl.Capacity)
+
+	var fetched domain.Table
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		fetched, err = tableRepo.GetTableByID(ctx, tx, tbl.ID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, tbl.ID, fetched.ID)
+
+	var updated domain.Table
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		updated, err = tableRepo.UpdateTable(ctx, tx, domain.Table{
+			ID: tbl.ID, ZoneID: z.ID, Name: "Masa 1-A", Capacity: 6, IsActive: true,
+		})
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Masa 1-A", updated.Name)
+	assert.Equal(t, 6, updated.Capacity)
+}
+
+func TestTableRepo_UpdateStatus_GuardedTransition(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+	tbl := newTestTable(t, ctx, tenantA, branchA, z.ID)
+
+	var occupied domain.Table
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		occupied, err = tableRepo.UpdateStatus(ctx, tx, tbl.ID, domain.TableStatusOccupied, domain.TableStatusEmpty)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.TableStatusOccupied, occupied.Status)
+
+	// Guard: expected status no longer matches (already occupied) => ErrInvalidTransition.
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		_, err := tableRepo.UpdateStatus(ctx, tx, tbl.ID, domain.TableStatusOccupied, domain.TableStatusEmpty)
+		return err
+	})
+	assert.ErrorIs(t, err, repo.ErrInvalidTransition)
+}
+
+func TestTableRepo_UpdateStatusIfCurrent_ToleratesMismatch(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+	tbl := newTestTable(t, ctx, tenantA, branchA, z.ID) // starts "empty"
+
+	// fromStatus does not match current ("empty", not "occupied") => no rows
+	// affected, but this must NOT be an error (best-effort semantics).
+	var applied bool
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		applied, err = tableRepo.UpdateStatusIfCurrent(ctx, tx, tbl.ID, domain.TableStatusCleaning, domain.TableStatusOccupied)
+		return err
+	})
+	require.NoError(t, err)
+	assert.False(t, applied)
+}
+
+func TestTableRepo_TableRLSIsolation(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+	tbl := newTestTable(t, ctx, tenantA, branchA, z.ID)
+
+	err := sharedPool.WithTenantReadTx(ctx, tenantB, func(tx pgx.Tx) error {
+		_, err := tableRepo.GetTableByID(ctx, tx, tbl.ID)
+		return err
+	})
+	assert.ErrorIs(t, err, repo.ErrNotFound, "tenantB must not see tenantA's table")
+}
+
+func TestTableRepo_ListTablesByBranch_ReportsActiveCheckID(t *testing.T) {
+	ctx := context.Background()
+	tableRepo := repo.NewTableRepo()
+	checkRepo := repo.NewCheckRepo()
+	z := newTestZone(t, ctx, tenantA, branchA)
+	tbl := newTestTable(t, ctx, tenantA, branchA, z.ID)
+
+	entries, err := listTables(ctx, tableRepo, tenantA, branchA)
+	require.NoError(t, err)
+	found := findTableEntry(entries, tbl.ID)
+	require.NotNil(t, found)
+	assert.Nil(t, found.ActiveCheckID)
+
+	var openCheck domain.Check
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		openCheck, err = checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchA, TableID: &tbl.ID, TableLabel: tbl.Name,
+			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	entries, err = listTables(ctx, tableRepo, tenantA, branchA)
+	require.NoError(t, err)
+	found = findTableEntry(entries, tbl.ID)
+	require.NotNil(t, found)
+	require.NotNil(t, found.ActiveCheckID)
+	assert.Equal(t, openCheck.ID, *found.ActiveCheckID)
+}
+
+func listTables(ctx context.Context, tableRepo *repo.TableRepo, tenantID, branchID uuid.UUID) ([]repo.TableWithCheck, error) {
+	var entries []repo.TableWithCheck
+	err := sharedPool.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		entries, err = tableRepo.ListTablesByBranch(ctx, tx, branchID)
+		return err
+	})
+	return entries, err
+}
+
+func findTableEntry(entries []repo.TableWithCheck, tableID uuid.UUID) *repo.TableWithCheck {
+	for i := range entries {
+		if entries[i].Table.ID == tableID {
+			return &entries[i]
+		}
+	}
+	return nil
 }

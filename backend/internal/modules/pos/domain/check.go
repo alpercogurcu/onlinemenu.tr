@@ -25,7 +25,11 @@ func (s CheckStatus) Valid() bool {
 
 // Check represents a dine-in table session (adisyon) that accumulates orders.
 type Check struct {
-	ID         uuid.UUID
+	ID uuid.UUID
+	// TableID is set when the check was opened against a floor-plan Table
+	// (domain/table.go). It is nil for masasız satış (takeaway/paket servis)
+	// checks — TableLabel keeps rendering unchanged in that case.
+	TableID    *uuid.UUID
 	TenantID   uuid.UUID
 	BranchID   uuid.UUID
 	TableLabel string

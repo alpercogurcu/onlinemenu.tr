@@ -198,8 +198,17 @@ func newCheckService() *service.CheckService {
 	return service.NewCheckService(service.CheckParams{
 		DB:         sharedPool,
 		CheckRepo:  repo.NewCheckRepo(),
+		TableRepo:  repo.NewTableRepo(),
 		SaleReader: zeroSaleReader{},
 		Logger:     zap.NewNop(),
+	})
+}
+
+func newTableService() *service.TableService {
+	return service.NewTableService(service.TableParams{
+		DB:        sharedPool,
+		TableRepo: repo.NewTableRepo(),
+		Logger:    zap.NewNop(),
 	})
 }
 

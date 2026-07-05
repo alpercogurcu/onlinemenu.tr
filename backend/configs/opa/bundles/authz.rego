@@ -38,6 +38,14 @@ system_roles := {
 	# seeds the role, with no further rego change required. Flagged as a
 	# required identity-module follow-up in the sprint report.
 	"warehouse": "00000001-0000-0000-0000-000000000007",
+	# "waiter" (garson) is forward-declared for the same reason as
+	# "warehouse" above (ADR-DATA-006 masa planı: pos.table.read must include
+	# waiter per the sprint spec) but is likewise NOT yet seeded in
+	# identity/000006_seed_system_roles.up.sql — db-schema.md's BRANCH_USERS
+	# role enum already lists it, seeding it is an identity-module follow-up
+	# outside this task's file scope. Inert until seeded, takes effect with no
+	# further rego change once it is.
+	"waiter": "00000001-0000-0000-0000-000000000008",
 }
 
 has_role(name) if {
@@ -196,6 +204,27 @@ allow if {
 	any_role({"kitchen", "bar"})
 }
 
+# -- POS: table plan (Sprint-5 Wave 1, docs/db-schema.md TABLE_ZONES/TABLES).
+# Reading the floor plan (pos.table.read) is open to every branch-facing role
+# that needs to see table state — cashier/shift_manager at the counter,
+# waiter serving tables, kitchen/bar checking which table a ticket belongs
+# to. Managing it (zone/table CRUD, manual status changes) stays with
+# management roles only, mirroring pos_counter_actions' cashier/
+# shift_manager split for check lifecycle.
+pos_table_read_actions := {"pos.table.read"}
+
+allow if {
+	input.action in pos_table_read_actions
+	any_role({"cashier", "shift_manager", "waiter", "kitchen", "bar"})
+}
+
+pos_table_manage_actions := {"pos.table.manage"}
+
+allow if {
+	input.action in pos_table_manage_actions
+	has_role("shift_manager")
+}
+
 # -- Payment: cashier/shift_manager register sales at the counter (mirrors
 # role_permissions seed: payment.create for both). Listing/reading past
 # payments is reserved for shift reconciliation (shift_manager) and manager
@@ -214,5 +243,5 @@ allow if {
 # shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {
 	not has_role("manager")
-	any_role({"cashier", "shift_manager", "driver", "kitchen", "bar", "warehouse"})
+	any_role({"cashier", "shift_manager", "driver", "kitchen", "bar", "warehouse", "waiter"})
 }

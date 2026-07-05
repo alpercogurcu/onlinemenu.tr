@@ -102,3 +102,65 @@ func TestTransitionOrderStatus_RejectsUnknownTarget(t *testing.T) {
 	err := domain.TransitionOrderStatus(domain.OrderStatusPending, domain.OrderStatus("shipped"))
 	assert.ErrorIs(t, err, domain.ErrInvalidTransition)
 }
+
+func TestTableStatus_Valid(t *testing.T) {
+	valid := []domain.TableStatus{
+		domain.TableStatusEmpty,
+		domain.TableStatusOccupied,
+		domain.TableStatusReserved,
+		domain.TableStatusCleaning,
+	}
+	for _, s := range valid {
+		assert.True(t, s.Valid(), "expected %q to be valid", s)
+	}
+	assert.False(t, domain.TableStatus("dirty").Valid())
+}
+
+func TestTransitionTableStatus(t *testing.T) {
+	allStatuses := []domain.TableStatus{
+		domain.TableStatusEmpty,
+		domain.TableStatusOccupied,
+		domain.TableStatusReserved,
+		domain.TableStatusCleaning,
+	}
+
+	allowed := map[domain.TableStatus]map[domain.TableStatus]bool{
+		domain.TableStatusEmpty: {
+			domain.TableStatusOccupied: true,
+			domain.TableStatusReserved: true,
+			domain.TableStatusCleaning: true,
+		},
+		domain.TableStatusOccupied: {
+			domain.TableStatusCleaning: true,
+			domain.TableStatusEmpty:    true,
+		},
+		domain.TableStatusReserved: {
+			domain.TableStatusOccupied: true,
+			domain.TableStatusEmpty:    true,
+		},
+		domain.TableStatusCleaning: {
+			domain.TableStatusEmpty: true,
+		},
+	}
+
+	for _, from := range allStatuses {
+		for _, to := range allStatuses {
+			from, to := from, to
+			wantOK := allowed[from][to]
+			t.Run(string(from)+"->"+string(to), func(t *testing.T) {
+				err := domain.TransitionTableStatus(from, to)
+				if wantOK {
+					assert.NoError(t, err)
+				} else {
+					assert.Error(t, err)
+					assert.True(t, errors.Is(err, domain.ErrInvalidTransition))
+				}
+			})
+		}
+	}
+}
+
+func TestTransitionTableStatus_RejectsUnknownTarget(t *testing.T) {
+	err := domain.TransitionTableStatus(domain.TableStatusEmpty, domain.TableStatus("dirty"))
+	assert.ErrorIs(t, err, domain.ErrInvalidTransition)
+}

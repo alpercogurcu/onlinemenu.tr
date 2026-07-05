@@ -25,6 +25,7 @@ import (
 type Handler struct {
 	checks *service.CheckService
 	orders *service.OrderService
+	tables *service.TableService
 	logger *zap.Logger
 	engine *auth.Engine
 }
@@ -35,6 +36,7 @@ type Params struct {
 
 	Checks *service.CheckService
 	Orders *service.OrderService
+	Tables *service.TableService
 	Logger *zap.Logger
 	Cache  *redis.Client
 	Engine *auth.Engine
@@ -49,7 +51,7 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{checks: p.Checks, orders: p.Orders, logger: p.Logger, engine: p.Engine},
+		h:     &Handler{checks: p.Checks, orders: p.Orders, tables: p.Tables, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
@@ -85,6 +87,18 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("pos.order.accept")).Post("/orders/{id}/accept", hwc.h.acceptOrder)
 		r.With(hwc.h.permit("pos.order.reject")).Post("/orders/{id}/reject", hwc.h.rejectOrder)
 		r.With(hwc.h.permit("pos.order.advance")).Post("/orders/{id}/advance", hwc.h.advanceOrder)
+
+		// Table plan (Sprint-5 Wave 1): zone CRUD + table CRUD/status are
+		// manager/shift_manager only (pos.table.manage); reading the plan is
+		// open to every branch-facing role (pos.table.read) since cashier,
+		// waiter, kitchen and bar all need to see table state.
+		r.With(hwc.h.permit("pos.table.read")).Get("/zones", hwc.h.listZones)
+		r.With(hwc.h.permit("pos.table.manage")).Post("/zones", hwc.h.createZone)
+		r.With(hwc.h.permit("pos.table.manage")).Patch("/zones/{id}", hwc.h.updateZone)
+		r.With(hwc.h.permit("pos.table.read")).Get("/tables", hwc.h.listTables)
+		r.With(hwc.h.permit("pos.table.manage")).Post("/tables", hwc.h.createTable)
+		r.With(hwc.h.permit("pos.table.manage")).Patch("/tables/{id}", hwc.h.updateTable)
+		r.With(hwc.h.permit("pos.table.manage")).Post("/tables/{id}/status", hwc.h.setTableStatus)
 	})
 }
 
@@ -125,9 +139,10 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		BranchID   uuid.UUID `json:"branch_id"`
-		TableLabel string    `json:"table_label"`
-		Note       string    `json:"note"`
+		BranchID   uuid.UUID  `json:"branch_id"`
+		TableID    *uuid.UUID `json:"table_id"`
+		TableLabel string     `json:"table_label"`
+		Note       string     `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -140,6 +155,7 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 
 	c, err := h.checks.Open(r.Context(), p.TenantID, p, domain.Check{
 		BranchID:   req.BranchID,
+		TableID:    req.TableID,
 		TableLabel: req.TableLabel,
 		Note:       req.Note,
 		OpenedBy:   p.PersonID,
@@ -378,6 +394,216 @@ func (h *Handler) advanceOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// Table plan handlers (zones + tables)
+// ---------------------------------------------------------------------------
+
+func (h *Handler) listZones(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	branchID, err := uuid.Parse(r.URL.Query().Get("branch_id"))
+	if err != nil {
+		http.Error(w, "branch_id query parameter is required", http.StatusUnprocessableEntity)
+		return
+	}
+	zones, err := h.tables.ListZones(r.Context(), p.TenantID, p, branchID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	resp := make([]zoneResponse, len(zones))
+	for i, z := range zones {
+		resp[i] = toZoneResponse(z)
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) createZone(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		BranchID uuid.UUID `json:"branch_id"`
+		Name     string    `json:"name"`
+		Floor    int       `json:"floor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.BranchID == uuid.Nil || req.Name == "" {
+		http.Error(w, "branch_id and name are required", http.StatusUnprocessableEntity)
+		return
+	}
+	z, err := h.tables.CreateZone(r.Context(), p.TenantID, p, domain.TableZone{
+		BranchID: req.BranchID,
+		Name:     req.Name,
+		Floor:    req.Floor,
+		IsActive: true,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, toZoneResponse(z))
+}
+
+func (h *Handler) updateZone(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	// Pointer fields so an omitted field (PATCH semantics) leaves the current
+	// value untouched — see service.ZonePatch's doc comment.
+	var req struct {
+		Name     *string `json:"name"`
+		Floor    *int    `json:"floor"`
+		IsActive *bool   `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	z, err := h.tables.UpdateZone(r.Context(), p.TenantID, p, id, service.ZonePatch{
+		Name:     req.Name,
+		Floor:    req.Floor,
+		IsActive: req.IsActive,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toZoneResponse(z))
+}
+
+// listTables returns the branch's floor plan grouped by zone (ordered by
+// zone floor, then zone name, then table name — matching
+// TableRepo.ListTablesByBranch's ORDER BY) so the cash register can draw
+// the entire labeled plan from this single request, without a second call
+// to GET /zones.
+func (h *Handler) listTables(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	branchID, err := uuid.Parse(r.URL.Query().Get("branch_id"))
+	if err != nil {
+		http.Error(w, "branch_id query parameter is required", http.StatusUnprocessableEntity)
+		return
+	}
+	entries, err := h.tables.ListTables(r.Context(), p.TenantID, p, branchID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toZonePlanResponse(entries))
+}
+
+func (h *Handler) createTable(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		BranchID uuid.UUID       `json:"branch_id"`
+		ZoneID   uuid.UUID       `json:"zone_id"`
+		Name     string          `json:"name"`
+		Capacity int             `json:"capacity"`
+		Layout   json.RawMessage `json:"layout_position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.BranchID == uuid.Nil || req.ZoneID == uuid.Nil || req.Name == "" {
+		http.Error(w, "branch_id, zone_id and name are required", http.StatusUnprocessableEntity)
+		return
+	}
+	t, err := h.tables.CreateTable(r.Context(), p.TenantID, p, domain.Table{
+		BranchID:       req.BranchID,
+		ZoneID:         req.ZoneID,
+		Name:           req.Name,
+		Capacity:       req.Capacity,
+		LayoutPosition: req.Layout,
+		IsActive:       true,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, toTableResponse(service.TablePlanEntry{Table: t}))
+}
+
+func (h *Handler) updateTable(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	// Pointer/nilable fields so an omitted field (PATCH semantics) leaves the
+	// current value untouched — see service.TablePatch's doc comment.
+	var req struct {
+		ZoneID   *uuid.UUID      `json:"zone_id"`
+		Name     *string         `json:"name"`
+		Capacity *int            `json:"capacity"`
+		Layout   json.RawMessage `json:"layout_position"`
+		IsActive *bool           `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	t, err := h.tables.UpdateTable(r.Context(), p.TenantID, p, id, service.TablePatch{
+		ZoneID:   req.ZoneID,
+		Name:     req.Name,
+		Capacity: req.Capacity,
+		Layout:   req.Layout,
+		IsActive: req.IsActive,
+	})
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toTableResponse(service.TablePlanEntry{Table: t}))
+}
+
+func (h *Handler) setTableStatus(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	t, err := h.tables.SetStatus(r.Context(), p.TenantID, p, id, domain.TableStatus(req.Status))
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toTableResponse(service.TablePlanEntry{Table: t}))
+}
+
+// ---------------------------------------------------------------------------
 // Response DTOs
 // ---------------------------------------------------------------------------
 
@@ -385,6 +611,7 @@ type checkResponse struct {
 	ID         uuid.UUID  `json:"id"`
 	TenantID   uuid.UUID  `json:"tenant_id"`
 	BranchID   uuid.UUID  `json:"branch_id"`
+	TableID    *uuid.UUID `json:"table_id"`
 	TableLabel string     `json:"table_label"`
 	Status     string     `json:"status"`
 	Note       string     `json:"note"`
@@ -397,6 +624,7 @@ func toCheckResponse(c domain.Check) checkResponse {
 		ID:         c.ID,
 		TenantID:   c.TenantID,
 		BranchID:   c.BranchID,
+		TableID:    c.TableID,
 		TableLabel: c.TableLabel,
 		Status:     string(c.Status),
 		Note:       c.Note,
@@ -453,6 +681,86 @@ func toOrderResponse(o domain.Order) orderResponse {
 	}
 }
 
+type zoneResponse struct {
+	ID       uuid.UUID `json:"id"`
+	BranchID uuid.UUID `json:"branch_id"`
+	Name     string    `json:"name"`
+	Floor    int       `json:"floor"`
+	IsActive bool      `json:"is_active"`
+}
+
+func toZoneResponse(z domain.TableZone) zoneResponse {
+	return zoneResponse{
+		ID:       z.ID,
+		BranchID: z.BranchID,
+		Name:     z.Name,
+		Floor:    z.Floor,
+		IsActive: z.IsActive,
+	}
+}
+
+// tableResponse is the shape the cash register draws one floor-plan row
+// from: the table itself plus the id of the check currently open against it
+// (null when the table is not occupied by a check). This is the Wave-2
+// contract — pos-desktop's masa seçimi UI consumes GET /tables verbatim.
+type tableResponse struct {
+	ID             uuid.UUID       `json:"id"`
+	BranchID       uuid.UUID       `json:"branch_id"`
+	ZoneID         uuid.UUID       `json:"zone_id"`
+	Name           string          `json:"name"`
+	Capacity       int             `json:"capacity"`
+	Status         string          `json:"status"`
+	LayoutPosition json.RawMessage `json:"layout_position"`
+	IsActive       bool            `json:"is_active"`
+	ActiveCheckID  *uuid.UUID      `json:"active_check_id"`
+}
+
+func toTableResponse(e service.TablePlanEntry) tableResponse {
+	return tableResponse{
+		ID:             e.Table.ID,
+		BranchID:       e.Table.BranchID,
+		ZoneID:         e.Table.ZoneID,
+		Name:           e.Table.Name,
+		Capacity:       e.Table.Capacity,
+		Status:         string(e.Table.Status),
+		LayoutPosition: e.Table.LayoutPosition,
+		IsActive:       e.Table.IsActive,
+		ActiveCheckID:  e.ActiveCheckID,
+	}
+}
+
+// zonePlanResponse is GET /tables's actual response shape (Sprint-5 Wave 1 /
+// Wave-2 contract): the floor plan grouped by zone so the cash register can
+// render zone-labeled sections from this single request, with no follow-up
+// call to GET /zones needed. Zone order matches
+// TableRepo.ListTablesByBranch's ORDER BY (floor, zone name); tables within
+// a zone are in table-name order.
+type zonePlanResponse struct {
+	ZoneID   uuid.UUID       `json:"zone_id"`
+	ZoneName string          `json:"zone_name"`
+	Floor    int             `json:"floor"`
+	Tables   []tableResponse `json:"tables"`
+}
+
+// toZonePlanResponse groups TablePlanEntry rows (already ordered by
+// zone floor/name, then table name — see ListTablesByBranch) into
+// zone-labeled sections without re-sorting, preserving that order.
+func toZonePlanResponse(entries []service.TablePlanEntry) []zonePlanResponse {
+	out := []zonePlanResponse{}
+	for _, e := range entries {
+		if len(out) == 0 || out[len(out)-1].ZoneID != e.Table.ZoneID {
+			out = append(out, zonePlanResponse{
+				ZoneID:   e.Table.ZoneID,
+				ZoneName: e.ZoneName,
+				Floor:    e.ZoneFloor,
+			})
+		}
+		last := &out[len(out)-1]
+		last.Tables = append(last.Tables, toTableResponse(e))
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -483,6 +791,18 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	}
 	if errors.Is(err, service.ErrInsufficientPayment) {
 		http.Error(w, "payment insufficient to close check", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, pub.ErrTableOccupied) {
+		http.Error(w, "table is already occupied", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, pub.ErrTableBranchMismatch) {
+		http.Error(w, "table does not belong to this branch", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, service.ErrManualOccupyForbidden) {
+		http.Error(w, "table can only become occupied by opening a check", http.StatusUnprocessableEntity)
 		return
 	}
 	h.logger.Error("pos handler error", zap.Error(err))

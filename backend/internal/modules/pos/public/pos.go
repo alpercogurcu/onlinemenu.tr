@@ -28,6 +28,17 @@ var ErrInvalidTransition = errors.New("pos: invalid status transition")
 // is not treated as a not-found — the HTTP layer maps it to 403 Forbidden.
 var ErrBranchForbidden = errors.New("pos: forbidden for this branch")
 
+// ErrTableOccupied is returned by CheckService.Open when the requested
+// table_id is not currently "empty" or "reserved" — i.e. another open check
+// already occupies it (including the case where two concurrent Open calls
+// race for the same table; the table row lock in CheckRepo/TableRepo makes
+// exactly one of them win, and the other observes this error).
+var ErrTableOccupied = errors.New("pos: table is already occupied")
+
+// ErrTableBranchMismatch is returned by CheckService.Open when the supplied
+// table_id belongs to a different branch than the check's branch_id.
+var ErrTableBranchMismatch = errors.New("pos: table does not belong to the check's branch")
+
 // CheckReader allows other modules to read check state without importing POS internals.
 type CheckReader interface {
 	GetByID(ctx context.Context, tenantID, checkID uuid.UUID) (Check, error)

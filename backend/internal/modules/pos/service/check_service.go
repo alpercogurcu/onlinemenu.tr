@@ -25,6 +25,7 @@ var ErrInsufficientPayment = errors.New("pos/service/check: payment insufficient
 type CheckService struct {
 	db         *db.Pool
 	checkRepo  *repo.CheckRepo
+	tableRepo  *repo.TableRepo
 	saleReader paymentpub.SaleReader
 	logger     *zap.Logger
 }
@@ -35,6 +36,7 @@ type CheckParams struct {
 
 	DB         *db.Pool
 	CheckRepo  *repo.CheckRepo
+	TableRepo  *repo.TableRepo
 	SaleReader paymentpub.SaleReader
 	Logger     *zap.Logger
 }
@@ -43,6 +45,7 @@ func NewCheckService(p CheckParams) *CheckService {
 	return &CheckService{
 		db:         p.DB,
 		checkRepo:  p.CheckRepo,
+		tableRepo:  p.TableRepo,
 		saleReader: p.SaleReader,
 		logger:     p.Logger,
 	}
@@ -52,6 +55,17 @@ func NewCheckService(p CheckParams) *CheckService {
 // belong to the requested branch_id (ADR-AUTH-001 layer 3 / security
 // sprint); there is no persisted entity yet at this point, so the
 // client-supplied branch_id is what gets validated.
+//
+// When c.TableID is set (dine-in via the floor plan), the referenced table
+// row is locked (TableRepo.GetTableForUpdate) inside this same write
+// transaction before the check is created. That row lock — not a unique
+// index alone — is what makes two concurrent Open calls against the same
+// table resolve to exactly one success: the second caller blocks on the
+// lock, then observes the table already "occupied" and returns
+// pub.ErrTableOccupied (409). c.TableLabel is overwritten from the table's
+// name regardless of any client-supplied value, so receipts/KDS keep
+// rendering a consistent label. c.TableID is left nil for masasız satış
+// (takeaway/delivery) checks, which never touch a table row.
 func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, c domain.Check) (domain.Check, error) {
 	if err := requireBranch(ctx, principal, c.BranchID); err != nil {
 		return domain.Check{}, err
@@ -60,6 +74,26 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 	c.Status = domain.CheckStatusOpen
 	var created domain.Check
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if c.TableID != nil {
+			table, err := s.tableRepo.GetTableForUpdate(ctx, tx, *c.TableID)
+			if err != nil {
+				return err
+			}
+			if table.BranchID != c.BranchID {
+				return pub.ErrTableBranchMismatch
+			}
+			if table.Status != domain.TableStatusEmpty && table.Status != domain.TableStatusReserved {
+				return pub.ErrTableOccupied
+			}
+			if _, err := s.tableRepo.UpdateStatus(ctx, tx, table.ID, domain.TableStatusOccupied, table.Status); err != nil {
+				if errors.Is(err, repo.ErrInvalidTransition) {
+					return pub.ErrTableOccupied
+				}
+				return err
+			}
+			c.TableLabel = table.Name
+		}
+
 		var err error
 		created, err = s.checkRepo.Create(ctx, tx, c)
 		if err != nil {
@@ -69,11 +103,25 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 			"tenant_id":   tenantID,
 			"check_id":    created.ID,
 			"branch_id":   created.BranchID,
+			"table_id":    created.TableID,
 			"table_label": created.TableLabel,
 			"opened_by":   created.OpenedBy,
 		})
 	})
 	if err != nil {
+		if errors.Is(err, pub.ErrTableOccupied) || errors.Is(err, pub.ErrTableBranchMismatch) {
+			return domain.Check{}, err
+		}
+		if errors.Is(err, repo.ErrTableOccupied) {
+			// Backstop path: the table row lock saw "empty"/"reserved" (its
+			// status was manually reset while another check still held it),
+			// but checks_open_table_id_uidx caught the still-live check —
+			// see CheckRepo.Create's doc comment.
+			return domain.Check{}, pub.ErrTableOccupied
+		}
+		if errors.Is(err, repo.ErrNotFound) {
+			return domain.Check{}, pub.ErrNotFound
+		}
 		return domain.Check{}, fmt.Errorf("pos/service/check: open: %w", err)
 	}
 	return created, nil
@@ -155,6 +203,9 @@ func (s *CheckService) Close(ctx context.Context, tenantID uuid.UUID, principal 
 		if err != nil {
 			return err
 		}
+		if err := s.releaseTableToCleaning(ctx, tx, current.TableID); err != nil {
+			return err
+		}
 		return repo.InsertOutbox(ctx, tx, tenantID, "check", checkID.String(), "check.closed", map[string]any{
 			"tenant_id": tenantID,
 			"check_id":  checkID,
@@ -190,6 +241,9 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal
 		if err != nil {
 			return err
 		}
+		if err := s.releaseTableToCleaning(ctx, tx, current.TableID); err != nil {
+			return err
+		}
 		return repo.InsertOutbox(ctx, tx, tenantID, "check", checkID.String(), "check.cancelled", map[string]any{
 			"tenant_id":    tenantID,
 			"check_id":     checkID,
@@ -200,6 +254,26 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal
 		return domain.Check{}, wrapErr(err, "pos/service/check: cancel: %w")
 	}
 	return cancelled, nil
+}
+
+// releaseTableToCleaning moves a check's table to "cleaning" after the check
+// is closed/cancelled, tolerating the no-op case. It is a no-op when
+// tableID is nil (masasız satış checks never touched a table). The update
+// is guarded on the table's expected current status ("occupied" ->
+// "cleaning") but, unlike CheckRepo.UpdateStatus, a 0-rows-affected outcome
+// is NOT an error: if staff had already manually reset the table's status
+// in the meantime (TableService.SetStatus), the check close/cancel that
+// triggered this call must still succeed — closing the adisyon takes
+// priority over keeping the floor plan's derived state perfectly in sync.
+func (s *CheckService) releaseTableToCleaning(ctx context.Context, tx pgx.Tx, tableID *uuid.UUID) error {
+	if tableID == nil {
+		return nil
+	}
+	_, err := s.tableRepo.UpdateStatusIfCurrent(ctx, tx, *tableID, domain.TableStatusCleaning, domain.TableStatusOccupied)
+	if err != nil {
+		return fmt.Errorf("pos/service/check: release table to cleaning: %w", err)
+	}
+	return nil
 }
 
 // GetPublic returns a cross-module projection of a check.

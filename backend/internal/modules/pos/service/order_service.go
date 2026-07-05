@@ -99,6 +99,25 @@ func (s *OrderService) ListByCheck(ctx context.Context, tenantID, checkID uuid.U
 	return orders, nil
 }
 
+// ListActiveByBranch returns pending/accepted/preparing orders for a branch.
+// Used by ws.Hub to build the kitchen WebSocket snapshot sent on connect.
+// No principal is required: callers within the pos module (the WS hub
+// reacting to its own outbox events) already know tenantID/branchID are
+// trustworthy — HTTP-facing callers must gate this behind their own
+// permission + branch checks, as ws.Hub does before invoking it.
+func (s *OrderService) ListActiveByBranch(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.Order, error) {
+	var orders []domain.Order
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		orders, err = s.orderRepo.ListActiveByBranch(ctx, tx, branchID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pos/service/order: list active by branch: %w", err)
+	}
+	return orders, nil
+}
+
 // Accept marks an order as accepted by staff.
 // The current status is read with a row lock (GetForUpdate) so the
 // transition check and the guarded UPDATE are race-free against any other

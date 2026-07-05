@@ -27,6 +27,7 @@ import (
 	"onlinemenu.tr/internal/modules/inventory"
 	"onlinemenu.tr/internal/modules/payment"
 	"onlinemenu.tr/internal/modules/pos"
+	posws "onlinemenu.tr/internal/modules/pos/ws"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
@@ -57,6 +58,7 @@ func main() {
 		fx.Provide(newOPAConfig),
 		fx.Provide(newHTTPConfig),
 		fx.Provide(newOutboxConfig),
+		fx.Provide(newPosWSConfig),
 
 		db.Module,
 		eventbus.Module,
@@ -175,8 +177,8 @@ type devLoginReq struct {
 }
 
 type devLoginResp struct {
-	Token    string          `json:"token"`
-	TenantID string          `json:"tenant_id"`
+	Token    string           `json:"token"`
+	TenantID string           `json:"tenant_id"`
 	User     devLoginRespUser `json:"user"`
 }
 
@@ -388,6 +390,24 @@ func newHTTPConfig() httpConfig {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+}
+
+// newPosWSConfig wires deployment-specific kitchen-WS settings.
+// POS_WS_ALLOWED_ORIGINS: comma-separated origin patterns (host[:port]);
+// empty keeps the strict same-origin default.
+func newPosWSConfig() posws.Config {
+	raw := strings.TrimSpace(envOr("POS_WS_ALLOWED_ORIGINS", ""))
+	if raw == "" {
+		return posws.Config{}
+	}
+	parts := strings.Split(raw, ",")
+	patterns := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			patterns = append(patterns, p)
+		}
+	}
+	return posws.Config{AllowedOriginPatterns: patterns}
 }
 
 func newOutboxConfig() outbox.Config {

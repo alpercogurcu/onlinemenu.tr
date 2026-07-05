@@ -128,6 +128,51 @@ func (r *OrderRepo) ListByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUI
 	return orders, nil
 }
 
+// ListActiveByBranch returns all orders for a branch whose status is still
+// "live" for the kitchen (pending/accepted/preparing) — used to build the
+// WebSocket snapshot sent to a newly (re)connected kitchen display so it can
+// rebuild state without having missed any NATS events during a disconnect.
+func (r *OrderRepo) ListActiveByBranch(ctx context.Context, tx pgx.Tx, branchID uuid.UUID) ([]domain.Order, error) {
+	const q = `
+		SELECT id, tenant_id, branch_id, check_id, order_channel,
+		       delivery_integrator_id, status, accept_deadline_at,
+		       accepted_at, accepted_by, rejected_at, rejected_by,
+		       rejection_reason, note, created_at, updated_at
+		FROM orders
+		WHERE branch_id = $1 AND status = ANY($2)
+		ORDER BY created_at`
+
+	statuses := []string{
+		string(domain.OrderStatusPending),
+		string(domain.OrderStatusAccepted),
+		string(domain.OrderStatusPreparing),
+	}
+
+	rows, err := tx.Query(ctx, q, branchID, statuses)
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: list active by branch: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []domain.Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pos/repo/order: list active by branch scan: %w", err)
+		}
+		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Items are not loaded here: the kitchen WS snapshot only needs routing
+	// fields (status, check_id) — clients fetch full item detail via the
+	// existing REST GET /orders/{id} (DATA-002: no event/snapshot payload
+	// enrichment beyond what is already immutable).
+	return orders, nil
+}
+
 // Accept transitions an order to accepted, guarded on its expected current
 // status. Returns ErrInvalidTransition if the row's status no longer matches
 // expectedStatus (see GetForUpdate — the guard is defense-in-depth, since the

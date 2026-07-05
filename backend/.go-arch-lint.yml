@@ -47,6 +47,7 @@ components:
   pos_http:      { in: "internal/modules/pos/http/**" }
   pos_public:    { in: "internal/modules/pos/public/**" }
   pos_events:    { in: "internal/modules/pos/events/**" }
+  pos_ws:        { in: "internal/modules/pos/ws/**" }
 
   # Payment
   payment_domain:   { in: "internal/modules/payment/domain/**" }
@@ -164,6 +165,14 @@ deps:
     mayDependOn: [platform, pos_domain]
   pos_events:
     mayDependOn: [platform, pos_public]
+  # ws.Hub is the kitchen WebSocket fan-out: it subscribes to pos's own NATS
+  # events via platform/eventbus and reads order/check state via pos_service
+  # (in-module — not cross-module — so pos_service, not just pos_public, is
+  # allowed here) to build routing + snapshot data. Self-reference (pos_ws)
+  # allows black-box test files (package ws_test) to compile, matching the
+  # convention used by every other module's *_test.go (see e.g. pos_domain).
+  pos_ws:
+    mayDependOn: [platform, pos_domain, pos_service, pos_public, pos_ws]
 
   # --- Payment ---
   # payment must NOT import any pos or billing internals.

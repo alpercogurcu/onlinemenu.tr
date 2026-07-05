@@ -12,6 +12,8 @@ import (
 	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/repo"
 	"onlinemenu.tr/internal/modules/pos/service"
+	posws "onlinemenu.tr/internal/modules/pos/ws"
+	"onlinemenu.tr/internal/platform/auth"
 )
 
 // Module is the fx module definition for the POS domain.
@@ -22,10 +24,15 @@ var Module = fx.Module("pos",
 		service.NewCheckService,
 		service.NewOrderService,
 		poshttp.NewHandler,
+		posws.NewHub,
 		fx.Annotate(newCheckReader, fx.As(new(pub.CheckReader))),
 	),
 	fx.Invoke(func(h *poshttp.HandlerWithCache, r *chi.Mux) {
 		h.RegisterRoutes(r)
+	}),
+	fx.Invoke(func(hub *posws.Hub, r *chi.Mux, engine *auth.Engine, lc fx.Lifecycle) {
+		hub.RegisterRoutes(r, engine)
+		hub.Register(lc)
 	}),
 )
 

@@ -48,3 +48,11 @@ func requireBranch(ctx context.Context, principal auth.Principal, branchID uuid.
 	}
 	return pub.ErrBranchForbidden
 }
+
+// RequireBranchAccess exports requireBranch for cross-package callers within
+// the pos module (e.g. ws.Hub's kitchen WebSocket handshake) that need the
+// same ADR-AUTH-001 layer 3 branch check without duplicating the OPA-scope
+// exemption logic. See requireBranch for the full rationale.
+func RequireBranchAccess(ctx context.Context, principal auth.Principal, branchID uuid.UUID) error {
+	return requireBranch(ctx, principal, branchID)
+}

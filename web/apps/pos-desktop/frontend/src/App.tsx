@@ -6,6 +6,7 @@ import {
   ListCheckOrders,
   ListCheckPayments,
   ListOpenChecks,
+  ListTables,
   Login,
   Logout,
   OpenCheck,
@@ -19,6 +20,7 @@ import { CheckRail } from './components/CheckRail'
 import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
+import { TablePlan } from './components/TablePlan'
 import {
   addProductToPending,
   confirmedOrdersTotal,
@@ -48,6 +50,15 @@ function App() {
   const [paidChecks, setPaidChecks] = useState<Record<string, boolean>>({})
   const [alreadyPaidTotal, setAlreadyPaidTotal] = useState(0)
 
+  // Masa planı (Sprint-5 Wave 2) — full-panel floor plan shown instead of
+  // ProductGrid while no adisyon is selected (see the center-panel toggle
+  // below). layout_position is intentionally not read here — the plan
+  // renders a grid, not a free-placement layout (see TableDTO's doc
+  // comment).
+  const [zones, setZones] = useState<main.ZonePlanDTO[]>([])
+  const [tablesLoading, setTablesLoading] = useState(false)
+  const [tablesError, setTablesError] = useState('')
+
   const [sendingOrder, setSendingOrder] = useState(false)
   const [receiptError, setReceiptError] = useState('')
 
@@ -59,6 +70,23 @@ function App() {
     ListOpenChecks()
       .then(setOpenChecks)
       .catch((err) => setReceiptError(describeError(err)))
+  }, [])
+
+  // Event-driven refetch (no WebSocket, no poll-by-default — see task note):
+  // called after opening/closing a check, and on a 30s background timer
+  // while the plan is actually visible (no adisyon selected). branchID is
+  // read from session at call time rather than captured, since this is
+  // reused across effects with different closures.
+  const refreshTables = useCallback((branchID: string | undefined) => {
+    if (!branchID) return
+    setTablesLoading(true)
+    ListTables(branchID)
+      .then((z) => {
+        setZones(z)
+        setTablesError('')
+      })
+      .catch((err) => setTablesError(describeError(err)))
+      .finally(() => setTablesLoading(false))
   }, [])
 
   useEffect(() => {
@@ -77,7 +105,19 @@ function App() {
       .then(setCategories)
       .catch((err) => setReceiptError(describeError(err)))
     refreshOpenChecks()
-  }, [session, refreshOpenChecks])
+    refreshTables(session.branch_id)
+  }, [session, refreshOpenChecks, refreshTables])
+
+  // 30s background refresh — only while the plan is actually on screen (no
+  // adisyon selected). Once a check is selected the center panel switches to
+  // ProductGrid and there is nothing on screen for a stale plan to mislead;
+  // the next open/close cycle re-syncs it anyway (see refreshTables calls in
+  // handleSelectTable/handleOpenTakeaway/handleCloseCheck).
+  useEffect(() => {
+    if (!session?.authenticated || selectedCheck) return
+    const id = setInterval(() => refreshTables(session.branch_id), 30_000)
+    return () => clearInterval(id)
+  }, [session, selectedCheck, refreshTables])
 
   async function handleLogin(email: string) {
     try {
@@ -97,6 +137,8 @@ function App() {
     setPendingLines([])
     setOpenChecks([])
     setAlreadyPaidTotal(0)
+    setZones([])
+    setTablesError('')
   }
 
   async function handleSelectCheck(checkId: string) {
@@ -141,10 +183,36 @@ function App() {
     }
   }
 
-  async function handleOpenCheck(tableLabel: string) {
+  // handleSelectTable is TablePlan's tap handler for an empty/reserved
+  // table: open a new check bound to it. A 409 here means another station
+  // occupied the table between the plan being drawn and this tap (the
+  // backend's row lock — see pos/service.CheckService.Open's doc comment) —
+  // refetch the plan so the card flips to "occupied" and becomes
+  // join-able instead of leaving a stale "empty" card the cashier would tap
+  // again.
+  async function handleSelectTable(table: main.TableDTO) {
     if (!session?.branch_id) return
+    setReceiptError('')
     try {
-      const check = await OpenCheck(session.branch_id, tableLabel, '')
+      const check = await OpenCheck(session.branch_id, table.id, table.name, '')
+      refreshOpenChecks()
+      refreshTables(session.branch_id)
+      await handleSelectCheck(check.id)
+    } catch (err) {
+      setReceiptError(describeError(err))
+      refreshTables(session.branch_id)
+    }
+  }
+
+  // handleOpenTakeaway is CheckRail's "Paket servis" button — masasız satış,
+  // the old free-text-table path's replacement now that table-bound
+  // adisyon açma goes through TablePlan. tableID "" leaves the check's table
+  // unset, matching the pre-Wave-2 TableLabel-only OpenCheck behavior.
+  async function handleOpenTakeaway() {
+    if (!session?.branch_id) return
+    setReceiptError('')
+    try {
+      const check = await OpenCheck(session.branch_id, '', 'Paket servis', '')
       refreshOpenChecks()
       await handleSelectCheck(check.id)
     } catch (err) {
@@ -199,6 +267,7 @@ function App() {
       setPendingLines([])
       setAlreadyPaidTotal(0)
       refreshOpenChecks()
+      refreshTables(session?.branch_id)
     } catch (err) {
       setReceiptError(describeError(err))
     }
@@ -233,11 +302,21 @@ function App() {
           checks={openChecks}
           selectedCheckId={selectedCheck?.id ?? null}
           onSelect={handleSelectCheck}
-          onOpenCheck={handleOpenCheck}
+          onOpenTakeaway={handleOpenTakeaway}
           canOpenCheck={canOpenCheck}
         />
 
-        <ProductGrid categories={categories} disabled={!selectedCheck} onAddProduct={handleAddProduct} />
+        {selectedCheck ? (
+          <ProductGrid categories={categories} disabled={!selectedCheck} onAddProduct={handleAddProduct} />
+        ) : (
+          <TablePlan
+            zones={zones}
+            loading={tablesLoading}
+            errorMessage={tablesError}
+            onSelectAvailable={handleSelectTable}
+            onSelectOccupied={handleSelectCheck}
+          />
+        )}
 
         <Receipt
           tableLabel={selectedCheck?.table_label ?? ''}

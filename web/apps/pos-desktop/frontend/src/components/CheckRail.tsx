@@ -5,7 +5,7 @@ type CheckRailProps = {
   checks: main.CheckDTO[]
   selectedCheckId: string | null
   onSelect: (checkId: string) => void
-  onOpenCheck: (tableLabel: string) => Promise<void>
+  onOpenTakeaway: () => Promise<void>
   canOpenCheck: boolean
 }
 
@@ -17,18 +17,19 @@ function elapsedLabel(openedAt: string): string {
   return `${Math.floor(minutes / 60)} sa ${minutes % 60} dk`
 }
 
-/** Left rail: open adisyon list (teal status) + new-table entry. */
-export function CheckRail({ checks, selectedCheckId, onSelect, onOpenCheck, canOpenCheck }: CheckRailProps) {
-  const [tableLabel, setTableLabel] = useState('')
+/**
+ * Left rail: open adisyon list (teal status) + masasız satış ("Paket
+ * servis") entry point. Table-bound adisyon açma artık burada değil — bkz.
+ * TablePlan.tsx (Sprint-5 Wave 2 masa planı, center panel when no adisyon is
+ * selected).
+ */
+export function CheckRail({ checks, selectedCheckId, onSelect, onOpenTakeaway, canOpenCheck }: CheckRailProps) {
   const [opening, setOpening] = useState(false)
 
-  async function handleOpen(e: React.FormEvent) {
-    e.preventDefault()
-    if (!tableLabel.trim()) return
+  async function handleOpenTakeaway() {
     setOpening(true)
     try {
-      await onOpenCheck(tableLabel.trim())
-      setTableLabel('')
+      await onOpenTakeaway()
     } finally {
       setOpening(false)
     }
@@ -68,33 +69,21 @@ export function CheckRail({ checks, selectedCheckId, onSelect, onOpenCheck, canO
         )}
       </div>
 
-      <form onSubmit={handleOpen} className="border-t border-line p-4">
-        <label className="mb-1 block text-xs text-ink-dim" htmlFor="table-label">
-          Yeni masa
-        </label>
-        <div className="flex gap-2">
-          <input
-            id="table-label"
-            className="min-h-14 flex-1 rounded-md border border-line bg-surface px-3 py-2 text-ink"
-            placeholder="Masa 4"
-            value={tableLabel}
-            onChange={(e) => setTableLabel(e.target.value)}
-            disabled={!canOpenCheck}
-          />
-          <button
-            type="submit"
-            disabled={!canOpenCheck || opening || !tableLabel.trim()}
-            className="min-h-14 rounded-md bg-amber px-4 font-semibold text-amber-ink disabled:opacity-40"
-          >
-            Aç
-          </button>
-        </div>
+      <div className="border-t border-line p-4">
+        <button
+          type="button"
+          onClick={handleOpenTakeaway}
+          disabled={!canOpenCheck || opening}
+          className="min-h-14 w-full rounded-md border border-line bg-panel px-4 font-semibold text-ink disabled:opacity-40"
+        >
+          Paket servis (masasız satış)
+        </button>
         {!canOpenCheck && (
           <p className="mt-2 text-xs text-ink-dim">
             Bu istasyon şubeye bağlı değil — adisyon açmak için şube bazlı oturum gerekli.
           </p>
         )}
-      </form>
+      </div>
     </aside>
   )
 }

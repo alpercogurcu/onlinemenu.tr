@@ -3,6 +3,8 @@ package apiclient
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -140,6 +142,140 @@ func TestClient_ListOpenChecks_FiltersToBranch(t *testing.T) {
 	}
 	if len(checks) != 1 || checks[0].ID != "1" {
 		t.Fatalf("unexpected checks: %+v", checks)
+	}
+}
+
+// TestClient_ListTables_DecodesZoneGroupedPlan verifies the client decodes
+// GET /tables's actual zone-grouped shape (zonePlanResponse) — a slice of
+// zones each carrying its own tables slice — and requires branch_id.
+func TestClient_ListTables_DecodesZoneGroupedPlan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/pos/tables" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("branch_id"); got != "branch-1" {
+			t.Fatalf("branch_id query param = %q, want branch-1", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"zone_id":"zone-1","zone_name":"Salon","floor":0,"tables":[
+				{"id":"t1","branch_id":"branch-1","zone_id":"zone-1","name":"Masa 1","capacity":4,"status":"empty","layout_position":null,"is_active":true,"active_check_id":null},
+				{"id":"t2","branch_id":"branch-1","zone_id":"zone-1","name":"Masa 2","capacity":2,"status":"occupied","layout_position":null,"is_active":true,"active_check_id":"chk-1"}
+			]}
+		]`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	zones, err := c.ListTables(t.Context(), "branch-1")
+	if err != nil {
+		t.Fatalf("ListTables: %v", err)
+	}
+	if len(zones) != 1 || zones[0].ZoneName != "Salon" || len(zones[0].Tables) != 2 {
+		t.Fatalf("unexpected zones: %+v", zones)
+	}
+	if zones[0].Tables[0].ActiveCheckID != nil {
+		t.Fatalf("empty table should have nil ActiveCheckID, got %+v", zones[0].Tables[0].ActiveCheckID)
+	}
+	got := zones[0].Tables[1]
+	if got.Status != "occupied" || got.ActiveCheckID == nil || *got.ActiveCheckID != "chk-1" {
+		t.Fatalf("unexpected occupied table: %+v", got)
+	}
+}
+
+func TestClient_ListTables_RejectsMissingBranchIDBeforeCallingServer(t *testing.T) {
+	var called atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called.Store(true)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.ListTables(t.Context(), "")
+	if err == nil {
+		t.Fatal("expected error for empty branch_id")
+	}
+	if called.Load() {
+		t.Fatal("server should not have been called")
+	}
+}
+
+// TestClient_OpenCheck_SendsTableIDWhenSet guards the *string encoding
+// choice in openCheckRequest: a non-empty tableID must be sent as the
+// table_id JSON field.
+func TestClient_OpenCheck_SendsTableIDWhenSet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openCheckRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.TableID == nil || *req.TableID != "table-1" {
+			t.Fatalf("TableID = %v, want table-1", req.TableID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Check{ID: "chk-1", TableLabel: "Masa 1"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	chk, err := c.OpenCheck(t.Context(), "branch-1", "table-1", "Masa 1", "")
+	if err != nil {
+		t.Fatalf("OpenCheck: %v", err)
+	}
+	if chk.ID != "chk-1" {
+		t.Fatalf("unexpected check: %+v", chk)
+	}
+}
+
+// TestClient_OpenCheck_OmitsTableIDWhenEmpty guards the masasız satış
+// (takeaway) path: an empty tableID must omit table_id from the request
+// body entirely, not send an empty-string uuid the backend's *uuid.UUID
+// field would fail to decode.
+func TestClient_OpenCheck_OmitsTableIDWhenEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "table_id") {
+			t.Fatalf("expected no table_id key in body, got: %s", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Check{ID: "chk-2", TableLabel: "Paket servis"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	chk, err := c.OpenCheck(t.Context(), "branch-1", "", "Paket servis", "")
+	if err != nil {
+		t.Fatalf("OpenCheck: %v", err)
+	}
+	if chk.ID != "chk-2" {
+		t.Fatalf("unexpected check: %+v", chk)
+	}
+}
+
+// TestClient_OpenCheck_MapsOccupiedTableConflict guards that a 409 from an
+// already-occupied table surfaces as an *APIError the frontend's
+// describeError can pattern-match on (see pos/http.Handler.error's "table is
+// already occupied" body).
+func TestClient_OpenCheck_MapsOccupiedTableConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "table is already occupied", http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.OpenCheck(t.Context(), "branch-1", "table-1", "Masa 1", "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("StatusCode = %d, want 409", apiErr.StatusCode)
+	}
+	if !strings.Contains(apiErr.Body, "already occupied") {
+		t.Fatalf("Body = %q, want it to mention already occupied", apiErr.Body)
 	}
 }
 

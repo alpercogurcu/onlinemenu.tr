@@ -2,6 +2,7 @@ package apiclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -118,19 +119,31 @@ func (c *Client) ListOpenChecks(ctx context.Context, branchID string) ([]Check, 
 }
 
 type openCheckRequest struct {
-	BranchID   string `json:"branch_id"`
-	TableLabel string `json:"table_label"`
-	Note       string `json:"note"`
+	BranchID   string  `json:"branch_id"`
+	TableID    *string `json:"table_id,omitempty"`
+	TableLabel string  `json:"table_label"`
+	Note       string  `json:"note"`
 }
 
-// OpenCheck calls POST /api/v1/pos/checks. Not idempotency-key-gated on the
-// backend (pos/http.RegisterRoutes: only close and order-place carry
-// httpx.Idempotency) and has no natural client-side dedup key today, so a
-// retry here is left to the caller rather than silently risking a
-// duplicate check on a timeout.
-func (c *Client) OpenCheck(ctx context.Context, branchID, tableLabel, note string) (Check, error) {
+// OpenCheck calls POST /api/v1/pos/checks. tableID is optional (Sprint-5
+// Wave 2's masa planı — a table selected from ListTables); pass "" for
+// masasız satış (takeaway/delivery), which the backend leaves TableID nil
+// for. TableID is sent as *string rather than *uuid.UUID so an empty tableID
+// omits the JSON key entirely (json:",omitempty" on a *uuid.UUID would still
+// need a valid UUID string if set to a non-nil zero value — using *string
+// makes "no table" unambiguous instead of risking a 400 from an empty-string
+// uuid decode on the backend's *uuid.UUID field).
+//
+// Not idempotency-key-gated on the backend (pos/http.RegisterRoutes: only
+// close and order-place carry httpx.Idempotency) and has no natural
+// client-side dedup key today, so a retry here is left to the caller rather
+// than silently risking a duplicate check on a timeout.
+func (c *Client) OpenCheck(ctx context.Context, branchID, tableID, tableLabel, note string) (Check, error) {
 	var out Check
 	req := openCheckRequest{BranchID: branchID, TableLabel: tableLabel, Note: note}
+	if tableID != "" {
+		req.TableID = &tableID
+	}
 	if err := c.do(ctx, http.MethodPost, "/api/v1/pos/checks", req, &out); err != nil {
 		return Check{}, fmt.Errorf("apiclient: open check: %w", err)
 	}
@@ -160,6 +173,53 @@ func (c *Client) CloseCheck(ctx context.Context, checkID string) (Check, error) 
 	path := fmt.Sprintf("/api/v1/pos/checks/%s/close", checkID)
 	if err := c.doIdempotent(ctx, http.MethodPost, path, nil, &out); err != nil {
 		return Check{}, fmt.Errorf("apiclient: close check: %w", err)
+	}
+	return out, nil
+}
+
+// --- Table plan (masa planı, Sprint-5 Wave 2) ---
+
+// Table mirrors pos/http tableResponse — one floor-plan row: the table
+// itself plus the id of the check currently open against it (nil when the
+// table is not occupied). LayoutPosition is decoded (kept 1:1 with the
+// backend shape per this file's doc comment) but is not consumed by the
+// pos-desktop UI yet — the cash register draws a grid layout, not a free
+// placement editor; that is a separate, later piece of work.
+type Table struct {
+	ID             string          `json:"id"`
+	BranchID       string          `json:"branch_id"`
+	ZoneID         string          `json:"zone_id"`
+	Name           string          `json:"name"`
+	Capacity       int             `json:"capacity"`
+	Status         string          `json:"status"`
+	LayoutPosition json.RawMessage `json:"layout_position"`
+	IsActive       bool            `json:"is_active"`
+	ActiveCheckID  *string         `json:"active_check_id"`
+}
+
+// ZonePlan mirrors pos/http zonePlanResponse — GET /tables's actual response
+// shape: the branch's floor plan grouped by zone, in the backend's own
+// (floor, zone name, then table name) order.
+type ZonePlan struct {
+	ZoneID   string  `json:"zone_id"`
+	ZoneName string  `json:"zone_name"`
+	Floor    int     `json:"floor"`
+	Tables   []Table `json:"tables"`
+}
+
+// ListTables calls GET /api/v1/pos/tables?branch_id={branchID}, returning
+// the whole branch floor plan (zones + tables) in one request — the shape
+// the cash register's masa planı screen draws directly, no client-side
+// grouping needed (see toZonePlanResponse's ordering guarantee on the
+// backend). branchID is required — the handler 422s without it.
+func (c *Client) ListTables(ctx context.Context, branchID string) ([]ZonePlan, error) {
+	if branchID == "" {
+		return nil, fmt.Errorf("apiclient: list tables: branch_id is required")
+	}
+	var out []ZonePlan
+	path := "/api/v1/pos/tables?" + url.Values{"branch_id": {branchID}}.Encode()
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("apiclient: list tables: %w", err)
 	}
 	return out, nil
 }

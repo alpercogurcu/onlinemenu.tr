@@ -80,6 +80,20 @@ button {
   );
 }
 
+/* --- Masa planı: temizlik durumu (Sprint-5 Wave 2) ---
+ * Cross-hatch pattern distinguishes "cleaning" from "empty" without relying
+ * on color alone (WCAG — status must not be color-only): a diagonal stripe
+ * pattern over the same panel background, in the neutral --color-line
+ * (never --color-danger, which the design plan reserves exclusively for
+ * void/cancel actions). */
+.table-cleaning-pattern {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--color-line) 0 2px,
+    transparent 2px 10px
+  );
+}
+
 /* --- Motion (exactly two, per design plan; both disabled under
  * prefers-reduced-motion) --- */
 @keyframes receipt-line-in {

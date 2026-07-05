@@ -15,6 +15,18 @@ export function describeError(err: unknown): string {
   if (raw.includes('already being processed')) {
     return 'Bu işlem hâlâ işleniyor, lütfen birkaç saniye bekleyip tekrar deneyin.'
   }
+  // Masa planı (Sprint-5 Wave 2) — specific bodies checked before the
+  // generic 409/422 fallbacks below, since a table-select conflict needs an
+  // actionable message ("dolu masaya dokunun"), not a generic "çakışıyor".
+  if (raw.includes('table is already occupied')) {
+    return 'Bu masa az önce doldu — plan yenilendi, dolu masaya dokunarak açık adisyona geçebilirsiniz.'
+  }
+  if (raw.includes('table does not belong to this branch')) {
+    return 'Bu masa başka bir şubeye ait — bu istasyondan seçilemez.'
+  }
+  if (raw.includes('table can only become occupied by opening a check')) {
+    return 'Masa durumu yalnızca adisyon açılarak değiştirilebilir.'
+  }
   if (raw.includes('status 422')) return 'Eksik veya geçersiz bilgi — girdileri kontrol edin.'
   if (raw.includes('status 409')) return 'Bu adisyon/sipariş başka bir işlemle çakışıyor — sayfayı yenileyin.'
   if (raw.includes('status 500')) {

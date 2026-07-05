@@ -44,6 +44,28 @@ type CheckDTO struct {
 	ClosedAt   string `json:"closed_at,omitempty"`
 }
 
+// TableDTO mirrors apiclient.Table — layout_position is deliberately
+// dropped: the pos-desktop masa planı screen draws a grid, not a free
+// placement editor, so the frontend has no use for it yet (see
+// apiclient.Table's doc comment).
+type TableDTO struct {
+	ID            string `json:"id"`
+	ZoneID        string `json:"zone_id"`
+	Name          string `json:"name"`
+	Capacity      int    `json:"capacity"`
+	Status        string `json:"status"`
+	IsActive      bool   `json:"is_active"`
+	ActiveCheckID string `json:"active_check_id,omitempty"`
+}
+
+// ZonePlanDTO mirrors apiclient.ZonePlan.
+type ZonePlanDTO struct {
+	ZoneID   string     `json:"zone_id"`
+	ZoneName string     `json:"zone_name"`
+	Floor    int        `json:"floor"`
+	Tables   []TableDTO `json:"tables"`
+}
+
 // OrderItemDTO mirrors apiclient.OrderItem.
 type OrderItemDTO struct {
 	ID              string `json:"id"`
@@ -142,15 +164,40 @@ func (a *App) ListOpenChecks() ([]CheckDTO, error) {
 	return out, nil
 }
 
-// OpenCheck opens a new check for the given table. branchID should come
-// from the current session (SessionDTO.BranchID) — a chain-wide staff
-// session (empty BranchID) must prompt the cashier for a branch before
-// calling this, since the backend requires a non-nil branch_id.
-func (a *App) OpenCheck(branchID, tableLabel, note string) (CheckDTO, error) {
+// ListTables returns the branch's floor plan grouped by zone, for the masa
+// planı screen shown while opening a new adisyon (Sprint-5 Wave 2).
+// branchID should come from the current session (SessionDTO.BranchID) —
+// same requirement as OpenCheck, since the backend's GET /tables 422s
+// without one.
+func (a *App) ListTables(branchID string) ([]ZonePlanDTO, error) {
+	if branchID == "" {
+		return nil, fmt.Errorf("şube seçilmeden masa planı görüntülenemez")
+	}
+	zones, err := a.api.ListTables(a.ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ZonePlanDTO, len(zones))
+	for i, z := range zones {
+		out[i] = toZonePlanDTO(z)
+	}
+	return out, nil
+}
+
+// OpenCheck opens a new check, optionally for a table selected from the
+// masa planı screen (tableID) — pass "" for masasız satış (e.g. "Paket
+// servis"), which leaves the check's table unset. branchID should come from
+// the current session (SessionDTO.BranchID) — a chain-wide staff session
+// (empty BranchID) must prompt the cashier for a branch before calling this,
+// since the backend requires a non-nil branch_id. A 409 here means the
+// table was occupied by another check between the plan being drawn and this
+// call (see apiclient.Client.OpenCheck / pos/service.CheckService.Open's row
+// lock) — the caller should refetch ListTables so the plan reflects it.
+func (a *App) OpenCheck(branchID, tableID, tableLabel, note string) (CheckDTO, error) {
 	if branchID == "" {
 		return CheckDTO{}, fmt.Errorf("şube seçilmeden adisyon açılamaz")
 	}
-	c, err := a.api.OpenCheck(a.ctx, branchID, tableLabel, note)
+	c, err := a.api.OpenCheck(a.ctx, branchID, tableID, tableLabel, note)
 	if err != nil {
 		return CheckDTO{}, err
 	}
@@ -293,6 +340,34 @@ func (a *App) CloseCheck(checkID string) (CheckDTO, error) {
 		return CheckDTO{}, err
 	}
 	return toCheckDTO(c), nil
+}
+
+func toTableDTO(t apiclient.Table) TableDTO {
+	dto := TableDTO{
+		ID:       t.ID,
+		ZoneID:   t.ZoneID,
+		Name:     t.Name,
+		Capacity: t.Capacity,
+		Status:   t.Status,
+		IsActive: t.IsActive,
+	}
+	if t.ActiveCheckID != nil {
+		dto.ActiveCheckID = *t.ActiveCheckID
+	}
+	return dto
+}
+
+func toZonePlanDTO(z apiclient.ZonePlan) ZonePlanDTO {
+	tables := make([]TableDTO, len(z.Tables))
+	for i, t := range z.Tables {
+		tables[i] = toTableDTO(t)
+	}
+	return ZonePlanDTO{
+		ZoneID:   z.ZoneID,
+		ZoneName: z.ZoneName,
+		Floor:    z.Floor,
+		Tables:   tables,
+	}
 }
 
 func toCheckDTO(c apiclient.Check) CheckDTO {

@@ -17,6 +17,8 @@ type MockPrinter struct {
 	events  chan Event
 	faultCh chan error
 	wg      sync.WaitGroup
+
+	lastJob []byte
 }
 
 // NewMockPrinter constructs a MockPrinter in the disconnected state. Call
@@ -88,6 +90,28 @@ func (p *MockPrinter) SimulateFault(err error) {
 		// state. Silence here is safe: it does not hide an error from
 		// the consumer, it only avoids double-queuing one.
 	}
+}
+
+// Print records job for later inspection (see LastJob) and always succeeds
+// — this is the no-hardware development stand-in for NetworkPrinter.Print,
+// letting the auto-print-at-close / reprint flow (app.go's PrintReceipt) be
+// exercised end-to-end without a physical printer attached.
+func (p *MockPrinter) Print(job []byte) error {
+	p.mu.Lock()
+	p.lastJob = append([]byte(nil), job...)
+	p.mu.Unlock()
+	return nil
+}
+
+// LastJob returns a copy of the most recent job passed to Print, or nil if
+// Print has never been called. Intended for tests.
+func (p *MockPrinter) LastJob() []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastJob == nil {
+		return nil
+	}
+	return append([]byte(nil), p.lastJob...)
 }
 
 func (p *MockPrinter) setStatus(s Status, err error) {

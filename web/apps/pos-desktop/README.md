@@ -58,6 +58,49 @@ Gerçek yazıcı/terazi/fiscal adaptörleri UI dalgasında aynı `Device`
 arayüzünü implemente edecek; forwarding deseni (Go event kanalı →
 `runtime.EventsEmit`, bkz. `app.go:startHardware`) değişmeyecek.
 
+## Termal yazıcı (Sprint-7) — ESC/POS üzerinden ağ yazıcısı
+
+`hardware.Printer` (`Device` + `Print(job []byte) error` + `Wait()`), her ikisi
+de aynı arayüzü implemente eden iki somut tip:
+
+- `hardware.MockPrinter` — donanımsız geliştirme; `Print` her zaman başarılı
+  döner ve job'u `LastJob()` ile test/inceleme için saklar.
+- `hardware.NetworkPrinter` — gerçek termal yazıcıya TCP 9100 ("direct/raw
+  printing") üzerinden ESC/POS bağlanır. `config.Config.PrinterAddr`
+  (`POS_PRINTER_ADDR`) boşsa `MockPrinter`, doluysa (`"192.168.1.50:9100"`
+  gibi) `NetworkPrinter` seçilir (`app.go:startHardware`).
+
+`NetworkPrinter`'ın bağlantı yönetimi `MockPrinter` ile aynı yaşam döngüsü
+sözleşmesine uyar (bkz. yukarısı) ve ek olarak:
+
+- **Periyodik sağlık kontrolü** (`healthCheck`, varsayılan 15s): ESC/POS'un
+  gerçek-zamanlı durum sorgusu (`DLE EOT 1`) gönderilip yanıt beklenir — salt
+  TCP bağlantısının açık kalması "yazıcı canlı" anlamına gelmez (kablosu
+  çekilen bir yazıcı çoğu zaman soket hatası üretmez). Bu, b2b'deki "kopan
+  terazi sonsuza dek bağlı görünüyordu" regresyonunun yazıcı karşılığını önler.
+- **Ctx-farkında exponential backoff** (`sleep`/`nextBackoff`, varsayılan
+  1s–30s): yeniden bağlanma denemeleri arasında bekleme her zaman
+  `ctx.Done()` üzerinden de tetiklenebilir — bare `time.Sleep` olsaydı,
+  shutdown sırasında `Wait()` backoff süresi kadar bloke kalırdı.
+- **Çift kanallı hata raporlama**: `Print` hem `error` döner hem
+  (`reportFault` ile) bir `StatusError` `Event` yayar — b2b'de
+  `//nolint:errcheck` yüzünden başarısız fatura baskısının başarılı
+  görünmesinin doğrudan karşılığı.
+
+ESC/POS komut kodlaması (`internal/hardware/escpos`) ve fiş şablonu
+(`internal/receipt`) ayrı, donanımdan bağımsız paketlerdir — CP857 (Türkçe)
+kodlama tablosu Unicode Consortium'un resmî `CP857.TXT` dosyasından
+mekanik olarak türetildi (bkz. `codepage857.go`'nun doc comment'i), elle
+tahmin edilmedi. Fiş şablonu ZORUNLU "bu bir bilgi fişidir, mali değeri
+yoktur" ibaresini her genişlikte (32/48 kolon) basar — bu **fiscal bir
+belge değildir** (ADR-FISCAL-001, ÖKC adaptörü Faz 2'ye kadar mock kalır).
+
+`App.PrintReceipt(checkID, receivedAmount)` binding'i kapanan bir adisyonun
+fişini basar (yeniden baskı için de kullanılır); `App.PrinterStatus()`
+yazıcının anlık bağlantı durumunu döner (frontend mount'ta bir kez
+poll edilir — bkz. `App.tsx`, çünkü event'ler yalnızca durum GEÇİŞİNDE
+gönderilir, önceki bir geçiş "replay" edilmez).
+
 ## Devtools / Inspector — yalnızca dev build
 
 `main.go`'daki `Debug.OpenInspectorOnStartup` alanı `devtools_dev.go`
@@ -78,6 +121,12 @@ budur — build config'i değil.
 
 `dataDir` çalışma zamanında `os.UserConfigDir()/onlinemenu-pos-desktop`
 olarak çözülür (macOS: `~/Library/Application Support/...`).
+
+Yazıcı/işletme alanları (Sprint-7, aynı env > config.json > default
+önceliği): `POS_PRINTER_ADDR` (`"printer_addr"`, boş = `MockPrinter`),
+`POS_PRINTER_WIDTH` (`"printer_width"`, `32` veya `48`, geçersiz/eksik
+değer `48`'e düşer), `POS_BUSINESS_NAME` (`"business_name"`),
+`POS_BRANCH_NAME` (`"branch_name"`).
 
 ## Backend'e bağlanma (dev)
 
@@ -168,10 +217,15 @@ env > config.json > default önceliğini izler.
 | `SelectKeycloakContext` | `(membershipId: string) => Promise<SessionDTO>` | Çok-üyelikli hesap için context seçimini tamamlar |
 | `TryRestoreSession` | `() => Promise<SessionDTO>` | Açılışta sessiz oturum geri yükleme (Keycloak → dev-login sırayla) |
 | `DevLoginEnabled` | `() => Promise<boolean>` | `POS_ENABLE_DEV_LOGIN`'i frontend'e yansıtır |
+| `PrintReceipt` | `(checkID: string, receivedAmount: number) => Promise<void>` | Bilgi fişini basar (kapanışta otomatik + "yeniden yazdır") |
+| `PrinterStatus` | `() => Promise<PrinterStatusDTO>` | Yazıcının anlık bağlantı durumunu döner (mount'ta bir kez poll edilir) |
 
-UI dalgası bu listeyi `GetChecks`, `PlaceOrder` vb. ile genişletecek — desen
-aynı kalır: her yeni backend etkileşimi `App`'e bir metot olarak eklenir,
-`internal/apiclient.Client`'a karşılık gelen bir metot delege edilir.
+Bu tablo kasiyer akışının (`ListOpenChecks`, `OpenCheck`, `PlaceOrder`,
+`RegisterCashPayment`, `CloseCheck` vb. — bkz. `pos.go`) tamamını
+kapsamıyor; yalnızca kimlik doğrulama akışı + Sprint-7'nin yazıcı
+binding'leri burada listelendi. Her yeni backend etkileşimi `App`'e bir
+metot olarak eklenir, `internal/apiclient.Client`'a karşılık gelen bir
+metot delege edilir — desen değişmez.
 
 ## Kod üretimi (wailsjs) — fresh clone'da ZORUNLU ilk adım
 

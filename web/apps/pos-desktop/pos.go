@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"onlinemenu.tr/pos-desktop/internal/apiclient"
+	"onlinemenu.tr/pos-desktop/internal/receipt"
 )
 
 // This file adds the Wails bindings for the cashier flow: check list -> open
@@ -340,6 +341,72 @@ func (a *App) CloseCheck(checkID string) (CheckDTO, error) {
 		return CheckDTO{}, err
 	}
 	return toCheckDTO(c), nil
+}
+
+// PrinterStatusDTO mirrors a hardware.Event's Status/Kind — the frontend
+// polls this once on mount (see hardwarePrinterEvent's doc comment on why a
+// poll is needed in addition to the pushed event stream: a station whose
+// printer connected/errored before the frontend finished mounting would
+// otherwise show "bekleniyor…" forever, since events are pushed only on
+// transition, not replayed).
+type PrinterStatusDTO struct {
+	Kind   string `json:"kind"`
+	Status string `json:"status"`
+}
+
+// PrinterStatus returns the receipt printer's current connectivity state.
+func (a *App) PrinterStatus() PrinterStatusDTO {
+	return PrinterStatusDTO{Kind: a.printer.Kind(), Status: a.printer.Status().String()}
+}
+
+// PrintReceipt builds and prints the "bilgi fişi" (informational receipt —
+// NOT a fiscal document, see ADR-FISCAL-001 and internal/receipt's package
+// doc comment) for checkID. receivedAmount is the cash amount the customer
+// handed over, in kuruş, as already known to the cashier UI at the moment
+// of payment — pass 0 for a reprint where that is no longer known (the
+// totals-only receipt is still complete and correct; see
+// internal/receipt.Build's doc comment).
+//
+// This deliberately reads the check's line items via GetCheck +
+// ListCheckOrders (both cashier-allowed) rather than re-deriving the
+// paid/change amounts from ListCheckPayments (payment.payment.read,
+// manager-only — see ListCheckPayments's doc comment above): passing
+// receivedAmount in is what keeps a plain cashier session able to print a
+// receipt at all.
+//
+// The frontend calls this best-effort, after CloseCheck has already
+// succeeded — a print failure here must never be treated as a reason to
+// have skipped closing the check (see App.tsx's handleCloseCheck): this
+// method's only job is to report the print outcome (return error here,
+// hardware.Printer also emits a StatusError Event in parallel — see
+// hardware.Printer's doc comment) so the frontend can offer "Fişi yeniden
+// yazdır".
+func (a *App) PrintReceipt(checkID string, receivedAmount int64) error {
+	check, err := a.api.GetCheck(a.ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("print receipt: %w", err)
+	}
+	orders, err := a.api.ListCheckOrders(a.ctx, checkID)
+	if err != nil {
+		return fmt.Errorf("print receipt: %w", err)
+	}
+
+	var items []receipt.Item
+	for _, o := range orders {
+		for _, it := range o.Items {
+			items = append(items, receipt.Item{
+				ProductName:     it.ProductName,
+				Quantity:        it.Quantity,
+				UnitPriceAmount: it.UnitPriceAmount,
+			})
+		}
+	}
+
+	job := receipt.Build(a.receiptConfig, check.TableLabel, check.OpenedAt, items, receivedAmount)
+	if err := a.printer.Print(job); err != nil {
+		return fmt.Errorf("print receipt: %w", err)
+	}
+	return nil
 }
 
 func toTableDTO(t apiclient.Table) TableDTO {

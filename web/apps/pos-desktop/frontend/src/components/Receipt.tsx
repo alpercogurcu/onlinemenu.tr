@@ -26,7 +26,17 @@ type ReceiptProps = {
    * second cash payment for the same check.
    */
   alreadyPaidTotal: number
-  onRegisterPayment: (amountTotal: number) => Promise<void>
+  /**
+   * receivedAmount (the cash the customer physically handed over, in
+   * kuruş) is passed alongside amountTotal so the parent (App) can hold
+   * onto it for the receipt print that follows CloseCheck — this
+   * component's own receivedInput is cleared on confirm (see
+   * handleConfirmPayment below) well before CloseCheck is even called
+   * (cash mode closes immediately; the "Basılı tutup kapat" hold button is
+   * a separate, later step), so App is the only place left that still
+   * knows this value at print time.
+   */
+  onRegisterPayment: (amountTotal: number, receivedAmount: number) => Promise<void>
   onCloseCheck: () => Promise<void>
   errorMessage: string
 }
@@ -68,7 +78,7 @@ export function Receipt({
   async function handleConfirmPayment() {
     setSubmittingPayment(true)
     try {
-      await onRegisterPayment(confirmedTotal)
+      await onRegisterPayment(confirmedTotal, receivedKurus)
       setCashMode(false)
       setReceivedInput('')
     } catch {

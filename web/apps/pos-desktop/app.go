@@ -14,7 +14,9 @@ import (
 	"onlinemenu.tr/pos-desktop/internal/apiclient"
 	"onlinemenu.tr/pos-desktop/internal/config"
 	"onlinemenu.tr/pos-desktop/internal/hardware"
+	"onlinemenu.tr/pos-desktop/internal/hardware/escpos"
 	"onlinemenu.tr/pos-desktop/internal/keycloakauth"
+	"onlinemenu.tr/pos-desktop/internal/receipt"
 	"onlinemenu.tr/pos-desktop/internal/tokenstore"
 )
 
@@ -56,7 +58,12 @@ type App struct {
 	api *apiclient.Client
 
 	hardwareCancel context.CancelFunc
-	printer        *hardware.MockPrinter
+	printer        hardware.Printer
+
+	// receiptConfig carries the station's business/branch name and paper
+	// width (from config.Config, set once in startup) into every
+	// PrintReceipt call — see internal/receipt.Build.
+	receiptConfig receipt.Config
 
 	// Keycloak login flow (Sprint-6 Wave 3) — see
 	// internal/keycloakauth and pos-desktop/README.md, "Keychain
@@ -133,7 +140,13 @@ func (a *App) startup(ctx context.Context) {
 	a.enableDevLogin = cfg.EnableDevLogin
 	a.openURL = func(url string) { runtime.BrowserOpenURL(a.ctx, url) }
 
-	a.startHardware(ctx)
+	a.receiptConfig = receipt.Config{
+		BusinessName: cfg.BusinessName,
+		BranchName:   cfg.BranchName,
+		Width:        escpos.Width(cfg.PrinterWidth),
+	}
+
+	a.startHardware(ctx, cfg)
 }
 
 // DevLoginEnabled reports whether the frontend should offer the POST
@@ -156,15 +169,24 @@ func (a *App) shutdown(_ context.Context) {
 	}
 }
 
-// startHardware wires the mock printer's event loop to the frontend. Real
-// device adapters (printer, scale, fiscal) implementing hardware.Device
-// will be registered the same way in the UI wave; the forwarding pattern
-// (Go event channel -> runtime.EventsEmit) does not change per device.
-func (a *App) startHardware(ctx context.Context) {
+// startHardware wires the printer's event loop to the frontend. Which
+// concrete hardware.Printer backs a.printer is the only thing that varies:
+// cfg.PrinterAddr set (a real "host:port") selects hardware.NetworkPrinter
+// (ESC/POS over TCP 9100); empty (the default — no printer configured for
+// this station, or local dev without hardware attached) selects
+// hardware.MockPrinter, preserving the pre-existing no-hardware-required
+// dev behavior. Either way the forwarding pattern (Go event channel ->
+// runtime.EventsEmit) is identical — see hardware.Printer's doc comment for
+// why app.go only ever depends on that interface, never a concrete type.
+func (a *App) startHardware(ctx context.Context, cfg config.Config) {
 	hwCtx, cancel := context.WithCancel(ctx)
 	a.hardwareCancel = cancel
 
-	a.printer = hardware.NewMockPrinter()
+	if cfg.PrinterAddr != "" {
+		a.printer = hardware.NewNetworkPrinter(cfg.PrinterAddr)
+	} else {
+		a.printer = hardware.NewMockPrinter()
+	}
 	a.printer.Start(hwCtx)
 
 	go func() {

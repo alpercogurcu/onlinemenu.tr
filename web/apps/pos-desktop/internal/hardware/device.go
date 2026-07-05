@@ -10,7 +10,10 @@
 // and simply keeps reporting the previous status.
 package hardware
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Status is the connectivity state of a hardware device. There is
 // deliberately no "unknown" zero-value state that could be mistaken for
@@ -59,4 +62,25 @@ type Device interface {
 	Kind() string
 	Status() Status
 	Events() <-chan Event
+}
+
+// Printer is the Device every receipt-printing adapter implements —
+// MockPrinter (dev, no hardware required) and NetworkPrinter (ESC/POS over
+// TCP 9100) both satisfy it, so app.go can hold a single Printer field and
+// swap the concrete implementation based on config.Config.PrinterAddr
+// without any other code path knowing which one it's talking to.
+//
+// Print must never silently succeed on failure (lessons-from-b2b §5: "b2b'de
+// başarısız fatura baskısı //nolint:errcheck yüzünden başarılı görünüyordu").
+// A failing implementation must both return a non-nil error AND — if the
+// failure indicates the device itself is no longer reachable, as opposed to
+// e.g. a caller passing a nil job — push a StatusError Event onto Events(),
+// the same double-reporting NetworkPrinter uses. Wait blocks until the
+// Device's background goroutine (started by Start) has fully exited, for
+// graceful shutdown and goroutine-leak tests.
+type Printer interface {
+	Device
+	Start(ctx context.Context)
+	Print(job []byte) error
+	Wait()
 }

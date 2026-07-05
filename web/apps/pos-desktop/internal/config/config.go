@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Config groups the POS desktop client's runtime settings.
@@ -35,7 +36,34 @@ type Config struct {
 	// keeps working without extra setup; production/staging deployments
 	// must set POS_ENABLE_DEV_LOGIN=false.
 	EnableDevLogin bool `json:"enable_dev_login"`
+
+	// PrinterAddr is the receipt printer's "host:port" address (e.g.
+	// "192.168.1.50:9100" — ESC/POS raw/direct printing on the printer's
+	// standard TCP 9100 port). Empty (the default) means no real printer is
+	// configured for this station: app.go falls back to hardware.MockPrinter,
+	// preserving the pre-existing no-hardware-required dev behavior.
+	PrinterAddr string `json:"printer_addr"`
+
+	// PrinterWidth is the printer's paper width in character columns — 32
+	// or 48 are the two widths internal/receipt supports. Any other value
+	// (including 0, config.json's zero value) falls back to 48.
+	PrinterWidth int `json:"printer_width"`
+
+	// BusinessName is the tenant's trade name, printed in the receipt
+	// header (internal/receipt.Config.BusinessName). Empty falls back to a
+	// generic label rather than a blank header line.
+	BusinessName string `json:"business_name"`
+
+	// BranchName is the branch/şube name, printed under BusinessName when
+	// set. Empty omits that line entirely (not every tenant is
+	// multi-branch).
+	BranchName string `json:"branch_name"`
 }
+
+// defaultPrinterWidth is used whenever PrinterWidth is absent from
+// config.json/environment, or set to a value internal/receipt doesn't
+// support.
+const defaultPrinterWidth = 48
 
 // defaultConfig is used when no config.json is present and no environment
 // override is set. It targets the local dev stack started via
@@ -46,6 +74,8 @@ func defaultConfig() Config {
 		KeycloakURL:    "http://localhost:8090",
 		KeycloakRealm:  "onlinemenu",
 		EnableDevLogin: true,
+		PrinterAddr:    "",
+		PrinterWidth:   defaultPrinterWidth,
 	}
 }
 
@@ -58,6 +88,10 @@ type fileConfig struct {
 	KeycloakURL    string `json:"keycloak_url"`
 	KeycloakRealm  string `json:"keycloak_realm"`
 	EnableDevLogin *bool  `json:"enable_dev_login"`
+	PrinterAddr    string `json:"printer_addr"`
+	PrinterWidth   int    `json:"printer_width"`
+	BusinessName   string `json:"business_name"`
+	BranchName     string `json:"branch_name"`
 }
 
 // Load resolves the effective configuration in this precedence order, per
@@ -92,6 +126,18 @@ func Load(configDir string) (Config, error) {
 		if fileCfg.EnableDevLogin != nil {
 			cfg.EnableDevLogin = *fileCfg.EnableDevLogin
 		}
+		if fileCfg.PrinterAddr != "" {
+			cfg.PrinterAddr = fileCfg.PrinterAddr
+		}
+		if fileCfg.PrinterWidth != 0 {
+			cfg.PrinterWidth = fileCfg.PrinterWidth
+		}
+		if fileCfg.BusinessName != "" {
+			cfg.BusinessName = fileCfg.BusinessName
+		}
+		if fileCfg.BranchName != "" {
+			cfg.BranchName = fileCfg.BranchName
+		}
 	} else if !os.IsNotExist(err) {
 		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
@@ -107,6 +153,24 @@ func Load(configDir string) (Config, error) {
 	}
 	if v, ok := os.LookupEnv("POS_ENABLE_DEV_LOGIN"); ok {
 		cfg.EnableDevLogin = v != "false"
+	}
+	if v := os.Getenv("POS_PRINTER_ADDR"); v != "" {
+		cfg.PrinterAddr = v
+	}
+	if v := os.Getenv("POS_PRINTER_WIDTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.PrinterWidth = n
+		}
+	}
+	if v := os.Getenv("POS_BUSINESS_NAME"); v != "" {
+		cfg.BusinessName = v
+	}
+	if v := os.Getenv("POS_BRANCH_NAME"); v != "" {
+		cfg.BranchName = v
+	}
+
+	if cfg.PrinterWidth != 32 && cfg.PrinterWidth != 48 {
+		cfg.PrinterWidth = defaultPrinterWidth
 	}
 
 	return cfg, nil

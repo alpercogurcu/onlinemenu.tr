@@ -13,6 +13,8 @@ import {
   Logout,
   OpenCheck,
   PlaceOrder,
+  PrinterStatus,
+  PrintReceipt,
   RegisterCashPayment,
   SelectKeycloakContext,
   TryRestoreSession,
@@ -71,6 +73,15 @@ function App() {
 
   const [printer, setPrinter] = useState<PrinterEvent | null>(null)
 
+  // Receipt printing (Sprint-7) — receivedAmount is remembered from the
+  // cash-payment step (Receipt.tsx's onRegisterPayment) so it is still
+  // available when the check is actually closed, potentially some time
+  // later (see Receipt.tsx's onRegisterPayment doc comment for why this
+  // can't be recovered any other way for a plain cashier session).
+  const [lastReceivedAmount, setLastReceivedAmount] = useState(0)
+  const [printError, setPrintError] = useState('')
+  const [printRetryCheckId, setPrintRetryCheckId] = useState<string | null>(null)
+
   const canOpenCheck = Boolean(session?.branch_id)
 
   const refreshOpenChecks = useCallback(() => {
@@ -110,6 +121,16 @@ function App() {
     DevLoginEnabled()
       .then(setDevLoginEnabled)
       .catch(() => setDevLoginEnabled(false))
+
+    // PrinterStatus is polled once here in addition to subscribing to the
+    // pushed event stream below: hardware:printer events are only emitted
+    // on a STATUS TRANSITION (see hardware.Device's doc comment), so a
+    // printer that already connected (or failed) before this component
+    // finished mounting would otherwise leave the header showing
+    // "bekleniyor…" forever.
+    PrinterStatus()
+      .then((s) => setPrinter({ kind: s.kind, status: s.status as PrinterEvent['status'] }))
+      .catch(() => {})
 
     const unsubscribe = EventsOn('hardware:printer', (evt: PrinterEvent) => setPrinter(evt))
     return () => unsubscribe()
@@ -192,6 +213,9 @@ function App() {
     setAlreadyPaidTotal(0)
     setZones([])
     setTablesError('')
+    setLastReceivedAmount(0)
+    setPrintError('')
+    setPrintRetryCheckId(null)
   }
 
   async function handleSelectCheck(checkId: string) {
@@ -297,24 +321,48 @@ function App() {
     }
   }
 
-  async function handleRegisterPayment(amountTotal: number) {
+  async function handleRegisterPayment(amountTotal: number, receivedAmount: number) {
     if (!selectedCheck || !session?.branch_id) return
     setReceiptError('')
     try {
       const payment = await RegisterCashPayment(session.branch_id, selectedCheck.id, amountTotal)
       setPaidChecks((paid) => ({ ...paid, [selectedCheck.id]: true }))
       setAlreadyPaidTotal((total) => total + payment.amount_total)
+      setLastReceivedAmount(receivedAmount)
     } catch (err) {
       setReceiptError(describeError(err))
       throw err
     }
   }
 
+  // printReceiptFor is best-effort by design (task note: "baskı hatası
+  // kapanışı ENGELLEMEZ"): a failure here never throws back to its caller —
+  // it only records printError/printRetryCheckId so the header can offer
+  // "Fişi yeniden yazdır" without the cashier losing the fact that the
+  // check itself is already correctly closed/paid.
+  async function printReceiptFor(checkId: string, receivedAmount: number) {
+    try {
+      await PrintReceipt(checkId, receivedAmount)
+      setPrintError('')
+      setPrintRetryCheckId(null)
+    } catch (err) {
+      setPrintError(describeError(err))
+      setPrintRetryCheckId(checkId)
+    }
+  }
+
+  async function handleReprintReceipt() {
+    if (!printRetryCheckId) return
+    await printReceiptFor(printRetryCheckId, lastReceivedAmount)
+  }
+
   async function handleCloseCheck() {
     if (!selectedCheck) return
     setReceiptError('')
+    const checkId = selectedCheck.id
+    const receivedAmount = lastReceivedAmount
     try {
-      await CloseCheck(selectedCheck.id)
+      await CloseCheck(checkId)
       setSelectedCheck(null)
       setConfirmedOrders([])
       setPendingLines([])
@@ -323,7 +371,11 @@ function App() {
       refreshTables(session?.branch_id)
     } catch (err) {
       setReceiptError(describeError(err))
+      return
     }
+    // Printing happens only after CloseCheck has already succeeded — a
+    // print failure must never look like the close itself failed.
+    await printReceiptFor(checkId, receivedAmount)
   }
 
   if (!authChecked) {
@@ -359,14 +411,40 @@ function App() {
           {session.full_name} ({session.email})
         </span>
         <div className="flex items-center gap-4">
-          <span className="text-ink-dim">
-            Yazıcı: {printer ? `${printer.status}${printer.error ? ` — ${printer.error}` : ''}` : 'bekleniyor…'}
-          </span>
+          {/*
+            Bağlı yazıcı sessizdir — yalnızca kopuk/hata durumunda amber bir
+            rozet gösterilir (kırmızı hiçbir zaman: bu app'te kırmızı yalnız
+            void/iptal içindir, bkz. style.css). Bu satır o kuralın tek
+            istisnasıdır — task-lead'in açık talebiyle amber kullanıldı;
+            ui-designer bu rengin "para/ana aksiyon" anlamıyla çakışıp
+            çakışmadığını gözden geçirebilir (bkz. rapor).
+          */}
+          {printer && printer.status !== 'connected' && (
+            <span
+              className="rounded-full bg-amber/20 px-2 py-0.5 text-xs font-semibold text-ink"
+              title={printer.error ?? ''}
+            >
+              Yazıcı {printer.status === 'error' ? 'hata' : 'bağlı değil'}
+            </span>
+          )}
           <button type="button" onClick={handleLogout} className="min-h-8 rounded px-2 text-ink-dim">
             Çıkış
           </button>
         </div>
       </header>
+
+      {printError && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink">
+          <span>Fiş yazdırılamadı: {printError}</span>
+          <button
+            type="button"
+            onClick={handleReprintReceipt}
+            className="min-h-8 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+          >
+            Fişi yeniden yazdır
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         <CheckRail

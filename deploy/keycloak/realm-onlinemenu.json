@@ -1,0 +1,262 @@
+{
+  "realm": "onlinemenu",
+  "enabled": true,
+  "displayName": "Online Menu",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "clientScopes": [
+    {
+      "name": "basic",
+      "description": "OIDC temel claim'ler. Realm import'unda clientScopes tanımlandığında Keycloak yerleşik 'basic' scope'unu otomatik oluşturmaz; sub mapper burada açıkça tanımlanır (backend `sub` claim'ine dayanır).",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "auth_time",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "AUTH_TIME",
+            "claim.name": "auth_time",
+            "jsonType.label": "long",
+            "access.token.claim": "true",
+            "id.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "onlinemenu-audience",
+      "description": "Backend'i (resource server) access token aud claim'ine ekler.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "backend-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "onlinemenu-backend",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "name": "onlinemenu-context-claims",
+      "description": "ADR-AUTH-002 forward-looking claim mapper'ları. UYARI: Backend authz bağlamını DB'den (persons.keycloak_sub -> memberships -> CTX token) türetir; bu JWT claim'leri YETKİ KAYNAĞI DEĞİLDİR (bkz README, ADR-AUTH-001).",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "tenant_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "multivalued": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "branch_ids",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "branch_ids",
+            "claim.name": "branch_ids",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "cashier",
+        "description": "Kasiyer (POS)"
+      },
+      {
+        "name": "manager",
+        "description": "Yönetici"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "admin-panel",
+      "name": "Admin Panel (Next.js)",
+      "description": "Yönetim paneli SPA — Authorization Code + PKCE (S256).",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/*"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "onlinemenu-audience"
+      ],
+      "optionalClientScopes": [
+        "onlinemenu-context-claims"
+      ]
+    },
+    {
+      "clientId": "pos-desktop",
+      "name": "POS Desktop (Wails)",
+      "description": "Masaüstü POS — Authorization Code + PKCE (S256), RFC 8252 loopback redirect.",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "http://127.0.0.1/callback",
+        "http://127.0.0.1/*",
+        "http://127.0.0.1:*/callback"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "onlinemenu-audience"
+      ],
+      "optionalClientScopes": [
+        "onlinemenu-context-claims"
+      ]
+    },
+    {
+      "clientId": "onlinemenu-dev-cli",
+      "name": "Dev CLI (DEV ONLY — password grant)",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {},
+      "defaultClientScopes": [
+        "basic",
+        "onlinemenu-audience",
+        "onlinemenu-context-claims"
+      ],
+      "optionalClientScopes": []
+    },
+    {
+      "clientId": "onlinemenu-dev-shortlived",
+      "name": "Dev Short-Lived (DEV ONLY — expired token test)",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "attributes": {
+        "access.token.lifespan": "1"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "onlinemenu-audience"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "dev-cashier",
+      "email": "cashier@dev.onlinemenu.tr",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Dev",
+      "lastName": "Cashier",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Passw0rd!",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "tenant_id": [
+          "aaaaaaaa-0000-0000-0000-000000000001"
+        ],
+        "branch_ids": [
+          "bbbbbbbb-0000-0000-0000-000000000001"
+        ]
+      },
+      "realmRoles": [
+        "cashier"
+      ]
+    }
+  ]
+}

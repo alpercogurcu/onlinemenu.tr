@@ -60,3 +60,7 @@ Türkiye pazarı (zincir/franchise restoran, market) büyük çoğunlukla kendi 
 - **Realm-per-tenant:** Reddedildi. Keycloak admin API 100+ realm'da ciddi yavaşlar; cross-realm token validation karmaşık; migration cehennem.
 - **Her tenant için ayrı Keycloak instance:** Reddedildi. Operasyonel maliyet × tenant sayısı.
 - **Auth0/Clerk gibi SaaS:** Reddedildi. Maliyet, veri egemenliği (KVKK), özelleştirme sınırlı.
+
+## Güncelleme Notu (2026-07-05, Sprint-6)
+
+Uygulama, bu ADR'nin "JWT claim mapper'ları (tenant_id, branch_ids, roles)" planından ADR-AUTH-001'in iki aşamalı DB-tabanlı modeline evrildi: Keycloak JWT yalnızca `sub` (+`aud`) taşır ve doğrular; yetki bağlamı `persons.keycloak_sub → memberships → SelectContext → CTX token` zincirinden gelir. Realm config'indeki `onlinemenu-context-claims` scope'u bilinçli olarak **opsiyonel ve non-authoritative** bırakılmıştır — backend bu claim'leri tüketmez ve tüketmemelidir (JWT'deki authz claim'lerine güvenmek AUTH-001 katmanlarını deler). Realm config-as-code: `deploy/keycloak/realm-onlinemenu.json`; uçtan uca kanıt: `backend/internal/e2e/keycloaklogin/` (build tag: `keycloak_integration`).

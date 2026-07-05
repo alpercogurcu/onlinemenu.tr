@@ -82,11 +82,77 @@ olarak çözülür (macOS: `~/Library/Application Support/...`).
 ## Backend'e bağlanma (dev)
 
 Backend'in `APP_ENV=dev` ile çalıştığı varsayılır (`task compose:up` +
-`task backend:dev`). Login akışı `POST /dev/login` (dev-only, gerçek
-Keycloak akışının yerini tutan placeholder) → dönen context token
-`tokenstore`'a yazılır → `GET /v1/identity/me` ile doğrulanır (`WhoAmI`).
-Gerçek Keycloak login'i UI dalgasında bu ikisinin yerini alacak;
-`apiclient.Client` arayüzü (Login/WhoAmI/Ping/Logout) değişmeden kalabilir.
+`task backend:dev`). Dev-login akışı `POST /dev/login` (dev-only placeholder,
+bkz. `POS_ENABLE_DEV_LOGIN` aşağıda) → dönen context token `tokenstore`'a
+yazılır → `GET /v1/identity/me` ile doğrulanır (`WhoAmI`). Gerçek Keycloak
+login'i (Sprint-6 Wave 3, aşağıda) bunun yanına eklendi — `apiclient.Client`
+arayüzü (Login/WhoAmI/Ping/Logout) değişmedi.
+
+## Keycloak login (Sprint-6 Wave 3) — RFC 8252 loopback PKCE
+
+`internal/keycloakauth` — Keycloak realm'inin `pos-desktop` public client'ı
+(Authorization Code + PKCE S256, bkz. `deploy/keycloak/realm-onlinemenu.json`)
+için native-app loopback-redirect akışı. Backend ile ilgisi olmayan tek HTTP
+istemcisi burada yaşar (Keycloak'ın authorize/token/end_session uçları) —
+`apiclient.Client` backend'in tek HTTP otoritesi olma özelliğini korur;
+`me/contexts`/`auth/context` çağrıları hâlâ ondan geçer
+(`apiclient.FetchKeycloakContexts` / `SelectKeycloakContext`,
+`doWithBearer` ile — CTX-401 recovery'ye asla girmez, bkz. o metodun
+doc comment'i).
+
+Akış (`app.go`'daki `LoginWithKeycloak`):
+
+1. PKCE verifier/challenge + state + nonce üretilir (CSPRNG,
+   `keycloakauth.Generate*`), `127.0.0.1:0`'da geçici bir dinleyici açılır
+   (`keycloakauth.LoopbackServer` — asla `localhost`, realm'in redirect URI
+   kaydı tam olarak `http://127.0.0.1:*/callback`).
+2. Sistem tarayıcısında authorize URL'i açılır (`runtime.BrowserOpenURL`).
+3. Dinleyici `/callback`'i bekler (2 dk timeout, `keycloakLoginTimeout`) —
+   `state` uyuşmazlığında ya da IdP hata döndürdüğünde akış iptal edilir.
+4. Kod, PKCE verifier ile token uç noktasına değiştirilir (client secret
+   yok — public client). `id_token` varsa `nonce` claim'i doğrulanır
+   (imza doğrulaması değil — apiclient'ın CTX-token `claims()` deseniyle
+   aynı gerekçe, bkz. `keycloakauth.DecodeNonce` doc comment'i).
+5. `GET /v1/identity/me/contexts` (Keycloak access token ile) — tek üyelik
+   otomatik seçilir, çok üyelik frontend'e döner (`ContextPicker.tsx`) →
+   kullanıcı seçince `SelectKeycloakContext` binding'i `POST
+   /v1/identity/auth/context`'i çağırır.
+6. Dönen CTX token yalnızca bellekte tutulur (`apiclient.SetSessionToken`)
+   — keychain'e **yazılmaz**. CTX-401 recovery hook'u
+   (`apiclient.SetUnauthorizedRecovery`) bu noktada takılır.
+
+### Keychain içeriği
+
+| Store | Hesap adı | İçerik | Ne zaman yazılır |
+|---|---|---|---|
+| `tokenstore.New` | `session-token` | Dev-login CTX token (ham string) | yalnızca `Login` (dev-login) |
+| `tokenstore.NewKeycloak` | `keycloak-refresh` | JSON: `{refresh_token, membership_id}` (`keycloakauth.SessionState`) | Keycloak login/refresh/context-seçimi sonrası |
+
+Keycloak access/ID token'ları ve CTX token'ı **hiçbir zaman** diske/keychain'e
+yazılmaz — yalnızca `App` struct'ında bellekte (`kcAccessToken`,
+`apiclient.currentToken`). Uygulama kapanıp açıldığında yalnızca refresh
+token + membership_id'den bir CTX token yeniden türetilir
+(`TryRestoreSession`).
+
+### Restore / CTX-401 recovery
+
+- **`TryRestoreSession`** (frontend mount'ta çağrılır): önce Keycloak
+  refresh token'dan sessiz restore dener (başarısızsa login ekranına
+  düşer — hata göstermez), sonra dev-login CTX-token-keychain yolunu
+  dener (`WhoAmI`).
+- **CTX 401** (`apiclient` içinde, `do`/`doWithHeaders`): recovery hook'u
+  kuruluysa (yalnızca Keycloak akışından sonra kurulur, dev-login'de asla)
+  tek seferlik, single-flighted bir recovery + retry dener
+  (`Client.recoverToken` — admin'in `lib/api.ts`'teki `recoverCtxToken`'ının
+  Go karşılığı).
+
+### Config
+
+`POS_KEYCLOAK_URL` (varsayılan `http://localhost:8090`),
+`POS_KEYCLOAK_REALM` (varsayılan `onlinemenu`), `POS_ENABLE_DEV_LOGIN`
+(varsayılan `true` — `false` yaparak dev-login formunu gizler, bkz.
+`DevLoginEnabled` binding'i) — hepsi `internal/config`'in mevcut
+env > config.json > default önceliğini izler.
 
 ## Wails binding'leri (şu an)
 
@@ -96,8 +162,12 @@ Gerçek Keycloak login'i UI dalgasında bu ikisinin yerini alacak;
 |---|---|---|
 | `Login` | `(email: string) => Promise<SessionDTO>` | `POST /dev/login`, token'ı persist eder |
 | `WhoAmI` | `() => Promise<SessionDTO>` | `GET /v1/identity/me`, oturumu doğrular |
-| `Logout` | `() => Promise<void>` | token'ı temizler |
+| `Logout` | `() => Promise<void>` | Tüm oturumları (dev + Keycloak) temizler, Keycloak end_session'ı tarayıcıda açar (best-effort) |
 | `Ping` | `() => Promise<void>` | `GET /healthz`, kimlik gerektirmez |
+| `LoginWithKeycloak` | `() => Promise<KeycloakLoginResultDTO>` | RFC 8252 loopback PKCE akışını başlatır ve tamamlar |
+| `SelectKeycloakContext` | `(membershipId: string) => Promise<SessionDTO>` | Çok-üyelikli hesap için context seçimini tamamlar |
+| `TryRestoreSession` | `() => Promise<SessionDTO>` | Açılışta sessiz oturum geri yükleme (Keycloak → dev-login sırayla) |
+| `DevLoginEnabled` | `() => Promise<boolean>` | `POS_ENABLE_DEV_LOGIN`'i frontend'e yansıtır |
 
 UI dalgası bu listeyi `GetChecks`, `PlaceOrder` vb. ile genişletecek — desen
 aynı kalır: her yeni backend etkileşimi `App`'e bir metot olarak eklenir,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   CloseCheck,
+  DevLoginEnabled,
   GetCheck,
   ListCategories,
   ListCheckOrders,
@@ -8,15 +9,18 @@ import {
   ListOpenChecks,
   ListTables,
   Login,
+  LoginWithKeycloak,
   Logout,
   OpenCheck,
   PlaceOrder,
   RegisterCashPayment,
-  WhoAmI,
+  SelectKeycloakContext,
+  TryRestoreSession,
 } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { main } from '../wailsjs/go/models'
 import { CheckRail } from './components/CheckRail'
+import { ContextPicker } from './components/ContextPicker'
 import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
@@ -41,6 +45,9 @@ function App() {
   const [session, setSession] = useState<main.SessionDTO | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [authError, setAuthError] = useState('')
+  const [devLoginEnabled, setDevLoginEnabled] = useState(false)
+  const [keycloakLoading, setKeycloakLoading] = useState(false)
+  const [pendingContexts, setPendingContexts] = useState<main.KeycloakContextDTO[]>([])
 
   const [categories, setCategories] = useState<main.CategoryDTO[]>([])
   const [openChecks, setOpenChecks] = useState<main.CheckDTO[]>([])
@@ -89,11 +96,20 @@ function App() {
       .finally(() => setTablesLoading(false))
   }, [])
 
+  // TryRestoreSession subsumes the old WhoAmI-on-mount check: it first
+  // attempts a silent Keycloak refresh-token-backed restore (see
+  // app.go's doc comment), then falls back to the pre-existing dev-login
+  // CTX-token-in-keychain path — one call, no ambiguity about which
+  // session wins if a station has used both flows.
   useEffect(() => {
-    WhoAmI()
+    TryRestoreSession()
       .then((s) => setSession(s.authenticated ? s : null))
       .catch(() => setSession(null))
       .finally(() => setAuthChecked(true))
+
+    DevLoginEnabled()
+      .then(setDevLoginEnabled)
+      .catch(() => setDevLoginEnabled(false))
 
     const unsubscribe = EventsOn('hardware:printer', (evt: PrinterEvent) => setPrinter(evt))
     return () => unsubscribe()
@@ -119,7 +135,7 @@ function App() {
     return () => clearInterval(id)
   }, [session, selectedCheck, refreshTables])
 
-  async function handleLogin(email: string) {
+  async function handleDevLogin(email: string) {
     try {
       const result = await Login(email)
       setSession(result)
@@ -129,9 +145,46 @@ function App() {
     }
   }
 
+  // LoginWithKeycloak blocks (Go-side) until the loopback callback arrives
+  // or times out (see app.go's keycloakLoginTimeout) — it either returns a
+  // completed session (single membership, auto-selected) or a context list
+  // this screen must render a picker for (see ContextPicker/handleSelectContext).
+  async function handleKeycloakLogin() {
+    setAuthError('')
+    setKeycloakLoading(true)
+    try {
+      const result = await LoginWithKeycloak()
+      if (result.needs_context_selection) {
+        setPendingContexts(result.contexts ?? [])
+      } else {
+        setSession(result.session)
+        setPendingContexts([])
+      }
+    } catch (err) {
+      setAuthError(describeError(err))
+    } finally {
+      setKeycloakLoading(false)
+    }
+  }
+
+  async function handleSelectContext(membershipId: string) {
+    setAuthError('')
+    setKeycloakLoading(true)
+    try {
+      const result = await SelectKeycloakContext(membershipId)
+      setSession(result)
+      setPendingContexts([])
+    } catch (err) {
+      setAuthError(describeError(err))
+    } finally {
+      setKeycloakLoading(false)
+    }
+  }
+
   async function handleLogout() {
     await Logout()
     setSession(null)
+    setPendingContexts([])
     setSelectedCheck(null)
     setConfirmedOrders([])
     setPendingLines([])
@@ -278,7 +331,25 @@ function App() {
   }
 
   if (!session?.authenticated) {
-    return <LoginScreen onLogin={handleLogin} errorMessage={authError} />
+    if (pendingContexts.length > 0) {
+      return (
+        <ContextPicker
+          contexts={pendingContexts}
+          onSelect={handleSelectContext}
+          errorMessage={authError}
+          loading={keycloakLoading}
+        />
+      )
+    }
+    return (
+      <LoginScreen
+        onDevLogin={handleDevLogin}
+        onKeycloakLogin={handleKeycloakLogin}
+        devLoginEnabled={devLoginEnabled}
+        errorMessage={authError}
+        keycloakLoading={keycloakLoading}
+      />
+    )
   }
 
   return (

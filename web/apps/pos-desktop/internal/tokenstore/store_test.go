@@ -90,3 +90,69 @@ func TestFileStore_LoadMissingFileReturnsErrNoToken(t *testing.T) {
 		t.Fatalf("got %v, want ErrNoToken", err)
 	}
 }
+
+// TestNewKeycloak_UsesDistinctAccountFromNew guards the regression this
+// second store instance exists to prevent: a dev-login session and a
+// Keycloak session must never overwrite each other's keychain entry, since
+// both stores share the same service name (see store.go's service const).
+func TestNewKeycloak_UsesDistinctAccountFromNew(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	sessionStore := New(dir, nil)
+	keycloakStore := NewKeycloak(dir, nil)
+
+	if err := sessionStore.Save("dev-login-ctx-token"); err != nil {
+		t.Fatalf("sessionStore.Save: %v", err)
+	}
+	if err := keycloakStore.Save(`{"refresh_token":"rt","membership_id":"m1"}`); err != nil {
+		t.Fatalf("keycloakStore.Save: %v", err)
+	}
+
+	gotSession, err := sessionStore.Load()
+	if err != nil {
+		t.Fatalf("sessionStore.Load: %v", err)
+	}
+	if gotSession != "dev-login-ctx-token" {
+		t.Fatalf("sessionStore.Load = %q, want unaffected by keycloakStore.Save", gotSession)
+	}
+
+	gotKeycloak, err := keycloakStore.Load()
+	if err != nil {
+		t.Fatalf("keycloakStore.Load: %v", err)
+	}
+	if gotKeycloak != `{"refresh_token":"rt","membership_id":"m1"}` {
+		t.Fatalf("keycloakStore.Load = %q, unexpected", gotKeycloak)
+	}
+
+	if err := keycloakStore.Clear(); err != nil {
+		t.Fatalf("keycloakStore.Clear: %v", err)
+	}
+	if _, err := keycloakStore.Load(); !errors.Is(err, ErrNoToken) {
+		t.Fatalf("keycloakStore.Load after Clear: got %v, want ErrNoToken", err)
+	}
+	// Clearing the keycloak store must not touch the session store.
+	if gotSession, err := sessionStore.Load(); err != nil || gotSession != "dev-login-ctx-token" {
+		t.Fatalf("sessionStore affected by keycloakStore.Clear: token=%q err=%v", gotSession, err)
+	}
+}
+
+func TestNewKeycloak_FileFallbackUsesDistinctFilename(t *testing.T) {
+	keyring.MockInitWithError(errors.New("no secret service on this host"))
+
+	dir := t.TempDir()
+	s := NewKeycloak(dir, func(string, ...any) {})
+
+	if _, ok := s.(*fileStore); !ok {
+		t.Fatalf("expected fileStore fallback, got %T", s)
+	}
+	if err := s.Save("blob"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keycloak-refresh.token")); err != nil {
+		t.Fatalf("stat keycloak-refresh.token: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "session.token")); !os.IsNotExist(err) {
+		t.Fatalf("session.token should not be created by NewKeycloak, stat err = %v", err)
+	}
+}

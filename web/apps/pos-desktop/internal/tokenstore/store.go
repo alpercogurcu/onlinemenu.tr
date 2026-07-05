@@ -18,18 +18,24 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-// service and user identify the credential entry in the OS keychain. A
-// single POS station holds one active session at a time, so a fixed
-// account name is sufficient.
+// service identifies this app's credential entries in the OS keychain.
+// Two distinct accounts live under it — sessionAccount for the dev-login
+// CTX token (New) and keycloakAccount for the Keycloak refresh-token +
+// membership-id blob (NewKeycloak, see internal/keycloakauth) — so the two
+// login flows' keychain entries never collide. A single POS station holds
+// at most one active session per flow at a time, so fixed account names
+// are sufficient.
 const (
-	service = "onlinemenu.tr-pos-desktop"
-	account = "session-token"
+	service        = "onlinemenu.tr-pos-desktop"
+	sessionAccount = "session-token"
 )
 
 // ErrNoToken is returned by Load when no token has been persisted yet.
 var ErrNoToken = errors.New("tokenstore: no token stored")
 
-// Store persists and retrieves the current session token.
+// Store persists and retrieves a single opaque string value (the dev-login
+// CTX token for New, or a JSON-encoded keycloakauth.SessionState for
+// NewKeycloak).
 type Store interface {
 	Save(token string) error
 	Load() (string, error)
@@ -43,34 +49,55 @@ type Store interface {
 type Warn func(format string, args ...any)
 
 // New selects the OS keychain when available, otherwise falls back to a
-// 0600 file under dataDir. Availability is probed with a real round-trip
-// (write, read, delete) rather than trusting a static OS check, since
-// keychain daemons can be installed but non-functional (e.g. locked,
-// missing Secret Service on Linux).
+// 0600 file under dataDir, for the dev-login flow's session token.
+// Availability is probed with a real round-trip (write, read, delete)
+// rather than trusting a static OS check, since keychain daemons can be
+// installed but non-functional (e.g. locked, missing Secret Service on
+// Linux).
 func New(dataDir string, warn Warn) Store {
+	return newStore(dataDir, sessionAccount, "session.token", warn)
+}
+
+// keycloakAccount and its file fallback name are deliberately distinct from
+// sessionAccount/"session.token" above.
+const keycloakAccount = "keycloak-refresh"
+
+// NewKeycloak is New's counterpart for the Keycloak login flow: it persists
+// only a keycloakauth.SessionState blob (refresh_token + membership_id),
+// never the dev-login CTX token, under its own keychain account / fallback
+// file so the two flows never overwrite each other.
+func NewKeycloak(dataDir string, warn Warn) Store {
+	return newStore(dataDir, keycloakAccount, "keycloak-refresh.token", warn)
+}
+
+func newStore(dataDir, account, fallbackFilename string, warn Warn) Store {
 	if warn == nil {
 		warn = func(string, ...any) {}
 	}
 
-	ks := &keyringStore{}
+	ks := &keyringStore{account: account}
 	if err := ks.probe(); err != nil {
 		warn("tokenstore: OS keychain unavailable (%v); falling back to encrypted-at-rest-less 0600 file store at %s — this is a degraded security mode", err, dataDir)
-		return &fileStore{path: filepath.Join(dataDir, "session.token")}
+		return &fileStore{path: filepath.Join(dataDir, fallbackFilename)}
 	}
 	return ks
 }
 
-// keyringStore stores the token in the OS-native credential manager.
-type keyringStore struct{}
+// keyringStore stores the token in the OS-native credential manager, under
+// its own account name (see New/NewKeycloak).
+type keyringStore struct {
+	account string
+}
 
 func (s *keyringStore) probe() error {
 	const probeValue = "probe"
-	if err := keyring.Set(service, account+"-probe", probeValue); err != nil {
+	probeAccount := s.account + "-probe"
+	if err := keyring.Set(service, probeAccount, probeValue); err != nil {
 		return fmt.Errorf("keyring probe set: %w", err)
 	}
-	defer func() { _ = keyring.Delete(service, account+"-probe") }()
+	defer func() { _ = keyring.Delete(service, probeAccount) }()
 
-	got, err := keyring.Get(service, account+"-probe")
+	got, err := keyring.Get(service, probeAccount)
 	if err != nil {
 		return fmt.Errorf("keyring probe get: %w", err)
 	}
@@ -81,14 +108,14 @@ func (s *keyringStore) probe() error {
 }
 
 func (s *keyringStore) Save(token string) error {
-	if err := keyring.Set(service, account, token); err != nil {
+	if err := keyring.Set(service, s.account, token); err != nil {
 		return fmt.Errorf("tokenstore: keyring save: %w", err)
 	}
 	return nil
 }
 
 func (s *keyringStore) Load() (string, error) {
-	token, err := keyring.Get(service, account)
+	token, err := keyring.Get(service, s.account)
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return "", ErrNoToken
@@ -99,7 +126,7 @@ func (s *keyringStore) Load() (string, error) {
 }
 
 func (s *keyringStore) Clear() error {
-	if err := keyring.Delete(service, account); err != nil {
+	if err := keyring.Delete(service, s.account); err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return nil
 		}

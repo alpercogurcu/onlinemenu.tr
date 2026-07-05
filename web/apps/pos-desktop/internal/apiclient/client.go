@@ -75,6 +75,18 @@ type Client struct {
 	// every call. tokenstore remains the durable source of truth across
 	// restarts.
 	currentToken string
+
+	// recoveryMu guards the fields below, which together implement a
+	// single-flighted CTX-401 recovery hook (see SetUnauthorizedRecovery
+	// and recoverToken). Deliberately a separate mutex from tokenMu: the
+	// recovery function itself calls back into Client (SetSessionToken via
+	// its caller, or doWithBearer for the actual HTTP round-trip), so
+	// recoveryMu must never be held while invoking it — see recoverToken.
+	recoveryMu       sync.Mutex
+	recovery         func(ctx context.Context) (string, error)
+	recoveryInFlight chan struct{}
+	lastRecoveryTok  string
+	lastRecoveryErr  error
 }
 
 // New constructs a Client bound to baseURL, persisting sessions via store.
@@ -109,6 +121,91 @@ func (c *Client) setToken(token string) {
 // IsAuthenticated reports whether a session token is currently held.
 func (c *Client) IsAuthenticated() bool {
 	return c.token() != ""
+}
+
+// SetSessionToken installs tok as the current in-memory CTX token WITHOUT
+// persisting it to the token store. This is how the Keycloak login flow
+// (main.App) installs a context token: per pos-desktop/README.md
+// ("Keychain içeriği"), a Keycloak-derived CTX/access token must never be
+// written to the keychain — only the Keycloak refresh token is (by
+// main.App, to its own tokenstore.Store instance, see
+// tokenstore.NewKeycloak). This is unlike Login, which persists to c.tokens
+// because that is the dev-login flow's only durability mechanism.
+func (c *Client) SetSessionToken(tok string) {
+	c.setToken(tok)
+}
+
+// SetUnauthorizedRecovery installs fn as the hook Client calls, at most
+// once per do/doWithHeaders call and single-flighted across concurrent
+// callers, when an authenticated request receives a 401 — see
+// recoverToken. main.App wires this in after a Keycloak-derived context
+// selection (LoginWithKeycloak, TryRestoreSession) to re-derive a fresh CTX
+// token from the still-valid or silently-refreshed Keycloak session,
+// without involving the frontend. Never wired for the dev-login flow: a
+// dev-login 401 propagates unchanged, exactly as before this feature.
+//
+// fn must not itself route through do/doWithHeaders (that would recurse
+// into this same recovery path) — it may only use doWithBearer, which
+// bypasses recovery entirely. See FetchKeycloakContexts/SelectKeycloakContext.
+func (c *Client) SetUnauthorizedRecovery(fn func(ctx context.Context) (string, error)) {
+	c.recoveryMu.Lock()
+	defer c.recoveryMu.Unlock()
+	c.recovery = fn
+}
+
+// ClearUnauthorizedRecovery removes any recovery hook — called by
+// main.App.Logout so a subsequent dev-login session never attempts
+// Keycloak recovery on a 401.
+func (c *Client) ClearUnauthorizedRecovery() {
+	c.SetUnauthorizedRecovery(nil)
+}
+
+func (c *Client) recoveryEnabled() bool {
+	c.recoveryMu.Lock()
+	defer c.recoveryMu.Unlock()
+	return c.recovery != nil
+}
+
+// recoverToken single-flights calls to the installed recovery hook: N
+// concurrent 401s (Wails invokes each bound method call on its own
+// goroutine — see Client's doc comment) trigger exactly one recovery
+// attempt, and all callers share its result. recoveryMu is released before
+// invoking the hook (fn), since fn re-enters this Client (via
+// doWithBearer) — holding recoveryMu across that call would deadlock any
+// concurrent caller that lands in the "already in flight" branch.
+func (c *Client) recoverToken(ctx context.Context) (string, error) {
+	c.recoveryMu.Lock()
+	if c.recoveryInFlight != nil {
+		wait := c.recoveryInFlight
+		c.recoveryMu.Unlock()
+		<-wait
+		c.recoveryMu.Lock()
+		tok, err := c.lastRecoveryTok, c.lastRecoveryErr
+		c.recoveryMu.Unlock()
+		return tok, err
+	}
+	fn := c.recovery
+	if fn == nil {
+		c.recoveryMu.Unlock()
+		return "", errors.New("apiclient: no recovery hook configured")
+	}
+	done := make(chan struct{})
+	c.recoveryInFlight = done
+	c.recoveryMu.Unlock()
+
+	tok, err := fn(ctx)
+
+	c.recoveryMu.Lock()
+	c.lastRecoveryTok, c.lastRecoveryErr = tok, err
+	c.recoveryInFlight = nil
+	c.recoveryMu.Unlock()
+	close(done)
+
+	if err != nil {
+		return "", err
+	}
+	c.setToken(tok)
+	return tok, nil
 }
 
 // Logout clears the in-memory and persisted session token.
@@ -242,14 +339,26 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 }
 
 // doWithHeaders is do plus caller-supplied extra headers (currently only
-// used to attach Idempotency-Key — see doIdempotent).
+// used to attach Idempotency-Key — see doIdempotent). On a 401, if an
+// unauthorized-recovery hook is installed (see SetUnauthorizedRecovery),
+// it is invoked exactly once and — on success — the identical request
+// (same body bytes, same headers, including Idempotency-Key) is retried
+// exactly once with the recovered token.
 func (c *Client) doWithHeaders(ctx context.Context, method, path string, body, out any, headers map[string]string) error {
-	var bodyReader io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		var err error
+		encoded, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encode request body: %w", err)
 		}
+	}
+	return c.doWithHeadersAttempt(ctx, method, path, encoded, out, headers, false)
+}
+
+func (c *Client) doWithHeadersAttempt(ctx context.Context, method, path string, encoded []byte, out any, headers map[string]string, retried bool) error {
+	var bodyReader io.Reader
+	if encoded != nil {
 		bodyReader = bytes.NewReader(encoded)
 	}
 
@@ -266,6 +375,69 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, body, o
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized && !retried && c.recoveryEnabled() {
+		if _, recErr := c.recoverToken(ctx); recErr == nil {
+			return c.doWithHeadersAttempt(ctx, method, path, encoded, out, headers, true)
+		}
+		// Recovery unavailable or failed: fall through and report the
+		// original 401 below, exactly as if no recovery hook existed.
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
+	}
+
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}
+
+// doWithBearer performs a pre-context HTTP request authenticated with an
+// explicit bearer token (the Keycloak access token) instead of the
+// client's own CTX token — used only by FetchKeycloakContexts and
+// SelectKeycloakContext, the two backend calls the Keycloak login sequence
+// makes before a CTX token exists yet (see
+// backend/internal/modules/identity/http/me_handler.go's
+// IsPreContext()-gated handlers).
+//
+// Deliberately bypasses the 401-recovery path entirely (unlike
+// doWithHeaders/doWithHeadersAttempt): a 401 here calling back into the
+// recovery hook, which itself calls SelectKeycloakContext, would recurse
+// (auth/context -> recoverKeycloakContext -> SelectKeycloakContext ->
+// auth/context -> ...). A 401 on a pre-context call means the Keycloak
+// access token itself is invalid/expired — the caller (main.App) is
+// already the one responsible for refreshing that token before calling
+// here, not this method.
+func (c *Client) doWithBearer(ctx context.Context, method, path string, body, out any, bearerToken string) error {
+	var bodyReader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

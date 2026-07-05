@@ -78,3 +78,7 @@ Restore edilirse silme sertifikası ile birlikte yeniden silinir (re-apply delet
 - **Anında hard delete:** Reddedildi. 90 gün grace period ticari standart + yanlışlık geri dönüşü.
 - **ON DELETE CASCADE:** Reddedildi. Loglanamaz, denetlenemez.
 - **Her şeyi anonymize et, silme:** Değerlendirildi. "Silme sertifikası" yetersiz kalır KVKK ispat için; hard delete + sertifika birlikte.
+
+## Bağımlılık Notu (2026-07-05, task #14)
+
+Identity (roles/memberships/role_permissions/role_field_policies) ve hr-core (employee_profiles) tablolarındaki cross-module FK'ler modül izolasyonu gereği kaldırıldı (identity/000011, hr-core/000002). Eski `ON DELETE CASCADE`/`RESTRICT` davranışları artık DB seviyesinde yok — offboarding implementasyonu tenant verisi temizliğini modül modül, public interface üzerinden açıkça yapmak zorunda (bu ADR'nin "CASCADE reddedildi" kararıyla zaten uyumlu; artık şema da bu kararla tutarlı).

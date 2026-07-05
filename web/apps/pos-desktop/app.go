@@ -121,10 +121,13 @@ type hardwareEventDTO struct {
 
 // SessionDTO is the shape returned to the frontend by Login/WhoAmI. It
 // intentionally carries no token — the token never leaves the Go process
-// (see internal/apiclient doc comment).
+// (see internal/apiclient doc comment). BranchID is empty for a chain-wide
+// staff session (see apiclient.Client.claims) — the UI must prompt for a
+// branch/table selection rather than assume one.
 type SessionDTO struct {
 	Authenticated bool   `json:"authenticated"`
 	TenantID      string `json:"tenant_id,omitempty"`
+	BranchID      string `json:"branch_id,omitempty"`
 	UserID        string `json:"user_id,omitempty"`
 	FullName      string `json:"full_name,omitempty"`
 	Email         string `json:"email,omitempty"`
@@ -142,6 +145,7 @@ func (a *App) Login(email string) (SessionDTO, error) {
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,
+		BranchID:      session.BranchID,
 		UserID:        session.UserID,
 		FullName:      session.FullName,
 		Email:         session.Email,
@@ -166,6 +170,8 @@ func (a *App) WhoAmI() (SessionDTO, error) {
 	}
 	return SessionDTO{
 		Authenticated: true,
+		TenantID:      session.TenantID,
+		BranchID:      session.BranchID,
 		UserID:        session.UserID,
 		FullName:      session.FullName,
 		Email:         session.Email,

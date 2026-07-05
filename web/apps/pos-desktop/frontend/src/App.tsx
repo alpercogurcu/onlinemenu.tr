@@ -1,14 +1,32 @@
-import { useEffect, useState } from 'react'
-import { Login, Logout, Ping, WhoAmI } from '../wailsjs/go/main/App'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  CloseCheck,
+  GetCheck,
+  ListCategories,
+  ListCheckOrders,
+  ListOpenChecks,
+  Login,
+  Logout,
+  OpenCheck,
+  PlaceOrder,
+  RegisterCashPayment,
+  WhoAmI,
+} from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { main } from '../wailsjs/go/models'
-
-// This screen is a walking-skeleton placeholder, not a UI-wave deliverable.
-// It exists only to prove the binding pipeline end to end:
-//   webview -> Wails binding -> Go APIClient -> backend.
-// The webview NEVER performs HTTP itself — every action below calls a Go
-// method exposed via `Bind` in main.go. See README.md "Tek token-refresh
-// otoritesi" for why this boundary is load-bearing, not stylistic.
+import { CheckRail } from './components/CheckRail'
+import { ProductGrid } from './components/ProductGrid'
+import { Receipt } from './components/Receipt'
+import { LoginScreen } from './components/LoginScreen'
+import {
+  addProductToPending,
+  confirmedOrdersTotal,
+  pendingTotal as sumPendingTotal,
+  removePendingLine,
+  toOrderItemInputs,
+  type PendingLine,
+} from './lib/cart'
+import { describeError } from './lib/errors'
 
 type PrinterEvent = {
   kind: string
@@ -18,88 +36,189 @@ type PrinterEvent = {
 
 function App() {
   const [session, setSession] = useState<main.SessionDTO | null>(null)
-  const [email, setEmail] = useState('cashier@example.com')
-  const [pingStatus, setPingStatus] = useState<'idle' | 'ok' | 'error'>('idle')
-  const [message, setMessage] = useState('')
+  const [authChecked, setAuthChecked] = useState(false)
+  const [authError, setAuthError] = useState('')
+
+  const [categories, setCategories] = useState<main.CategoryDTO[]>([])
+  const [openChecks, setOpenChecks] = useState<main.CheckDTO[]>([])
+  const [selectedCheck, setSelectedCheck] = useState<main.CheckDTO | null>(null)
+  const [confirmedOrders, setConfirmedOrders] = useState<main.OrderDTO[]>([])
+  const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
+  const [paidChecks, setPaidChecks] = useState<Record<string, boolean>>({})
+
+  const [sendingOrder, setSendingOrder] = useState(false)
+  const [receiptError, setReceiptError] = useState('')
+
   const [printer, setPrinter] = useState<PrinterEvent | null>(null)
 
-  useEffect(() => {
-    WhoAmI().then(setSession).catch((err) => setMessage(String(err)))
+  const canOpenCheck = Boolean(session?.branch_id)
 
-    const unsubscribe = EventsOn('hardware:printer', (evt: PrinterEvent) => {
-      setPrinter(evt)
-    })
+  const refreshOpenChecks = useCallback(() => {
+    ListOpenChecks()
+      .then(setOpenChecks)
+      .catch((err) => setReceiptError(describeError(err)))
+  }, [])
+
+  useEffect(() => {
+    WhoAmI()
+      .then((s) => setSession(s.authenticated ? s : null))
+      .catch(() => setSession(null))
+      .finally(() => setAuthChecked(true))
+
+    const unsubscribe = EventsOn('hardware:printer', (evt: PrinterEvent) => setPrinter(evt))
     return () => unsubscribe()
   }, [])
 
-  async function handlePing() {
-    try {
-      await Ping()
-      setPingStatus('ok')
-    } catch (err) {
-      setPingStatus('error')
-      setMessage(String(err))
-    }
-  }
+  useEffect(() => {
+    if (!session?.authenticated) return
+    ListCategories()
+      .then(setCategories)
+      .catch((err) => setReceiptError(describeError(err)))
+    refreshOpenChecks()
+  }, [session, refreshOpenChecks])
 
-  async function handleLogin() {
+  async function handleLogin(email: string) {
     try {
       const result = await Login(email)
       setSession(result)
-      setMessage('')
+      setAuthError('')
     } catch (err) {
-      setMessage(String(err))
+      setAuthError(describeError(err))
     }
   }
 
   async function handleLogout() {
     await Logout()
     setSession(null)
+    setSelectedCheck(null)
+    setConfirmedOrders([])
+    setPendingLines([])
+    setOpenChecks([])
+  }
+
+  async function handleSelectCheck(checkId: string) {
+    setReceiptError('')
+    setPendingLines([])
+    try {
+      const [check, orders] = await Promise.all([GetCheck(checkId), ListCheckOrders(checkId)])
+      setSelectedCheck(check)
+      setConfirmedOrders(orders)
+    } catch (err) {
+      setReceiptError(describeError(err))
+    }
+  }
+
+  async function handleOpenCheck(tableLabel: string) {
+    if (!session?.branch_id) return
+    try {
+      const check = await OpenCheck(session.branch_id, tableLabel, '')
+      refreshOpenChecks()
+      await handleSelectCheck(check.id)
+    } catch (err) {
+      setReceiptError(describeError(err))
+    }
+  }
+
+  function handleAddProduct(product: main.ProductDTO) {
+    if (!selectedCheck) return
+    setPendingLines((lines) => addProductToPending(lines, product))
+  }
+
+  function handleRemovePendingLine(clientId: string) {
+    setPendingLines((lines) => removePendingLine(lines, clientId))
+  }
+
+  async function handleSendOrder() {
+    if (!selectedCheck || !session?.branch_id || pendingLines.length === 0) return
+    setSendingOrder(true)
+    setReceiptError('')
+    try {
+      const order = await PlaceOrder(session.branch_id, selectedCheck.id, toOrderItemInputs(pendingLines))
+      setConfirmedOrders((orders) => [...orders, order])
+      setPendingLines([])
+    } catch (err) {
+      setReceiptError(describeError(err))
+    } finally {
+      setSendingOrder(false)
+    }
+  }
+
+  async function handleRegisterPayment(amountTotal: number) {
+    if (!selectedCheck || !session?.branch_id) return
+    setReceiptError('')
+    try {
+      await RegisterCashPayment(session.branch_id, selectedCheck.id, amountTotal)
+      setPaidChecks((paid) => ({ ...paid, [selectedCheck.id]: true }))
+    } catch (err) {
+      setReceiptError(describeError(err))
+      throw err
+    }
+  }
+
+  async function handleCloseCheck() {
+    if (!selectedCheck) return
+    setReceiptError('')
+    try {
+      await CloseCheck(selectedCheck.id)
+      setSelectedCheck(null)
+      setConfirmedOrders([])
+      setPendingLines([])
+      refreshOpenChecks()
+    } catch (err) {
+      setReceiptError(describeError(err))
+    }
+  }
+
+  if (!authChecked) {
+    return <div className="flex min-h-screen items-center justify-center bg-surface text-ink-dim">Yükleniyor…</div>
+  }
+
+  if (!session?.authenticated) {
+    return <LoginScreen onLogin={handleLogin} errorMessage={authError} />
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-8">
-      <h1 className="text-xl font-semibold">onlinemenu.tr POS — iskelet</h1>
+    <div className="flex h-screen flex-col bg-surface text-ink">
+      <header className="flex min-h-12 shrink-0 items-center justify-between border-b border-line px-4 text-sm">
+        <span>
+          {session.full_name} ({session.email})
+        </span>
+        <div className="flex items-center gap-4">
+          <span className="text-ink-dim">
+            Yazıcı: {printer ? `${printer.status}${printer.error ? ` — ${printer.error}` : ''}` : 'bekleniyor…'}
+          </span>
+          <button type="button" onClick={handleLogout} className="min-h-8 rounded px-2 text-ink-dim">
+            Çıkış
+          </button>
+        </div>
+      </header>
 
-      <section className="w-full max-w-sm space-y-2 rounded border border-white/20 p-4">
-        <h2 className="font-medium">Backend Bağlantısı</h2>
-        <button className="rounded bg-white/10 px-3 py-1" onClick={handlePing}>
-          Ping /healthz
-        </button>
-        <p>durum: {pingStatus}</p>
-      </section>
+      <div className="flex flex-1 overflow-hidden">
+        <CheckRail
+          checks={openChecks}
+          selectedCheckId={selectedCheck?.id ?? null}
+          onSelect={handleSelectCheck}
+          onOpenCheck={handleOpenCheck}
+          canOpenCheck={canOpenCheck}
+        />
 
-      <section className="w-full max-w-sm space-y-2 rounded border border-white/20 p-4">
-        <h2 className="font-medium">Oturum (dev-login)</h2>
-        {session?.authenticated ? (
-          <>
-            <p>{session.full_name} ({session.email})</p>
-            <button className="rounded bg-white/10 px-3 py-1" onClick={handleLogout}>
-              Çıkış
-            </button>
-          </>
-        ) : (
-          <>
-            <input
-              className="w-full rounded bg-white/10 px-2 py-1 text-white"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <button className="rounded bg-white/10 px-3 py-1" onClick={handleLogin}>
-              Giriş yap
-            </button>
-          </>
-        )}
-      </section>
+        <ProductGrid categories={categories} disabled={!selectedCheck} onAddProduct={handleAddProduct} />
 
-      <section className="w-full max-w-sm space-y-2 rounded border border-white/20 p-4">
-        <h2 className="font-medium">Donanım (mock printer)</h2>
-        <p>
-          {printer ? `${printer.kind}: ${printer.status}${printer.error ? ` (${printer.error})` : ''}` : 'olay bekleniyor…'}
-        </p>
-      </section>
-
-      {message && <p className="text-red-400">{message}</p>}
+        <Receipt
+          tableLabel={selectedCheck?.table_label ?? ''}
+          confirmedOrders={confirmedOrders}
+          pendingLines={pendingLines}
+          onRemovePendingLine={handleRemovePendingLine}
+          onSendOrder={handleSendOrder}
+          sendingOrder={sendingOrder}
+          confirmedTotal={confirmedOrdersTotal(confirmedOrders)}
+          pendingTotal={sumPendingTotal(pendingLines)}
+          hasPaid={selectedCheck ? Boolean(paidChecks[selectedCheck.id]) : false}
+          onRegisterPayment={handleRegisterPayment}
+          onCloseCheck={handleCloseCheck}
+          errorMessage={receiptError}
+        />
+      </div>
     </div>
   )
 }

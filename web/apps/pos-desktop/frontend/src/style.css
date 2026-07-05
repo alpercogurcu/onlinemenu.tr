@@ -1,16 +1,121 @@
 @import "tailwindcss";
 
+/* Self-hosted font files (Wails runs fully offline — no CDN, see
+ * README.md "pnpm workspace notu") are imported from main.tsx, NOT via
+ * @import here: Tailwind v4's CSS processor (lightningcss, via
+ * @tailwindcss/postcss) inlines @import'd stylesheets without rebasing
+ * their relative url(./files/...woff2) references, so pulling the
+ * @fontsource CSS in through this file silently produced 404s for every
+ * font at runtime (verified: `pnpm build` emitted zero .woff2 files under
+ * web-build/). Importing them as JS side-effect imports lets Vite's normal
+ * asset pipeline resolve, hash and copy the font files correctly. */
+
 /*
- * This is a foundation-only skeleton (see README.md). The UI wave owns
- * real POS screens, design tokens and shadcn component wiring; this file
- * intentionally stays minimal.
+ * Design tokens for the kasa (cashier) flow — see the frontend-design plan
+ * this app implements: grafit/panel/amber/teal palette, red reserved
+ * exclusively for void/cancel actions (meaning-preserving — no other UI
+ * element may use it).
  */
+@theme {
+  --color-surface: #14161a;
+  --color-panel: #1f242b;
+  --color-line: #333a44;
+  --color-ink: #edeae3;
+  --color-ink-dim: #9a9d9a;
+  --color-amber: #ffb02e;
+  --color-amber-ink: #14161a;
+  --color-teal: #2fbf9b;
+  --color-danger: #e5484d;
+
+  --font-display: "Barlow Semi Condensed", sans-serif;
+  --font-body: "Inter Variable", "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
 html {
-  background-color: rgb(27 38 54);
-  color: white;
+  background-color: var(--color-surface);
+  color: var(--color-ink);
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-body);
+  font-weight: 450;
+}
+
+/* Every place a number appears — money, quantities, timers — must use
+ * tabular figures so columns of digits stay aligned (design plan: "Sayı
+ * geçen HER yerde font-variant-numeric: tabular-nums"). */
+.tabular-nums,
+.money,
+.qty {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visible focus ring everywhere (WCAG AA) — touchscreen-first but this app
+ * is still keyboard/switch-device operable. */
+:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* --- Thermal receipt torn-edge (signature element of the right rail) --- */
+.receipt-tear {
+  --tooth: 10px;
+  height: var(--tooth);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--color-surface) 0 calc(var(--tooth) / 2),
+    var(--color-panel) calc(var(--tooth) / 2) var(--tooth)
+  );
+  mask: repeating-linear-gradient(
+    90deg,
+    black 0 calc(var(--tooth) * 0.9),
+    transparent calc(var(--tooth) * 0.9) var(--tooth)
+  );
+}
+
+/* --- Motion (exactly two, per design plan; both disabled under
+ * prefers-reduced-motion) --- */
+@keyframes receipt-line-in {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.receipt-line-enter {
+  animation: receipt-line-in 100ms ease-out;
+}
+
+@keyframes change-due-pulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.change-due-pulse {
+  animation: change-due-pulse 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .receipt-line-enter,
+  .change-due-pulse {
+    animation: none !important;
+  }
 }

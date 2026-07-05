@@ -264,7 +264,7 @@ func TestDispatchTable_PublishSuccess_MarksProcessed(t *testing.T) {
 	pub := &fakePublisher{}
 	d := newTestDispatcher(pub, Config{BatchSize: 10, MaxRetries: 3})
 
-	err := d.dispatchTable(ctx, tableSpec{table: "pos_outbox", module: "pos"})
+	err := d.dispatchTable(ctx, TableSpec{Table: "pos_outbox", Module: "pos"})
 	require.NoError(t, err)
 
 	processed, claimed, retryCount, isDead := rowState(t, ctx, eventID)
@@ -294,7 +294,7 @@ func TestDispatchTable_BillingOutbox_PublishSuccess(t *testing.T) {
 	pub := &fakePublisher{}
 	d := newTestDispatcher(pub, Config{BatchSize: 10, MaxRetries: 3})
 
-	require.NoError(t, d.dispatchTable(ctx, tableSpec{table: "billing_outbox", module: "billing"}))
+	require.NoError(t, d.dispatchTable(ctx, TableSpec{Table: "billing_outbox", Module: "billing"}))
 
 	var processedAt *time.Time
 	require.NoError(t, sharedPool.QueryRow(ctx,
@@ -312,7 +312,7 @@ func TestDispatchTable_PublishFailure_ReleasesClaimAndSchedulesRetry(t *testing.
 	pub := &fakePublisher{fail: errors.New("nats: no responders")}
 	d := newTestDispatcher(pub, Config{BatchSize: 10, MaxRetries: 3})
 
-	err := d.dispatchTable(ctx, tableSpec{table: "pos_outbox", module: "pos"})
+	err := d.dispatchTable(ctx, TableSpec{Table: "pos_outbox", Module: "pos"})
 	require.NoError(t, err, "dispatch cycle itself must not error on a publish failure")
 
 	processed, claimed, retryCount, isDead := rowState(t, ctx, eventID)
@@ -334,7 +334,7 @@ func TestDispatchTable_ExceedsMaxRetries_MarksDead(t *testing.T) {
 	pub := &fakePublisher{fail: errors.New("permanent failure")}
 	d := newTestDispatcher(pub, Config{BatchSize: 10, MaxRetries: 3})
 
-	err = d.dispatchTable(ctx, tableSpec{table: "pos_outbox", module: "pos"})
+	err = d.dispatchTable(ctx, TableSpec{Table: "pos_outbox", Module: "pos"})
 	require.NoError(t, err)
 
 	processed, _, retryCount, isDead := rowState(t, ctx, eventID)
@@ -352,7 +352,7 @@ func TestDispatchTable_PublishTimeout_DoesNotBlockDispatchCycle(t *testing.T) {
 	d := newTestDispatcher(pub, Config{BatchSize: 10, MaxRetries: 3, PublishTimeout: 20 * time.Millisecond})
 
 	start := time.Now()
-	err := d.dispatchTable(ctx, tableSpec{table: "pos_outbox", module: "pos"})
+	err := d.dispatchTable(ctx, TableSpec{Table: "pos_outbox", Module: "pos"})
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	assert.Less(t, elapsed, 200*time.Millisecond, "publish timeout must cut the slow publish short")

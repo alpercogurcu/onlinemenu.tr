@@ -6,6 +6,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"go.uber.org/fx"
@@ -43,6 +45,13 @@ type Config struct {
 	// outside the claim transaction, so a slow/unavailable NATS server must not
 	// hold a claimed row (or a DB connection) indefinitely. Defaults to 5s.
 	PublishTimeout time.Duration
+	// Tables lists the outbox tables this dispatcher instance serves. Each
+	// deployment group (cmd/api, cmd/api-finance, ...) must list only the
+	// tables whose owning modules it actually loads and migrates — a static
+	// static all-module list produced "relation does not exist" ERROR spam every poll
+	// cycle for tables that never existed in that binary's database.
+	// Empty means DefaultTables (pos + payment, the cmd/api monolith set).
+	Tables []TableSpec
 	// StaleClaimAfter is how long a row may stay claimed without being resolved
 	// (processed or retried) before another dispatcher instance may reclaim it.
 	// This bounds recovery time after a dispatcher crash between claim and
@@ -50,16 +59,17 @@ type Config struct {
 	StaleClaimAfter time.Duration
 }
 
-// tableSpec describes one outbox table and its NATS subject namespace.
-type tableSpec struct {
-	table  string
-	module string // used to construct NATS subject: "<module>.<eventType>.v1"
+// TableSpec describes one outbox table and its NATS subject namespace.
+type TableSpec struct {
+	Table  string
+	Module string // used to construct NATS subject: "<module>.<eventType>.v1"
 }
 
-var tables = []tableSpec{
-	{table: "pos_outbox", module: "pos"},
-	{table: "payment_outbox", module: "payment"},
-	{table: "billing_outbox", module: "billing"},
+// DefaultTables is the cmd/api monolith set. cmd/api-finance should pass
+// {billing_outbox billing}; see Config.Tables.
+var DefaultTables = []TableSpec{
+	{Table: "pos_outbox", Module: "pos"},
+	{Table: "payment_outbox", Module: "payment"},
 }
 
 // outboxRow is a row fetched from any outbox table.
@@ -83,6 +93,12 @@ type Dispatcher struct {
 	done            chan struct{}
 	publishTimeout  time.Duration
 	staleClaimAfter time.Duration
+
+	// disabledTables marks tables whose relation does not exist in this
+	// binary's database (SQLSTATE 42P01) — e.g. a deployment that migrates
+	// only a subset of modules. Written and read only from the run loop's
+	// single goroutine; disabling replaces per-poll ERROR spam with one WARN.
+	disabledTables map[string]bool
 }
 
 // Params groups fx-injected dependencies for the Dispatcher.
@@ -190,10 +206,10 @@ func (d *Dispatcher) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, t := range tables {
+			for _, t := range d.tables() {
 				if err := d.dispatchTable(ctx, t); err != nil {
 					d.logger.Error("outbox: dispatch cycle failed",
-						zap.String("table", t.table),
+						zap.String("table", t.Table),
 						zap.Error(err),
 					)
 				}
@@ -211,10 +227,30 @@ func (d *Dispatcher) run(ctx context.Context) {
 // dispatcher's small connection pool (MaxConns=4) and stall the dispatcher
 // entirely. Publishing is now bounded by PublishTimeout and never blocks a
 // database connection.
-func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
-	batch, err := d.claimBatch(ctx, t.table)
+func (d *Dispatcher) tables() []TableSpec {
+	if len(d.cfg.Tables) > 0 {
+		return d.cfg.Tables
+	}
+	return DefaultTables
+}
+
+func (d *Dispatcher) dispatchTable(ctx context.Context, t TableSpec) error {
+	if d.disabledTables[t.Table] {
+		return nil
+	}
+	batch, err := d.claimBatch(ctx, t.Table)
 	if err != nil {
-		return fmt.Errorf("outbox: claim batch for %s: %w", t.table, err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			if d.disabledTables == nil {
+				d.disabledTables = make(map[string]bool)
+			}
+			d.disabledTables[t.Table] = true
+			d.logger.Warn("outbox: table missing in this deployment, disabling",
+				zap.String("table", t.Table))
+			return nil
+		}
+		return fmt.Errorf("outbox: claim batch for %s: %w", t.Table, err)
 	}
 	if len(batch) == 0 {
 		return nil
@@ -226,13 +262,13 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
 	)
 
 	for _, r := range batch {
-		subject := toSubject(t.module, r.eventType)
+		subject := toSubject(t.Module, r.eventType)
 		pubErr := d.publishWithTimeout(ctx, r.eventID, subject, r.payload)
 		if pubErr == nil {
 			successIDs = append(successIDs, r.eventID)
 		} else {
 			d.logger.Warn("outbox: publish failed",
-				zap.String("table", t.table),
+				zap.String("table", t.Table),
 				zap.Stringer("event_id", r.eventID),
 				zap.String("subject", subject),
 				zap.Error(pubErr),
@@ -246,13 +282,13 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t tableSpec) error {
 		maxRetries = 10
 	}
 
-	if err := d.applyResults(ctx, t.table, successIDs, failures, maxRetries); err != nil {
-		return fmt.Errorf("outbox: apply results for %s: %w", t.table, err)
+	if err := d.applyResults(ctx, t.Table, successIDs, failures, maxRetries); err != nil {
+		return fmt.Errorf("outbox: apply results for %s: %w", t.Table, err)
 	}
 
 	if len(successIDs) > 0 {
 		d.logger.Info("outbox: dispatched",
-			zap.String("table", t.table),
+			zap.String("table", t.Table),
 			zap.Int("count", len(successIDs)),
 		)
 	}

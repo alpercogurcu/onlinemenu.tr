@@ -416,6 +416,13 @@ func newOutboxConfig() outbox.Config {
 		PollInterval: 2 * time.Second,
 		BatchSize:    100,
 		MaxRetries:   10,
+		// The monolith serves every module's outbox; partially-migrated dev
+		// environments are handled by the dispatcher's missing-table disable.
+		Tables: []outbox.TableSpec{
+			{Table: "pos_outbox", Module: "pos"},
+			{Table: "payment_outbox", Module: "payment"},
+			{Table: "billing_outbox", Module: "billing"},
+		},
 	}
 }
 

@@ -1,3 +1,8 @@
 packages:
   - 'apps/*'
+  # pos-desktop is a Wails app: its Go module lives at apps/pos-desktop/ but
+  # the only package.json is in the nested frontend/ dir (Wails' standard
+  # layout embeds frontend/dist via //go:embed). `apps/*` does not match
+  # this nested path, so it must be listed explicitly.
+  - 'apps/pos-desktop/frontend'
   - 'packages/*'

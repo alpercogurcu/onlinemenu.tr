@@ -62,13 +62,37 @@ tasks:
     desc: "POS desktop dev (Wails)"
     dir: web/apps/pos-desktop
     cmds:
-      - wails dev
+      # CGO_LDFLAGS workaround: Wails' internal `-tags dev` build (used by
+      # `wails dev` for its devserver/live-reload asset path) references
+      # UTType without linking UniformTypeIdentifiers on newer macOS SDKs
+      # (reproduced on Xcode 16 / macOS 14.6.1 with Wails v2.11.0, including
+      # on an unmodified `wails init` template — not specific to this app).
+      # Harmless no-op on non-darwin hosts.
+      - |
+        if [ "$(go env GOOS)" = "darwin" ]; then
+          export CGO_LDFLAGS="-framework UniformTypeIdentifiers"
+        fi
+        wails dev
 
   pos:build:
     desc: "POS desktop production build"
     dir: web/apps/pos-desktop
     cmds:
       - wails build
+
+  pos:test:
+    desc: "POS desktop Go testleri (race + cover)"
+    dir: web/apps/pos-desktop
+    cmds:
+      - go build ./...
+      - go vet ./...
+      - go test -race -cover ./...
+
+  pos:generate:
+    desc: "POS desktop Wails binding'lerini üret (frontend/wailsjs, commit edilmez)"
+    dir: web/apps/pos-desktop
+    cmds:
+      - wails generate module
 
   ci:
     desc: "CI pipeline lokalde simüle et"

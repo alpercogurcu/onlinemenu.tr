@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "pos-desktop",
+  "outputfilename": "pos-desktop",
+  "frontend:install": "pnpm install --frozen-lockfile",
+  "frontend:build": "pnpm run build",
+  "frontend:dev:watcher": "pnpm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Alper Çöğürcü",
+    "email": "44155358+alpercogurcu@users.noreply.github.com"
+  }
+}

@@ -1,6 +1,7 @@
 import { create } from "zustand"
 
 import { clearAccessToken, setAccessToken } from "@/lib/api"
+import { clearKeycloakTokens, getKeycloakTokens } from "@/lib/keycloak-token-store"
 
 interface User {
   id: string
@@ -26,6 +27,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   logout: () => {
     clearAccessToken()
+    clearKeycloakTokens()
     set({ user: null, tenantId: null })
   },
 }))
+
+// Whether the current session originated from the Keycloak PKCE flow (vs.
+// the dev-login shortcut). Callers use this to decide between a Keycloak
+// end_session redirect and a plain client-side logout.
+export function hasKeycloakSession(): boolean {
+  return getKeycloakTokens() !== null
+}

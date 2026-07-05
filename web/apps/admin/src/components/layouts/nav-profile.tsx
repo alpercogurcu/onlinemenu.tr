@@ -18,7 +18,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { SidebarMenuButton } from "@/components/ui/sidebar"
 import { useMe } from "@/hooks/use-identity"
-import { useAuthStore } from "@/store/auth-store"
+import { buildLogoutUrl } from "@/lib/keycloak"
+import { getKeycloakIdToken } from "@/lib/keycloak-token-store"
+import { hasKeycloakSession, useAuthStore } from "@/store/auth-store"
 
 function NavProfileComponent() {
   const { logout } = useAuthStore()
@@ -42,7 +44,16 @@ function NavProfileComponent() {
   }
 
   const handleLogout = () => {
+    const wasKeycloakSession = hasKeycloakSession()
+    const idTokenHint = getKeycloakIdToken()
     logout()
+
+    if (wasKeycloakSession) {
+      // Terminates the Keycloak SSO session too, not just the local one —
+      // otherwise "Keycloak ile giriş" would silently re-authenticate.
+      window.location.href = buildLogoutUrl(`${window.location.origin}/login`, idTokenHint ?? undefined)
+      return
+    }
     router.push("/login")
   }
 

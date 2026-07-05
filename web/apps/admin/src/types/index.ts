@@ -285,11 +285,23 @@ export interface Me {
   full_name: string
   created_at: string
 }
+// Mirrors contextItemDTO in
+// backend/internal/modules/identity/http/me_handler.go — one selectable
+// membership (tenant + optional branch + role).
 export interface TenantContext {
+  membership_id: string
   tenant_id: string
   tenant_name: string
-  role: string
-  branch_ids: string[]
+  branch_id?: string
+  branch_name?: string
+  role_id: string
+  role_name: string
+}
+
+// GET /v1/identity/me/contexts response envelope.
+export interface TenantContextListResponse {
+  contexts: TenantContext[]
+  customer: boolean
 }
 
 // Tenant

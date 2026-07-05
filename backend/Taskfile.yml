@@ -131,3 +131,45 @@ tasks:
     desc: "Build artifact'larını sil"
     cmds:
       - rm -rf bin/ tmp/ coverage.out coverage.html
+
+  # ---------------------------------------------------------------------------
+  # k6 yük testi (Sprint-8, ROADMAP Faz 1: "500 aktif POS simülasyonu")
+  # Detay ve bilinen sınırlar: backend/loadtest/README.md
+  # ---------------------------------------------------------------------------
+
+  loadtest:precheck:
+    desc: "API + Postgres erişilebilir mi kontrol et (loadtest:smoke/full'dan önce)"
+    cmds:
+      - |
+        set -e
+        addr="${HTTP_ADDR:-:8081}"
+        url="http://localhost${addr}/healthz"
+        echo "API kontrol ediliyor: $url"
+        for i in $(seq 1 10); do
+          if curl -sf "$url" > /dev/null; then
+            echo "API ayakta."
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "HATA: API'ye ulaşılamadı ($url)." >&2
+        echo "Önce: task compose:up:core (veya compose:up) + task backend:migrate:up + psql ile dev-seed/loadtest seed + cmd/api (task backend:dev ya da go run ./cmd/api)." >&2
+        exit 1
+
+  loadtest:seed:
+    desc: "Yük testi kasiyer havuzunu seed'ler (dev-seed.sql + loadtest/seed.sql, app_migrator ile)"
+    cmds:
+      - docker compose -f ../deploy/docker-compose.dev.yml exec -T postgres psql -U app_migrator -d onlinemenu_dev < deploy/dev-seed.sql
+      - docker compose -f ../deploy/docker-compose.dev.yml exec -T postgres psql -U app_migrator -d onlinemenu_dev < loadtest/seed.sql
+
+  loadtest:smoke:
+    desc: "k6 smoke profili — 25 VU, 2dk (mixed_load.js: kasiyer akışı + KDS WS)"
+    deps: [loadtest:precheck]
+    cmds:
+      - k6 run -e PROFILE=smoke loadtest/k6/mixed_load.js
+
+  loadtest:full:
+    desc: "k6 tam profil — 500 VU'ya ramping-vus, ~17dk (bkz. README: yalnız yeterli donanımda çalıştırın)"
+    deps: [loadtest:precheck]
+    cmds:
+      - k6 run -e PROFILE=full loadtest/k6/mixed_load.js

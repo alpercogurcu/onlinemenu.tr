@@ -71,7 +71,11 @@ export function Receipt({
   const canSendOrder = pendingLines.length > 0 && !sendingOrder
   const canPay = pendingLines.length === 0 && confirmedTotal > 0 && !hasPaid
 
-  const receivedKurus = parseMoneyInputToKurus(receivedInput)
+  // An empty amount field means "exact cash, no change" — the common case.
+  // The cashier only types an amount when change is due, so a blank field
+  // must not block "Nakit alındı".
+  const receivedBlank = receivedInput.trim() === ''
+  const receivedKurus = receivedBlank ? confirmedTotal : parseMoneyInputToKurus(receivedInput)
   const changeDue = Math.max(0, receivedKurus - confirmedTotal)
   const receivedEnough = receivedKurus >= confirmedTotal && confirmedTotal > 0
 
@@ -219,12 +223,13 @@ export function Receipt({
             </div>
 
             <label className="mt-4 block text-sm text-ink-dim" htmlFor="received-amount">
-              Alınan tutar
+              Alınan tutar <span className="text-ink-dim/70">(boş = tam tutar)</span>
             </label>
             <input
               id="received-amount"
               inputMode="decimal"
-              className="money min-h-14 w-full rounded-md border border-line bg-surface px-3 py-2 text-xl tabular-nums text-ink"
+              placeholder={formatMoney(confirmedTotal)}
+              className="money min-h-14 w-full rounded-md border border-line bg-surface px-3 py-2 text-xl tabular-nums text-ink placeholder:text-ink-dim/50"
               value={receivedInput}
               onChange={(e) => setReceivedInput(e.target.value)}
               autoFocus

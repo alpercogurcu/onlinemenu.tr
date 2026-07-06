@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -462,5 +463,118 @@ func TestClient_ListCheckPayments_RejectsMissingCheckIDBeforeCallingServer(t *te
 	}
 	if called.Load() {
 		t.Fatal("server should not have been called")
+	}
+}
+
+// TestClient_RegisterCashPayment_AcceptsPartialAmountBelowCheckTotal is the
+// split/partial-cash-payment regression: RegisterCashPayment must not
+// reject (or silently coerce) an amountTotal that is only a fraction of
+// what the check actually totals — the caller (App/frontend) is
+// responsible for that decision (see this method's doc comment), the
+// client is a pass-through. This reproduces the reported bug's root cause
+// at the wire level: a ₺50 payment against what the server/caller knows to
+// be a ₺630 check must be sent to the server as exactly 5000 kuruş, not
+// rejected client-side and not silently rounded up to the full total.
+func TestClient_RegisterCashPayment_AcceptsPartialAmountBelowCheckTotal(t *testing.T) {
+	const checkTotalKurus = 63000 // ₺630
+	const partialKurus = 5000     // ₺50 — well under the check total
+
+	var gotAmount int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req registerSaleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotAmount = req.AmountTotal
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"pay-1","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":5000,"currency":"TRY"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	payment, err := c.RegisterCashPayment(t.Context(), "branch-1", "check-1", partialKurus)
+	if err != nil {
+		t.Fatalf("RegisterCashPayment: %v", err)
+	}
+	if gotAmount != partialKurus {
+		t.Fatalf("server received amount_total = %d, want the partial %d (< check total %d) untouched",
+			gotAmount, partialKurus, checkTotalKurus)
+	}
+	if payment.AmountTotal != partialKurus {
+		t.Fatalf("payment.AmountTotal = %d, want %d", payment.AmountTotal, partialKurus)
+	}
+}
+
+// TestClient_RegisterCashPayment_UsesFreshIdempotencyKeyPerInstallment
+// guards the exact failure mode a split payment is vulnerable to if this
+// regresses: two installments of the SAME amount (a common case — e.g. the
+// customer pays ₺50 twice) must not be deduplicated as an idempotency
+// replay of each other. doIdempotent mints one uuid per call (see
+// client.go), so two separate RegisterCashPayment calls must carry two
+// different Idempotency-Key headers even with byte-identical bodies.
+func TestClient_RegisterCashPayment_UsesFreshIdempotencyKeyPerInstallment(t *testing.T) {
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys = append(keys, r.Header.Get(idempotencyHeader))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"pay-` + strings.TrimSpace(strconv.Itoa(len(keys))) + `","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":5000,"currency":"TRY"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	for i := 0; i < 2; i++ {
+		if _, err := c.RegisterCashPayment(t.Context(), "branch-1", "check-1", 5000); err != nil {
+			t.Fatalf("RegisterCashPayment #%d: %v", i+1, err)
+		}
+	}
+
+	if len(keys) != 2 {
+		t.Fatalf("got %d requests, want 2", len(keys))
+	}
+	if keys[0] == "" || keys[1] == "" {
+		t.Fatalf("empty Idempotency-Key: %v", keys)
+	}
+	if keys[0] == keys[1] {
+		t.Fatalf("both installments used the SAME Idempotency-Key (%q) — the second would be treated as a replay of the first, silently deduplicating a legitimate second ₺50 installment", keys[0])
+	}
+}
+
+// TestClient_ListCheckPayments_SumMatchesMultipleInstallments verifies the
+// remaining-balance arithmetic the cashier UI depends on
+// (frontend/src/lib/payment.ts's remainingBalance): ListCheckPayments must
+// decode every completed installment on the check, in full, so their sum
+// (checkTotal - sum(payments) = remaining) is correct after a split
+// payment — not just the most recent installment.
+func TestClient_ListCheckPayments_SumMatchesMultipleInstallments(t *testing.T) {
+	const checkTotalKurus = 63000 // ₺630
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"payments":[
+			{"id":"pay-1","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":5000,"currency":"TRY"},
+			{"id":"pay-2","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":5000,"currency":"TRY"},
+			{"id":"pay-3","branch_id":"branch-1","check_id":"check-1","method":"cash","status":"completed","amount_total":53000,"currency":"TRY"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	payments, err := c.ListCheckPayments(t.Context(), "check-1")
+	if err != nil {
+		t.Fatalf("ListCheckPayments: %v", err)
+	}
+	if len(payments) != 3 {
+		t.Fatalf("got %d payments, want 3", len(payments))
+	}
+
+	var paidSoFar int64
+	for _, p := range payments {
+		paidSoFar += p.AmountTotal
+	}
+	if paidSoFar != checkTotalKurus {
+		t.Fatalf("sum of installments = %d, want %d (exactly settled after the split)", paidSoFar, checkTotalKurus)
+	}
+	remaining := checkTotalKurus - paidSoFar
+	if remaining != 0 {
+		t.Fatalf("remaining = %d, want 0 once every installment is accounted for", remaining)
 	}
 }

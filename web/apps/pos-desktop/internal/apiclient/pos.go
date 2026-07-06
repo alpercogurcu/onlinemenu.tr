@@ -335,10 +335,19 @@ type registerSaleRequest struct {
 // RegisterCashPayment calls POST /api/v1/payments (Idempotency-Key
 // required — ADR-SEC-003) with method "cash". branch_id is required by the
 // handler (422 if empty); amount_total must be > 0 (payment/service
-// validation) and is always the check total in kuruş (smallest currency
-// unit), matching pos/repo.CheckRepo.GetTotal's sum(quantity*unit_price) —
-// there is no server-side "check total" endpoint, so the caller (App) is
-// responsible for deriving it the same way.
+// validation). amountTotal is ONE cash-payment installment against the
+// check — for a split/partial payment this is less than the check's full
+// total (see pos/repo.CheckRepo.GetTotal's sum(quantity*unit_price), the
+// same computation the frontend uses to derive the check's total and
+// remaining balance — there is no server-side "check total" endpoint).
+// Calling this more than once for the same check is expected and
+// supported: the backend records each call as a separate payment, and
+// CloseCheck only succeeds once the sum of all of them reaches the check
+// total (payment/service.CheckService — see CloseCheck's doc comment).
+// The backend does NOT reject a call whose amountTotal exceeds the check's
+// remaining balance (no overpayment guard) — callers must clamp to the
+// remaining balance themselves before calling this (see
+// frontend/src/lib/payment.ts's clampToRemaining).
 func (c *Client) RegisterCashPayment(ctx context.Context, branchID, checkID string, amountTotal int64) (Payment, error) {
 	if checkID == "" {
 		return Payment{}, fmt.Errorf("apiclient: register cash payment: check_id is required")

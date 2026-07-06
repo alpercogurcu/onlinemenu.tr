@@ -56,7 +56,14 @@ function App() {
   const [selectedCheck, setSelectedCheck] = useState<main.CheckDTO | null>(null)
   const [confirmedOrders, setConfirmedOrders] = useState<main.OrderDTO[]>([])
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
-  const [paidChecks, setPaidChecks] = useState<Record<string, boolean>>({})
+  // alreadyPaidTotal is the ONLY thing that drives whether a check is
+  // "fully paid" (see Receipt.tsx's remainingBalance) — there is no
+  // separate sticky per-check boolean anymore. It is seeded from
+  // ListCheckPayments on selection (fail-open — see the try/catch in
+  // handleSelectCheck) and accumulated locally on every successful
+  // RegisterCashPayment, so a split payment made entirely within this
+  // session is always correct even for a plain cashier session that
+  // cannot re-read ListCheckPayments after the first call.
   const [alreadyPaidTotal, setAlreadyPaidTotal] = useState(0)
 
   // Masa planı (Sprint-5 Wave 2) — full-panel floor plan shown instead of
@@ -73,11 +80,22 @@ function App() {
 
   const [printer, setPrinter] = useState<PrinterEvent | null>(null)
 
-  // Receipt printing (Sprint-7) — receivedAmount is remembered from the
-  // cash-payment step (Receipt.tsx's onRegisterPayment) so it is still
-  // available when the check is actually closed, potentially some time
-  // later (see Receipt.tsx's onRegisterPayment doc comment for why this
-  // can't be recovered any other way for a plain cashier session).
+  // Receipt printing — lastReceivedAmount is the CUMULATIVE cash the
+  // customer has physically handed over across every cash-payment step
+  // taken for the currently selected check this session (Receipt.tsx's
+  // onRegisterPayment receivedAmount, summed — not just the last step),
+  // so a split payment's printed receipt still shows the correct total
+  // "ALINAN"/change (internal/receipt.Build computes change as
+  // receivedAmount - subtotal, so this must be the sum across every
+  // installment, not only the final one). Reset to 0 on every check
+  // selection (see handleSelectCheck) so it never leaks between checks.
+  //
+  // KNOWN LIMITATION (pre-existing, unchanged by this split-payment work):
+  // if a check's payments were made in an earlier app session (e.g. the
+  // station restarted mid-split), this session never learns what cash was
+  // physically handed over for those — it only accumulates what THIS
+  // session itself registers. A reprint after such a restart still shows
+  // whatever partial amount this session collected, not the true total.
   const [lastReceivedAmount, setLastReceivedAmount] = useState(0)
   const [printError, setPrintError] = useState('')
   const [printRetryCheckId, setPrintRetryCheckId] = useState<string | null>(null)
@@ -218,10 +236,39 @@ function App() {
     setPrintRetryCheckId(null)
   }
 
+  // refreshPaidTotal re-syncs alreadyPaidTotal from the server's own
+  // record of completed payments for a check — used both when a check is
+  // first selected (see handleSelectCheck below) and after a
+  // RegisterCashPayment call fails (see handleRegisterPayment): a failed
+  // call might still have landed server-side (network error after the
+  // write committed), so the remaining balance shown to the cashier must
+  // not silently drift from what the backend actually has on record.
+  //
+  // IMPORTANT — same permission gap as before: this needs
+  // "payment.payment.read", which a plain "cashier" session does not have
+  // (see pos.go's ListCheckPayments doc comment). Fail-open on ANY error
+  // (403 included) so a permission gap or transient failure never blocks
+  // the cashier's flow — it just means alreadyPaidTotal keeps whatever
+  // value local accumulation already gave it (0 on first select, or
+  // whatever partial payments this session itself already recorded).
+  const refreshPaidTotal = useCallback(async (checkId: string) => {
+    try {
+      const payments = await ListCheckPayments(checkId)
+      const paidSoFar = payments.reduce((sum, p) => sum + p.amount_total, 0)
+      setAlreadyPaidTotal(paidSoFar)
+    } catch (err) {
+      console.warn('ListCheckPayments failed — remaining balance may be stale for this check', err)
+    }
+  }, [])
+
   async function handleSelectCheck(checkId: string) {
     setReceiptError('')
     setPendingLines([])
     setAlreadyPaidTotal(0)
+    // Reset the cumulative "cash physically handed over" tracker for the
+    // receipt print (see lastReceivedAmount's doc comment) — it must not
+    // carry over from whatever check was selected before this one.
+    setLastReceivedAmount(0)
     try {
       const [check, orders] = await Promise.all([GetCheck(checkId), ListCheckOrders(checkId)])
       setSelectedCheck(check)
@@ -231,33 +278,11 @@ function App() {
       return
     }
 
-    // Double-payment guard (see pos.go's ListCheckPayments doc comment): a
-    // check reopened after a payment was already recorded (e.g. the app
-    // restarted between RegisterCashPayment and CloseCheck) must not be
-    // offered "Nakit al" again.
-    //
-    // IMPORTANT: this is a UI-only guard — the backend's CloseCheck does not
-    // reject overpayment, only underpayment, so this frontend check is the
-    // only thing standing between a reopened check and a double payment.
-    // It is also currently inert for a plain "cashier" session: this call
-    // needs "payment.payment.read", which cashier does not have (see the
-    // pos.go doc comment for why that's not a one-line permission grant).
-    // The read is fail-open on ANY error (403 included) so a permission gap
-    // or a transient failure never blocks selecting the check — it just
-    // means the cashier won't see this line or get this guard.
-    try {
-      const payments = await ListCheckPayments(checkId)
-      const paidSoFar = payments.reduce((sum, p) => sum + p.amount_total, 0)
-      setAlreadyPaidTotal(paidSoFar)
-      if (paidSoFar > 0) {
-        setPaidChecks((paid) => ({ ...paid, [checkId]: true }))
-      }
-    } catch (err) {
-      // Fail-open — see comment above. Logged (not surfaced to
-      // receiptError) so the gap is visible in devtools without
-      // interrupting the cashier's flow.
-      console.warn('ListCheckPayments failed — double-payment guard inactive for this check', err)
-    }
+    // Seed alreadyPaidTotal from any payment already recorded against this
+    // check (e.g. the app restarted mid-split, or a manager reopens a
+    // check partially paid in an earlier session) — see refreshPaidTotal's
+    // doc comment for the permission caveat.
+    await refreshPaidTotal(checkId)
   }
 
   // handleSelectTable is TablePlan's tap handler for an empty/reserved
@@ -321,16 +346,31 @@ function App() {
     }
   }
 
-  async function handleRegisterPayment(amountTotal: number, receivedAmount: number) {
+  // amountToRegister is one cash-payment INSTALLMENT (already clamped to
+  // the remaining balance by Receipt.tsx — never the check's full total
+  // unless this is the only/final installment); receivedAmount is the raw
+  // cash the customer handed over for this installment. Both accumulate
+  // rather than overwrite, so a split payment across several calls ends
+  // up correct: alreadyPaidTotal reaches confirmedTotal only once every
+  // installment has been registered, and lastReceivedAmount reflects the
+  // true total cash handed over for the whole check (see its doc comment).
+  async function handleRegisterPayment(amountToRegister: number, receivedAmount: number) {
     if (!selectedCheck || !session?.branch_id) return
     setReceiptError('')
+    const checkId = selectedCheck.id
     try {
-      const payment = await RegisterCashPayment(session.branch_id, selectedCheck.id, amountTotal)
-      setPaidChecks((paid) => ({ ...paid, [selectedCheck.id]: true }))
+      const payment = await RegisterCashPayment(session.branch_id, checkId, amountToRegister)
       setAlreadyPaidTotal((total) => total + payment.amount_total)
-      setLastReceivedAmount(receivedAmount)
+      setLastReceivedAmount((total) => total + receivedAmount)
     } catch (err) {
       setReceiptError(describeError(err))
+      // The call may still have landed server-side despite the client-side
+      // error (e.g. a network failure after the write committed) — re-sync
+      // the remaining balance from the server rather than risk the cashier
+      // retrying a payment that already went through (see refreshPaidTotal's
+      // doc comment; fail-open, so this is a no-op for a plain cashier
+      // session that can't read payments back at all).
+      await refreshPaidTotal(checkId)
       throw err
     }
   }
@@ -476,7 +516,6 @@ function App() {
           sendingOrder={sendingOrder}
           confirmedTotal={confirmedOrdersTotal(confirmedOrders)}
           pendingTotal={sumPendingTotal(pendingLines)}
-          hasPaid={selectedCheck ? Boolean(paidChecks[selectedCheck.id]) : false}
           alreadyPaidTotal={alreadyPaidTotal}
           onRegisterPayment={handleRegisterPayment}
           onCloseCheck={handleCloseCheck}

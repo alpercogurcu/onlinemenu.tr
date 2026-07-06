@@ -3,10 +3,20 @@ import type { main } from '../../wailsjs/go/models'
 import type { PendingLine } from '../lib/cart'
 import { pendingLineTotal } from '../lib/cart'
 import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
+import { changeDue as computeChangeDue, clampToRemaining, remainingBalance, splitSuggestion } from '../lib/payment'
 import { ErrorBanner } from './ErrorBanner'
 import { HoldButton } from './HoldButton'
 
 const QUICK_NOTES = [5000, 10000, 20000, 50000] // ₺50 / ₺100 / ₺200 / ₺500 in kuruş
+// Turkish vowel harmony makes the dative suffix on a numeral irregular
+// across values (2 -> "2'ye", 3/4 -> "3'e"/"4'e") — not templatable from
+// the number alone, so each label is spelled out rather than built from
+// `${parts}'e böl`.
+const SPLIT_PARTS: { parts: number; label: string }[] = [
+  { parts: 2, label: "2'ye böl" },
+  { parts: 3, label: "3'e böl" },
+  { parts: 4, label: "4'e böl" },
+]
 
 type ReceiptProps = {
   tableLabel: string
@@ -17,26 +27,31 @@ type ReceiptProps = {
   sendingOrder: boolean
   confirmedTotal: number
   pendingTotal: number
-  hasPaid: boolean
   /**
-   * Sum of completed payments already recorded against this check (from
-   * App's ListCheckPayments call on selection) — shown so a cashier
-   * reopening an adisyon that was already paid (e.g. after an app restart
-   * between payment and close) sees that immediately, instead of risking a
-   * second cash payment for the same check.
+   * Sum of completed cash payments already recorded against this check
+   * (accumulated in App as each RegisterCashPayment call succeeds, seeded
+   * from ListCheckPayments on selection where the session's role allows
+   * that read). `remainingBalance(confirmedTotal, alreadyPaidTotal)` — not
+   * a sticky "hasPaid" boolean — is what actually drives every "is this
+   * check paid" decision below, so a split/partial payment is reflected
+   * immediately: the check stays payable (and open) for as many
+   * installments as it takes to bring this down to zero.
    */
   alreadyPaidTotal: number
   /**
-   * receivedAmount (the cash the customer physically handed over, in
-   * kuruş) is passed alongside amountTotal so the parent (App) can hold
-   * onto it for the receipt print that follows CloseCheck — this
-   * component's own receivedInput is cleared on confirm (see
-   * handleConfirmPayment below) well before CloseCheck is even called
-   * (cash mode closes immediately; the "Basılı tutup kapat" hold button is
-   * a separate, later step), so App is the only place left that still
-   * knows this value at print time.
+   * amountToRegister is the CLAMPED amount for this one cash-payment step
+   * (never more than the remaining balance — see lib/payment's
+   * clampToRemaining) — this is what actually gets sent to
+   * RegisterCashPayment. receivedAmount is the raw cash the customer
+   * physically handed over for this step (which may exceed
+   * amountToRegister when this step's change is due) — passed alongside so
+   * the parent (App) can accumulate it for the receipt print that follows
+   * CloseCheck. This component's own receivedInput is cleared after each
+   * confirmed step (see handleConfirmPayment below) — App is the only
+   * place left that still knows the cumulative received total by print
+   * time.
    */
-  onRegisterPayment: (amountTotal: number, receivedAmount: number) => Promise<void>
+  onRegisterPayment: (amountToRegister: number, receivedAmount: number) => Promise<void>
   onCloseCheck: () => Promise<void>
   errorMessage: string
 }
@@ -57,7 +72,6 @@ export function Receipt({
   sendingOrder,
   confirmedTotal,
   pendingTotal,
-  hasPaid,
   alreadyPaidTotal,
   onRegisterPayment,
   onCloseCheck,
@@ -69,26 +83,50 @@ export function Receipt({
 
   const grandTotal = confirmedTotal + pendingTotal
   const canSendOrder = pendingLines.length > 0 && !sendingOrder
-  const canPay = pendingLines.length === 0 && confirmedTotal > 0 && !hasPaid
 
-  // An empty amount field means "exact cash, no change" — the common case.
-  // The cashier only types an amount when change is due, so a blank field
-  // must not block "Nakit alındı".
+  // remaining is the single source of truth for "is this check paid" — a
+  // check with confirmedTotal=630 and alreadyPaidTotal=50 is neither
+  // "unpaid" nor "paid": it is 580 short, still open, still payable in
+  // further installments. There is no sticky "hasPaid" flag anymore (that
+  // was the bug: it went true after the FIRST partial payment and hid the
+  // "Nakit al" button, making a second installment impossible).
+  const remaining = remainingBalance(confirmedTotal, alreadyPaidTotal)
+  const isFullyPaid = confirmedTotal > 0 && remaining <= 0
+  const canPay = pendingLines.length === 0 && confirmedTotal > 0 && !isFullyPaid
+
+  // An empty amount field means "exact cash for the remaining balance, no
+  // change" — the common case (including the common case of a single,
+  // non-split payment, where remaining === confirmedTotal). The cashier
+  // only types an amount when paying a partial share or when change is
+  // due, so a blank field must not block "Nakit alındı".
   const receivedBlank = receivedInput.trim() === ''
-  const receivedKurus = receivedBlank ? confirmedTotal : parseMoneyInputToKurus(receivedInput)
-  const changeDue = Math.max(0, receivedKurus - confirmedTotal)
-  const receivedEnough = receivedKurus >= confirmedTotal && confirmedTotal > 0
+  const receivedKurus = receivedBlank ? remaining : parseMoneyInputToKurus(receivedInput)
+  // What actually gets registered as a payment — never more than what is
+  // still owed, so a cashier entering more than remaining (to make change
+  // on the final installment) never overpays the check; the excess comes
+  // back as changeDue, not as a recorded payment.
+  const amountToRegister = clampToRemaining(receivedKurus, remaining)
+  const changeDue = computeChangeDue(receivedKurus, remaining)
+  // Enabled for ANY positive entry, not just one covering the full
+  // remaining balance — this is the actual fix for the reported bug (a
+  // ₺50 entry against a ₺630 remaining balance must be payable).
+  const receivedEnough = receivedKurus > 0 && remaining > 0
 
   async function handleConfirmPayment() {
     setSubmittingPayment(true)
     try {
-      await onRegisterPayment(confirmedTotal, receivedKurus)
-      setCashMode(false)
+      await onRegisterPayment(amountToRegister, receivedKurus)
       setReceivedInput('')
+      // Cash mode only closes itself once the balance is fully settled —
+      // otherwise it stays open, cleared, ready for the next installment.
+      if (remaining - amountToRegister <= 0) {
+        setCashMode(false)
+      }
     } catch {
       // errorMessage is already derived from onRegisterPayment's own state
-      // update in the parent (App) — nothing further to do here besides
-      // staying in cash mode so the cashier can retry.
+      // update in the parent (App), which also refreshes the remaining
+      // balance from the server on failure — nothing further to do here
+      // besides staying in cash mode so the cashier can retry.
     } finally {
       setSubmittingPayment(false)
     }
@@ -173,7 +211,7 @@ export function Receipt({
               </button>
             )}
 
-            {!hasPaid && (
+            {!isFullyPaid && (
               <button
                 type="button"
                 disabled={!canPay}
@@ -183,11 +221,11 @@ export function Receipt({
                 Nakit al
               </button>
             )}
-            {!hasPaid && pendingLines.length > 0 && (
+            {!isFullyPaid && pendingLines.length > 0 && (
               <p className="text-center text-xs text-ink-dim">Önce siparişi gönderin</p>
             )}
 
-            {hasPaid && (
+            {isFullyPaid && (
               <HoldButton label="Basılı tutup kapat" holdingLabel="Kapatılıyor…" onConfirm={onCloseCheck} />
             )}
           </div>
@@ -197,10 +235,15 @@ export function Receipt({
       {cashMode && (
         <div className="flex flex-1 flex-col justify-between p-4">
           <div>
-            <p className="text-ink-dim">Tutar</p>
+            <p className="text-ink-dim">Kalan</p>
             <p className="money font-display text-4xl font-bold tabular-nums text-ink">
-              {formatMoney(confirmedTotal)}
+              {formatMoney(remaining)}
             </p>
+            {alreadyPaidTotal > 0 && (
+              <p className="mt-1 text-xs text-ink-dim">
+                {formatMoney(confirmedTotal)} hesaptan {formatMoney(alreadyPaidTotal)} ödendi
+              </p>
+            )}
 
             <div className="mt-4 grid grid-cols-3 gap-2">
               {QUICK_NOTES.map((note) => (
@@ -215,37 +258,65 @@ export function Receipt({
               ))}
               <button
                 type="button"
-                onClick={() => setReceivedInput((confirmedTotal / 100).toFixed(2).replace('.', ','))}
+                onClick={() => setReceivedInput('')}
                 className="min-h-14 rounded-md border border-line bg-surface font-semibold text-ink"
               >
-                Tam
+                Kalanın tamamı
               </button>
             </div>
 
+            {/* Quick split — suggests an equal share of the REMAINING
+                balance (not the full check), so splitting after a partial
+                payment already made still divides what is actually left. */}
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {SPLIT_PARTS.map(({ parts, label }) => (
+                <button
+                  key={parts}
+                  type="button"
+                  onClick={() =>
+                    setReceivedInput((splitSuggestion(remaining, parts) / 100).toFixed(2).replace('.', ','))
+                  }
+                  className="min-h-10 rounded-md border border-dashed border-line bg-surface text-sm text-ink-dim"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             <label className="mt-4 block text-sm text-ink-dim" htmlFor="received-amount">
-              Alınan tutar <span className="text-ink-dim/70">(boş = tam tutar)</span>
+              Alınan tutar <span className="text-ink-dim/70">(boş = kalanın tamamı)</span>
             </label>
             <input
               id="received-amount"
               inputMode="decimal"
-              placeholder={formatMoney(confirmedTotal)}
+              placeholder={formatMoney(remaining)}
               className="money min-h-14 w-full rounded-md border border-line bg-surface px-3 py-2 text-xl tabular-nums text-ink placeholder:text-ink-dim/50"
               value={receivedInput}
               onChange={(e) => setReceivedInput(e.target.value)}
               autoFocus
             />
 
-            <div className="mt-4">
-              <p className="text-ink-dim">Para üstü</p>
-              <p
-                key={changeDue}
-                className={`money font-display text-5xl font-bold tabular-nums text-teal ${
-                  receivedEnough ? 'change-due-pulse' : ''
-                }`}
-              >
-                {formatMoney(changeDue)}
-              </p>
-            </div>
+            {changeDue > 0 ? (
+              <div className="mt-4">
+                <p className="text-ink-dim">Para üstü</p>
+                <p key={changeDue} className="money change-due-pulse font-display text-5xl font-bold tabular-nums text-teal">
+                  {formatMoney(changeDue)}
+                </p>
+              </div>
+            ) : (
+              // Partial payment (entered < remaining) — no change is due,
+              // so show what this installment leaves behind instead, per
+              // req item 1 ("kalan her zaman görünür").
+              receivedKurus > 0 &&
+              amountToRegister < remaining && (
+                <div className="mt-4">
+                  <p className="text-ink-dim">Bu ödemeden sonra kalan</p>
+                  <p className="money font-display text-3xl font-bold tabular-nums text-ink-dim">
+                    {formatMoney(remaining - amountToRegister)}
+                  </p>
+                </div>
+              )
+            )}
           </div>
 
           <div className="space-y-2">

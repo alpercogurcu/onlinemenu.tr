@@ -255,11 +255,17 @@ func (a *App) PlaceOrder(branchID, checkID string, items []OrderItemInputDTO) (O
 }
 
 // RegisterCashPayment registers a cash sale against a check. amountTotal is
-// the receipt total in kuruş (smallest currency unit) — the frontend
-// derives it by summing every placed order's item lines
-// (quantity * unit_price_amount), the same computation
-// pos/repo.CheckRepo.GetTotal performs server-side for CloseCheck's paid-in-full
-// check (there is no server-side "check total" endpoint to read it from).
+// in kuruş (smallest currency unit) and is ONE cash-payment installment —
+// for a split/partial payment it is less than the check's full total, not
+// always the whole receipt (see apiclient.Client.RegisterCashPayment's doc
+// comment). The frontend derives the check's total (and remaining balance)
+// by summing every placed order's item lines (quantity * unit_price_amount),
+// the same computation pos/repo.CheckRepo.GetTotal performs server-side for
+// CloseCheck's paid-in-full check (there is no server-side "check total"
+// endpoint to read it from), and is responsible for clamping amountTotal to
+// that remaining balance before calling this — see
+// apiclient.Client.RegisterCashPayment's doc comment on why (no
+// server-side overpayment guard).
 func (a *App) RegisterCashPayment(branchID, checkID string, amountTotal int64) (PaymentDTO, error) {
 	if branchID == "" {
 		return PaymentDTO{}, fmt.Errorf("şube bilgisi eksik — oturum yeniden açılmalı")
@@ -282,16 +288,22 @@ func (a *App) RegisterCashPayment(branchID, checkID string, amountTotal int64) (
 }
 
 // ListCheckPayments returns the completed payments already recorded against
-// a check (payment.payment.read). The cashier UI calls this when selecting a
-// check — before offering "Nakit al" — so a check that already has a
-// completed payment (e.g. the station restarted after RegisterCashPayment
-// succeeded but before CloseCheck) is not paid a second time.
+// a check (payment.payment.read). The cashier UI calls this when selecting
+// a check — before offering "Nakit al" — to compute the REMAINING balance
+// (check total minus the sum of these payments), which now drives split
+// cash payments: a check may legitimately have one or more completed
+// payments and still be open, still payable in further installments, up to
+// the point where the sum reaches the check's total. This read is what
+// lets a check reopened after a restart (e.g. mid-split) resume with the
+// correct remaining balance instead of restarting the count from zero.
 //
-// IMPORTANT — this is a UI-only guard, not a backend one:
-// pos/service.CheckService.Close only rejects paid < total (underpayment);
-// it does not reject paid > total, so nothing server-side stops a second
-// RegisterCashPayment call from succeeding and overpaying a check. This
-// frontend check is the only thing preventing that today.
+// IMPORTANT — the client-side clamp (never send more than the remaining
+// balance — see apiclient.Client.RegisterCashPayment's doc comment) is a
+// UI-only guard, not a backend one: pos/service.CheckService.Close only
+// rejects paid < total (underpayment); it does not reject paid > total, so
+// nothing server-side stops a RegisterCashPayment call from succeeding and
+// overpaying a check if the client fails to clamp. This frontend check is
+// the only thing preventing that today.
 //
 // It is also currently inert for the plain "cashier" role: this call
 // requires "payment.payment.read" (backend/configs/opa authz.rego), which
@@ -300,7 +312,14 @@ func (a *App) RegisterCashPayment(branchID, checkID string, amountTotal int64) (
 // / payment rules). A cashier-only session gets a 403 here, which the
 // frontend fails open on (see App.tsx's handleSelectCheck) rather than
 // blocking check selection — so a cashier-only station shows no
-// "önceden ödenen" line and has no double-payment guard at all.
+// "önceden ödenen" line and, for a check reopened after a restart mid-split
+// (payments made in an EARLIER session), no correct remaining balance
+// either: alreadyPaidTotal starts back at 0 for that session and only
+// re-accumulates payments this session itself registers, risking an
+// overpayment of whatever was already paid before the restart. Flagged
+// here as a follow-up alongside the pre-existing permission gap above —
+// this is a real gap introduced in scope by split payments, not just the
+// pre-existing "önceden ödenen" display gap.
 //
 // This is not a one-line permission grant: GET /api/v1/payments gates both
 // this check-scoped read AND the tenant-wide reconciliation listing

@@ -1,5 +1,7 @@
 "use client"
 
+import { Users } from "lucide-react"
+
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
@@ -9,7 +11,9 @@ import {
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useChecks } from "@/hooks/use-pos"
-import type { CheckStatus } from "@/types"
+import { cn } from "@/lib/utils"
+import { formatCheckTotal, formatOpenDuration, isLongOpenCheck } from "@/lib/pos-format"
+import type { Check, CheckStatus } from "@/types"
 
 function statusBadgeClass(status: CheckStatus): string {
   switch (status) {
@@ -33,8 +37,17 @@ function statusLabel(status: CheckStatus): string {
   }
 }
 
+// openDurationLabel mirrors the checks list's rule: elapsed-to-now for an
+// open check, elapsed opened_at -> closed_at once it's done — never a
+// still-growing duration for a check that's no longer open.
+function openDurationLabel(check: Check): string {
+  if (check.status === "open") return formatOpenDuration(check.opened_at)
+  if (!check.closed_at) return "—"
+  return formatOpenDuration(check.opened_at, new Date(check.closed_at))
+}
+
 export default function TablesPage() {
-  const { data, isLoading } = useChecks({ refetchInterval: 30_000 } as Parameters<typeof useChecks>[0])
+  const { data, isLoading } = useChecks({ refetchInterval: 30_000 })
 
   const checks = data ?? []
   const openCount = checks.filter((c) => c.status === "open").length
@@ -93,6 +106,24 @@ export default function TablesPage() {
                     {statusLabel(check.status)}
                   </Badge>
 
+                  <div className="flex items-center justify-between text-xs tabular-nums">
+                    <span className="inline-flex items-center gap-1 text-muted-foreground">
+                      <Users className="size-3.5" />
+                      {check.pax}
+                    </span>
+                    <span className="font-semibold">{formatCheckTotal(check.total)}</span>
+                  </div>
+
+                  <span
+                    className={cn(
+                      "text-xs tabular-nums",
+                      check.status === "open" && isLongOpenCheck(check.opened_at)
+                        ? "font-medium text-amber-600"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {openDurationLabel(check)}
+                  </span>
                 </div>
               </CardContent>
             </Card>

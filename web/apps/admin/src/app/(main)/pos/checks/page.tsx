@@ -1,6 +1,6 @@
 "use client"
 
-import { ClipboardList } from "lucide-react"
+import { ClipboardList, Users } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,7 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useCancelCheck, useChecks, useCloseCheck } from "@/hooks/use-pos"
-import type { CheckStatus } from "@/types"
+import { cn } from "@/lib/utils"
+import { formatCheckTotal, formatOpenDuration, isLongOpenCheck } from "@/lib/pos-format"
+import type { Check, CheckStatus } from "@/types"
 import { toast } from "sonner"
 
 function statusBadgeClass(status: CheckStatus): string {
@@ -40,8 +42,18 @@ function statusLabel(status: CheckStatus): string {
   }
 }
 
+// openDurationLabel shows how long a check has been (or was) open. For an
+// open check it's elapsed time up to now; for a closed/cancelled one it's
+// the span between opened_at and closed_at, so the column doesn't render a
+// duration that's still silently growing after the check is done.
+function openDurationLabel(check: Check): string {
+  if (check.status === "open") return formatOpenDuration(check.opened_at)
+  if (!check.closed_at) return "—"
+  return formatOpenDuration(check.opened_at, new Date(check.closed_at))
+}
+
 export default function ChecksPage() {
-  const { data, isLoading } = useChecks({ refetchInterval: 30_000 } as Parameters<typeof useChecks>[0])
+  const { data, isLoading } = useChecks({ refetchInterval: 30_000 })
   const closeCheck = useCloseCheck()
   const cancelCheck = useCancelCheck()
 
@@ -93,10 +105,13 @@ export default function ChecksPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Masa</TableHead>
+                  <TableHead className="text-center">Kişi</TableHead>
+                  <TableHead className="text-right">Tutar</TableHead>
                   <TableHead>Not</TableHead>
                   <TableHead>Durum</TableHead>
                   <TableHead>Açılış</TableHead>
                   <TableHead>Kapanış</TableHead>
+                  <TableHead>Süre</TableHead>
                   <TableHead className="w-[160px]">İşlemler</TableHead>
                 </TableRow>
               </TableHeader>
@@ -104,6 +119,15 @@ export default function ChecksPage() {
                 {checks.map((check) => (
                   <TableRow key={check.id}>
                     <TableCell className="font-medium">{check.table_label}</TableCell>
+                    <TableCell className="text-center tabular-nums">
+                      <span className="inline-flex items-center gap-1">
+                        <Users className="size-3.5 text-muted-foreground" />
+                        {check.pax}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {formatCheckTotal(check.total)}
+                    </TableCell>
                     <TableCell className="text-muted-foreground text-xs">{check.note || "—"}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className={statusBadgeClass(check.status)}>
@@ -117,6 +141,16 @@ export default function ChecksPage() {
                       {check.closed_at
                         ? new Date(check.closed_at).toLocaleString("tr-TR")
                         : "—"}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        "text-sm tabular-nums",
+                        check.status === "open" && isLongOpenCheck(check.opened_at)
+                          ? "font-medium text-amber-600"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {openDurationLabel(check)}
                     </TableCell>
                     <TableCell>
                       {check.status === "open" && (

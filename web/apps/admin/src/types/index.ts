@@ -70,10 +70,17 @@ export interface Check {
   tenant_id: string
   branch_id: string
   table_label: string
+  // Guest count (kişi sayısı). Always present — lives directly on
+  // domain.Check, no extra query needed (see backend checkResponse doc).
+  pax: number
   status: CheckStatus
   note: string
   opened_at: string
   closed_at: string | null
+  // Kuruş (int64). Only populated by the list and get endpoints (batch/
+  // single total query) — open/close/cancel responses omit it entirely
+  // (omitempty), so it must stay optional here rather than nullable.
+  total?: number
 }
 export interface OrderItem {
   id: string

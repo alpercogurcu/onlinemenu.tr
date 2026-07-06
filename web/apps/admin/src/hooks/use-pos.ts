@@ -3,13 +3,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import api from "@/lib/api"
 import type { Check, Order, OrderStatus } from "@/types"
 
-export function useChecks(params?: { status?: string; limit?: number }) {
+export function useChecks(params?: {
+  status?: string
+  limit?: number
+  refetchInterval?: number
+}) {
+  const { refetchInterval, ...queryParams } = params ?? {}
   return useQuery({
-    queryKey: ["checks", params],
+    queryKey: ["checks", queryParams],
     queryFn: async () => {
-      const { data } = await api.get<Check[]>("/api/v1/pos/checks", { params })
+      const { data } = await api.get<Check[]>("/api/v1/pos/checks", { params: queryParams })
       return data ?? []
     },
+    refetchInterval,
   })
 }
 

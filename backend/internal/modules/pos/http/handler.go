@@ -144,7 +144,7 @@ func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.BranchID = &branchID
 	}
-	checks, err := h.checks.List(r.Context(), p.TenantID, filter)
+	checks, totals, err := h.checks.List(r.Context(), p.TenantID, filter)
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -152,6 +152,8 @@ func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 	resp := make([]checkResponse, len(checks))
 	for i, c := range checks {
 		resp[i] = toCheckResponse(c)
+		total := totals[c.ID]
+		resp[i].Total = &total
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -161,10 +163,14 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Pax (guest count) is optional: an omitted or zero/negative value falls
+	// back to CheckService.Open's default of 1 — existing pos-desktop/admin
+	// clients that don't yet send pax keep working unchanged.
 	var req struct {
 		BranchID   uuid.UUID  `json:"branch_id"`
 		TableID    *uuid.UUID `json:"table_id"`
 		TableLabel string     `json:"table_label"`
+		Pax        int        `json:"pax"`
 		Note       string     `json:"note"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -180,6 +186,7 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 		BranchID:   req.BranchID,
 		TableID:    req.TableID,
 		TableLabel: req.TableLabel,
+		Pax:        req.Pax,
 		Note:       req.Note,
 		OpenedBy:   p.PersonID,
 	})
@@ -200,12 +207,14 @@ func (h *Handler) getCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
-	c, err := h.checks.GetByID(r.Context(), p.TenantID, id)
+	c, total, err := h.checks.GetByIDWithTotal(r.Context(), p.TenantID, id)
 	if err != nil {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, toCheckResponse(c))
+	resp := toCheckResponse(c)
+	resp.Total = &total
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) closeCheck(w http.ResponseWriter, r *http.Request) {
@@ -630,16 +639,26 @@ func (h *Handler) setTableStatus(w http.ResponseWriter, r *http.Request) {
 // Response DTOs
 // ---------------------------------------------------------------------------
 
+// checkResponse.Total (kurus, orders in domain.InactiveOrderStatuses
+// excluded — see CheckRepo.GetTotal) is only populated by the list and get
+// endpoints, which fetch it (list via a batch query, get via a single
+// query — see CheckService.List/GetByIDWithTotal); open/close/cancel leave
+// it nil so the field is omitted from the response rather than emitting a
+// misleading "total: 0" for a check that may already have real orders.
+// Pax, in contrast, always comes back — it lives directly on domain.Check,
+// no extra query needed.
 type checkResponse struct {
 	ID         uuid.UUID  `json:"id"`
 	TenantID   uuid.UUID  `json:"tenant_id"`
 	BranchID   uuid.UUID  `json:"branch_id"`
 	TableID    *uuid.UUID `json:"table_id"`
 	TableLabel string     `json:"table_label"`
+	Pax        int        `json:"pax"`
 	Status     string     `json:"status"`
 	Note       string     `json:"note"`
 	OpenedAt   time.Time  `json:"opened_at"`
 	ClosedAt   *time.Time `json:"closed_at"`
+	Total      *int64     `json:"total,omitempty"`
 }
 
 func toCheckResponse(c domain.Check) checkResponse {
@@ -649,6 +668,7 @@ func toCheckResponse(c domain.Check) checkResponse {
 		BranchID:   c.BranchID,
 		TableID:    c.TableID,
 		TableLabel: c.TableLabel,
+		Pax:        c.Pax,
 		Status:     string(c.Status),
 		Note:       c.Note,
 		OpenedAt:   c.OpenedAt,

@@ -596,6 +596,138 @@ func TestCheckRepo_GetTotal_DropsAfterRejection(t *testing.T) {
 	assert.Equal(t, int64(0), afterReject, "total must drop to 0 once the only order is rejected")
 }
 
+// TestCheckRepo_Pax_RoundTrips is the regression test for the pax column
+// added in 000005_add_check_pax: a client-supplied guest count must survive
+// Create's RETURNING, a subsequent GetByID, and List — the three read paths
+// checkResponse (HTTP layer) is built from.
+func TestCheckRepo_Pax_RoundTrips(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+
+	var created domain.Check
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		created, err = checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branchA, TableLabel: "Masa Pax",
+			Pax: 6, Status: domain.CheckStatusOpen, OpenedBy: staffA,
+		})
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 6, created.Pax, "Create's RETURNING must include pax")
+
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		fetched, err := checkRepo.GetByID(ctx, tx, created.ID)
+		if err != nil {
+			return err
+		}
+		assert.Equal(t, 6, fetched.Pax, "GetByID must return pax")
+
+		listed, err := checkRepo.List(ctx, tx, repo.ListFilter{BranchID: &branchA})
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, c := range listed {
+			if c.ID == created.ID {
+				found = true
+				assert.Equal(t, 6, c.Pax, "List must return pax for every row")
+			}
+		}
+		assert.True(t, found, "created check must appear in List's branch-filtered result")
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+// TestCheckRepo_TotalsByCheckIDs_MatchesGetTotal_AndExcludesRejected is the
+// batch-vs-single consistency test: TotalsByCheckIDs must agree with
+// GetTotal for every check in the batch (both are backed by the same query
+// shape, see TotalsByCheckIDs's doc comment), and — the money-bug regression
+// — a rejected order's items must never appear in either.
+func TestCheckRepo_TotalsByCheckIDs_MatchesGetTotal_AndExcludesRejected(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	orderRepo := repo.NewOrderRepo()
+
+	checkActive := newTestCheck(t, ctx, tenantA)
+	checkMixed := newTestCheck(t, ctx, tenantA)
+	checkEmpty := newTestCheck(t, ctx, tenantA)
+
+	newOrder := func(checkID uuid.UUID, status domain.OrderStatus, unitPrice int64, qty int) {
+		t.Helper()
+		err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+			_, err := orderRepo.Create(ctx, tx, domain.Order{
+				TenantID:     tenantA,
+				BranchID:     branchA,
+				CheckID:      &checkID,
+				OrderChannel: domain.OrderChannelDineIn,
+				Status:       status,
+				Items: []domain.OrderItem{
+					{
+						ProductID:          uuid.New(),
+						ProductName:        "Test Item",
+						ProductPriceAmount: unitPrice,
+						ProductCurrency:    "TRY",
+						TaxRateBPS:         1000,
+						Quantity:           qty,
+						UnitPriceAmount:    unitPrice,
+					},
+				},
+			})
+			return err
+		})
+		require.NoError(t, err)
+	}
+
+	newOrder(checkActive.ID, domain.OrderStatusPending, 1000, 2) // 2000
+	newOrder(checkMixed.ID, domain.OrderStatusAccepted, 2500, 1) // 2500, active
+	newOrder(checkMixed.ID, domain.OrderStatusRejected, 9999, 5) // excluded
+	// checkEmpty gets no orders at all.
+
+	var totals map[uuid.UUID]int64
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		totals, err = checkRepo.TotalsByCheckIDs(ctx, tx, []uuid.UUID{checkActive.ID, checkMixed.ID, checkEmpty.ID})
+		return err
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(2000), totals[checkActive.ID])
+	assert.Equal(t, int64(2500), totals[checkMixed.ID], "rejected order must not count toward the batch total")
+	assert.Equal(t, int64(0), totals[checkEmpty.ID], "check with no orders is absent from the GROUP BY result, map returns 0")
+
+	// Cross-check against the single-key GetTotal for every id in the batch.
+	for _, id := range []uuid.UUID{checkActive.ID, checkMixed.ID, checkEmpty.ID} {
+		var single int64
+		err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+			var err error
+			single, err = checkRepo.GetTotal(ctx, tx, id)
+			return err
+		})
+		require.NoError(t, err)
+		assert.Equal(t, single, totals[id], "GetTotal and TotalsByCheckIDs must agree for check %s", id)
+	}
+}
+
+// TestCheckRepo_TotalsByCheckIDs_EmptyInput_ReturnsEmptyMap guards the
+// short-circuit: an empty id slice must not run a query at all, and must
+// return an empty (non-nil) map rather than erroring.
+func TestCheckRepo_TotalsByCheckIDs_EmptyInput_ReturnsEmptyMap(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+
+	var totals map[uuid.UUID]int64
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		totals, err = checkRepo.TotalsByCheckIDs(ctx, tx, nil)
+		return err
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, totals)
+	assert.Empty(t, totals)
+}
+
 // ---------------------------------------------------------------------------
 // Order repo tests
 // ---------------------------------------------------------------------------

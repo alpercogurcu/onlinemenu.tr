@@ -296,3 +296,136 @@ func TestCheckService_CloseThenCancel_SecondCallConflicts(t *testing.T) {
 	_, err = svc.Cancel(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition, "cancelling an already-closed check must be rejected")
 }
+
+// ---------------------------------------------------------------------------
+// Pax (guest count) tests
+// ---------------------------------------------------------------------------
+
+// TestCheckService_Open_DefaultsPaxToOne is the regression test for
+// CheckService.Open's single choke-point default: a caller that never sets
+// Pax (every pre-existing Open call in this codebase, until pos-desktop/
+// admin are updated in a follow-up frontend task) must still get a
+// persisted, round-trippable pax of 1 — not 0, which the DB column DEFAULT
+// alone cannot provide since Create's INSERT lists pax explicitly.
+func TestCheckService_Open_DefaultsPaxToOne(t *testing.T) {
+	ctx := context.Background()
+	svc := newCheckService()
+
+	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+		BranchID:   branchA,
+		TableLabel: "Masa Pax Default",
+		OpenedBy:   staffA,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, c.Pax)
+
+	fetched, err := svc.GetByID(ctx, tenantA, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fetched.Pax, "pax must round-trip through GetByID, not just the Create response")
+}
+
+// TestCheckService_Open_ExplicitPax_Preserved asserts a client-supplied pax
+// is neither overwritten nor clamped.
+func TestCheckService_Open_ExplicitPax_Preserved(t *testing.T) {
+	ctx := context.Background()
+	svc := newCheckService()
+
+	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+		BranchID:   branchA,
+		TableLabel: "Masa Pax Explicit",
+		Pax:        4,
+		OpenedBy:   staffA,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 4, c.Pax)
+}
+
+// TestCheckService_Open_NonPositivePax_FallsBackToOne covers the zero and
+// negative edge cases explicitly (0 is Go's int zero value, so this also
+// doubles as "omitted from the request body").
+func TestCheckService_Open_NonPositivePax_FallsBackToOne(t *testing.T) {
+	ctx := context.Background()
+	svc := newCheckService()
+
+	for _, pax := range []int{0, -3} {
+		c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+			BranchID:   branchA,
+			TableLabel: "Masa Pax Nonpositive",
+			Pax:        pax,
+			OpenedBy:   staffA,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, c.Pax, "pax=%d must fall back to 1", pax)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// List batch totals
+// ---------------------------------------------------------------------------
+
+// TestCheckService_List_BatchTotalsMatchGetTotal_AndExcludeRejected is the
+// consistency + regression test the task calls for: List's batch-computed
+// totals (CheckRepo.TotalsByCheckIDs) must (a) equal what CheckRepo.GetTotal
+// computes for the same check in isolation, and (b) never let a rejected
+// order's items count toward the total — the exact bug GetTotal itself was
+// already fixed for (see repo/integration_test.go's
+// TestCheckRepo_GetTotal_DropsAfterRejection).
+func TestCheckService_List_BatchTotalsMatchGetTotal_AndExcludeRejected(t *testing.T) {
+	ctx := context.Background()
+	svc := newCheckService()
+	checkRepoDirect := repo.NewCheckRepo()
+	orderRepo := repo.NewOrderRepo()
+
+	checkWithOrders := openTestCheck(t, ctx, svc)
+	checkNoOrders := openTestCheck(t, ctx, svc)
+
+	newOrder := func(checkID uuid.UUID, status domain.OrderStatus, unitPrice int64, qty int) {
+		t.Helper()
+		err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+			_, err := orderRepo.Create(ctx, tx, domain.Order{
+				TenantID:     tenantA,
+				BranchID:     branchA,
+				CheckID:      &checkID,
+				OrderChannel: domain.OrderChannelDineIn,
+				Status:       status,
+				Items: []domain.OrderItem{
+					{
+						ProductID:          uuid.New(),
+						ProductName:        "Test Item",
+						ProductPriceAmount: unitPrice,
+						ProductCurrency:    "TRY",
+						TaxRateBPS:         1000,
+						Quantity:           qty,
+						UnitPriceAmount:    unitPrice,
+					},
+				},
+			})
+			return err
+		})
+		require.NoError(t, err)
+	}
+
+	newOrder(checkWithOrders.ID, domain.OrderStatusPending, 1500, 2)  // 3000, active
+	newOrder(checkWithOrders.ID, domain.OrderStatusRejected, 9000, 1) // must be excluded
+
+	checks, totals, err := svc.List(ctx, tenantA, service.CheckListFilter{})
+	require.NoError(t, err)
+	ids := make([]uuid.UUID, len(checks))
+	for i, c := range checks {
+		ids[i] = c.ID
+	}
+	assert.Contains(t, ids, checkWithOrders.ID)
+	assert.Contains(t, ids, checkNoOrders.ID)
+
+	assert.Equal(t, int64(3000), totals[checkWithOrders.ID], "rejected order must not count toward the batch total")
+	assert.Equal(t, int64(0), totals[checkNoOrders.ID], "a check with no active orders defaults to 0 for a missing map key")
+
+	var singleTotal int64
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		singleTotal, err = checkRepoDirect.GetTotal(ctx, tx, checkWithOrders.ID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, singleTotal, totals[checkWithOrders.ID], "List's batch total must match CheckRepo.GetTotal for the same check")
+}

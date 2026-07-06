@@ -26,13 +26,13 @@ func NewCheckRepo() *CheckRepo { return &CheckRepo{} }
 // the table row, not on "does any check already reference this table".
 func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (domain.Check, error) {
 	const q = `
-		INSERT INTO checks (tenant_id, branch_id, table_id, table_label, status, opened_by, note)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, tenant_id, branch_id, table_id, table_label, status, opened_by,
+		INSERT INTO checks (tenant_id, branch_id, table_id, table_label, pax, status, opened_by, note)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
 		          closed_by, note, opened_at, closed_at, created_at, updated_at`
 
 	row := tx.QueryRow(ctx, q,
-		c.TenantID, c.BranchID, c.TableID, c.TableLabel, string(c.Status), c.OpenedBy, c.Note,
+		c.TenantID, c.BranchID, c.TableID, c.TableLabel, c.Pax, string(c.Status), c.OpenedBy, c.Note,
 	)
 	created, err := scanCheck(row)
 	if err != nil {
@@ -47,7 +47,7 @@ func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (doma
 // GetByID returns a check visible to the current tenant context.
 func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
+		SELECT id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks WHERE id = $1`
 
@@ -68,7 +68,7 @@ func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 // observes the already-updated status.
 func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
+		SELECT id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks WHERE id = $1 FOR UPDATE`
 
@@ -100,7 +100,7 @@ type ListFilter struct {
 // ListFilter's doc comment.
 func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx, filter ListFilter) ([]domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_id, table_label, status, opened_by,
+		SELECT id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
 		       closed_by, note, opened_at, closed_at, created_at, updated_at
 		FROM checks
 		WHERE ($1::text IS NULL OR status = $1::text)
@@ -135,23 +135,74 @@ func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx, filter ListFilter) ([]d
 // domain.InactiveOrderStatuses (rejected/cancelled). A rejected or cancelled
 // order's items must never be billed to the customer — see that variable's
 // doc comment. Returns 0 if the check has no active orders.
+//
+// This delegates to TotalsByCheckIDs so there is exactly one query shape
+// backing both the single-check and batch paths — see that method's doc
+// comment for why that matters.
 func (r *CheckRepo) GetTotal(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) (int64, error) {
+	totals, err := r.TotalsByCheckIDs(ctx, tx, []uuid.UUID{checkID})
+	if err != nil {
+		return 0, err
+	}
+	return totals[checkID], nil
+}
+
+// TotalsByCheckIDs batch-computes CheckRepo.GetTotal for many checks in a
+// single query, so CheckService.List (and any other multi-check read) never
+// needs one GetTotal round-trip per row (N+1). It applies the exact same
+// exclusion as GetTotal — orders whose status is in
+// domain.InactiveOrderStatuses (rejected/cancelled) never contribute — fed
+// from that one shared slice, so the two can never silently drift apart.
+//
+// A check with no active orders (either none placed, or all
+// rejected/cancelled) has no row in the GROUP BY result and is simply absent
+// from the returned map; callers must treat a missing key as 0, not an
+// error.
+func (r *CheckRepo) TotalsByCheckIDs(ctx context.Context, tx pgx.Tx, checkIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	totals := make(map[uuid.UUID]int64, len(checkIDs))
+	if len(checkIDs) == 0 {
+		return totals, nil
+	}
+
 	excluded := make([]string, len(domain.InactiveOrderStatuses))
 	for i, s := range domain.InactiveOrderStatuses {
 		excluded[i] = string(s)
 	}
 
-	var total int64
-	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(oi.quantity * oi.unit_price_amount), 0)
+	// checkIDs is sent as []string (cast to ::uuid[] in SQL), not
+	// []uuid.UUID directly: this codebase runs every pool under
+	// pgx.QueryExecModeSimpleProtocol (pgBouncer transaction-mode safety,
+	// ADR-SEC-001/002 — see platform/db.go), which cannot resolve an array
+	// element's OID without a server round-trip and fails array params of a
+	// non-driver-native slice type with "cannot find encode plan". The
+	// text[]-cast excluded-statuses parameter below already relies on this
+	// same pattern.
+	ids := make([]string, len(checkIDs))
+	for i, id := range checkIDs {
+		ids[i] = id.String()
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT o.check_id, SUM(oi.quantity * oi.unit_price_amount)
 		FROM orders o
 		JOIN order_items oi ON oi.order_id = o.id
-		WHERE o.check_id = $1 AND o.status <> ALL($2::text[])
-	`, checkID, excluded).Scan(&total)
+		WHERE o.check_id = ANY($1::uuid[]) AND o.status <> ALL($2::text[])
+		GROUP BY o.check_id
+	`, ids, excluded)
 	if err != nil {
-		return 0, fmt.Errorf("pos/repo/check: get total: %w", err)
+		return nil, fmt.Errorf("pos/repo/check: totals by check ids: %w", err)
 	}
-	return total, nil
+	defer rows.Close()
+
+	for rows.Next() {
+		var checkID uuid.UUID
+		var total int64
+		if err := rows.Scan(&checkID, &total); err != nil {
+			return nil, fmt.Errorf("pos/repo/check: totals by check ids scan: %w", err)
+		}
+		totals[checkID] = total
+	}
+	return totals, rows.Err()
 }
 
 // UpdateStatus transitions a check to a new status, guarded on its expected
@@ -166,7 +217,7 @@ func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, s
 		                  closed_at = CASE WHEN $2 IN ('closed','cancelled') THEN NOW() ELSE closed_at END,
 		                  updated_at = NOW()
 		WHERE id = $1 AND status = $3
-		RETURNING id, tenant_id, branch_id, table_id, table_label, status, opened_by,
+		RETURNING id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
 		          closed_by, note, opened_at, closed_at, created_at, updated_at`
 
 	c, err := scanCheck(tx.QueryRow(ctx, q, id, string(status), string(expectedStatus), closedBy))
@@ -186,7 +237,7 @@ func scanCheck(s interface {
 	var c domain.Check
 	var status string
 	if err := s.Scan(
-		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &status, &c.OpenedBy,
+		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &c.Pax, &status, &c.OpenedBy,
 		&c.ClosedBy, &c.Note, &c.OpenedAt, &c.ClosedAt, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return domain.Check{}, err

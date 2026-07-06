@@ -66,9 +66,20 @@ func NewCheckService(p CheckParams) *CheckService {
 // name regardless of any client-supplied value, so receipts/KDS keep
 // rendering a consistent label. c.TableID is left nil for masasız satış
 // (takeaway/delivery) checks, which never touch a table row.
+//
+// c.Pax (guest count) defaults to 1 when the caller supplies 0 or a
+// negative value. This is the single choke point every Open caller (HTTP
+// handler, e2e spine, service integration tests) goes through, so the
+// default lives here rather than at the HTTP layer or relying on the
+// column's DB DEFAULT — Create's INSERT lists pax explicitly, so a
+// zero-value Go int would otherwise write 0, not fall back to the column
+// default.
 func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, c domain.Check) (domain.Check, error) {
 	if err := requireBranch(ctx, principal, c.BranchID); err != nil {
 		return domain.Check{}, err
+	}
+	if c.Pax < 1 {
+		c.Pax = 1
 	}
 	c.TenantID = tenantID
 	c.Status = domain.CheckStatusOpen
@@ -140,6 +151,32 @@ func (s *CheckService) GetByID(ctx context.Context, tenantID, checkID uuid.UUID)
 	return c, nil
 }
 
+// GetByIDWithTotal is GetByID plus the check's current bill total (kurus —
+// CheckRepo.GetTotal, rejected/cancelled order items excluded). It exists
+// alongside the plain GetByID rather than replacing it because GetByID's
+// signature is depended on by GetPublic (cross-module pub.Check projection
+// consumed by payment) and ws/hub.go's table-label lookup — neither needs
+// nor should carry the extra query. Both reads happen in the same
+// tenant-scoped transaction so the total reflects the same RLS-visible
+// snapshot as the check row.
+func (s *CheckService) GetByIDWithTotal(ctx context.Context, tenantID, checkID uuid.UUID) (domain.Check, int64, error) {
+	var c domain.Check
+	var total int64
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		c, err = s.checkRepo.GetByID(ctx, tx, checkID)
+		if err != nil {
+			return err
+		}
+		total, err = s.checkRepo.GetTotal(ctx, tx, checkID)
+		return err
+	})
+	if err != nil {
+		return domain.Check{}, 0, wrapErr(err, "pos/service/check: get by id with total: %w")
+	}
+	return c, total, nil
+}
+
 // CheckListFilter narrows CheckService.List's result set. Both fields are
 // optional (nil = no filter on that column), mirroring ZonePatch/TablePatch's
 // pointer-field "not supplied" convention. Validation (is Status a known
@@ -158,20 +195,36 @@ type CheckListFilter struct {
 // bounds visibility, and a branch-scoped principal calling without a
 // branch_id filter simply sees every branch's checks, same as before this
 // filter existed.
-func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID, filter CheckListFilter) ([]domain.Check, error) {
+// List's second return value is each returned check's current bill total
+// (kurus, keyed by check ID — CheckRepo.GetTotal's rejected/cancelled
+// exclusion applies identically), computed via CheckRepo.TotalsByCheckIDs in
+// the same tenant-scoped read transaction as the check rows themselves —
+// one batch query for the whole page, not one GetTotal call per check
+// (N+1). A check absent from the map (no active orders) has a total of 0;
+// callers must treat a missing key that way, not as an error.
+func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID, filter CheckListFilter) ([]domain.Check, map[uuid.UUID]int64, error) {
 	var checks []domain.Check
+	var totals map[uuid.UUID]int64
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		checks, err = s.checkRepo.List(ctx, tx, repo.ListFilter{
 			Status:   filter.Status,
 			BranchID: filter.BranchID,
 		})
+		if err != nil {
+			return err
+		}
+		ids := make([]uuid.UUID, len(checks))
+		for i, c := range checks {
+			ids[i] = c.ID
+		}
+		totals, err = s.checkRepo.TotalsByCheckIDs(ctx, tx, ids)
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("pos/service/check: list: %w", err)
+		return nil, nil, fmt.Errorf("pos/service/check: list: %w", err)
 	}
-	return checks, nil
+	return checks, totals, nil
 }
 
 // Close closes a check after verifying total payments cover the check total.

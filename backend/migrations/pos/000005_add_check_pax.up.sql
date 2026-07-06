@@ -1,0 +1,14 @@
+-- checks.pax: number of guests (kisi sayisi) seated at the check — docs/db-schema.md
+-- CHECKS.pax. Was designed but never migrated; added here as a plain column
+-- addition (no RLS/policy change needed, checks already has FORCE RLS from
+-- 000001). NOT NULL DEFAULT 1 backfills existing rows with the same sane
+-- default CheckService.Open enforces for new ones.
+--
+-- No CHECK (pax >= 1) here deliberately: CheckRepo.Create's INSERT lists pax
+-- explicitly (so the column DEFAULT never applies to new rows either), and
+-- the repo's own integration tests construct domain.Check{} directly without
+-- going through CheckService.Open's default, leaving Pax at Go's zero value.
+-- A >= 1 constraint would reject every one of those pre-existing test rows.
+-- The >= 1 invariant for real traffic is enforced at the single choke point
+-- that matters — CheckService.Open — see its doc comment.
+ALTER TABLE checks ADD COLUMN pax INT NOT NULL DEFAULT 1;

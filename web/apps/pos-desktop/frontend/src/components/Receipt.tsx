@@ -2,9 +2,11 @@ import { useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import type { PendingLine } from '../lib/cart'
 import { pendingLineTotal } from '../lib/cart'
+import type { TrackedPayment } from '../lib/fiscalStatus'
 import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
-import { changeDue as computeChangeDue, clampToRemaining, remainingBalance, splitSuggestion } from '../lib/payment'
+import { changeDue as computeChangeDue, clampToRemaining, splitSuggestion } from '../lib/payment'
 import { ErrorBanner } from './ErrorBanner'
+import { FiscalStatusBadge } from './FiscalStatusBadge'
 import { HoldButton } from './HoldButton'
 
 const QUICK_NOTES = [5000, 10000, 20000, 50000] // ₺50 / ₺100 / ₺200 / ₺500 in kuruş
@@ -18,6 +20,11 @@ const SPLIT_PARTS: { parts: number; label: string }[] = [
   { parts: 4, label: "4'e böl" },
 ]
 
+/** Kuruş -> the "1234,56" shape the amount input expects. */
+function toMoneyInput(kurus: number): string {
+  return (kurus / 100).toFixed(2).replace('.', ',')
+}
+
 type ReceiptProps = {
   tableLabel: string
   confirmedOrders: main.OrderDTO[]
@@ -27,31 +34,34 @@ type ReceiptProps = {
   sendingOrder: boolean
   confirmedTotal: number
   pendingTotal: number
-  /**
-   * Sum of completed cash payments already recorded against this check
-   * (accumulated in App as each RegisterCashPayment call succeeds, seeded
-   * from ListCheckPayments on selection where the session's role allows
-   * that read). `remainingBalance(confirmedTotal, alreadyPaidTotal)` — not
-   * a sticky "hasPaid" boolean — is what actually drives every "is this
-   * check paid" decision below, so a split/partial payment is reflected
-   * immediately: the check stays payable (and open) for as many
-   * installments as it takes to bring this down to zero.
-   */
-  alreadyPaidTotal: number
+  /** Money whose fiscal record has SETTLED (server-recorded completed payments
+   * plus this session's completed ones). Only this enables the close. */
+  settledPaidTotal: number
+  /** What the cashier may still collect: total − settled − pending-in-flight.
+   * Computed in App (see lib/fiscalStatus.collectableRemaining) because it now
+   * needs the full payment list, not a single accumulated number. */
+  remaining: number
+  /** Settled money covers the check — mirrors the backend's own paid-in-full
+   * guard. Distinct from "closable": see closeBlockReason. */
+  isFullyPaid: boolean
+  /** Non-null while any payment on this check is awaiting a fiscal record
+   * (requirement 4). Blocks the close even when isFullyPaid is true. */
+  closeBlockReason: string | null
+  /** Payments registered against this check in this session, with live fiscal
+   * status. Empty for a check whose payments all predate this session. */
+  payments: readonly TrackedPayment[]
   /**
    * amountToRegister is the CLAMPED amount for this one cash-payment step
    * (never more than the remaining balance — see lib/payment's
-   * clampToRemaining) — this is what actually gets sent to
-   * RegisterCashPayment. receivedAmount is the raw cash the customer
-   * physically handed over for this step (which may exceed
-   * amountToRegister when this step's change is due) — passed alongside so
-   * the parent (App) can accumulate it for the receipt print that follows
-   * CloseCheck. This component's own receivedInput is cleared after each
-   * confirmed step (see handleConfirmPayment below) — App is the only
-   * place left that still knows the cumulative received total by print
-   * time.
+   * clampToRemaining). receivedAmount is the raw cash the customer physically
+   * handed over for this step (which may exceed amountToRegister when change is
+   * due) — passed alongside so the parent can attach it to the tracked payment
+   * for the receipt print that follows CloseCheck.
    */
   onRegisterPayment: (amountToRegister: number, receivedAmount: number) => Promise<void>
+  /** Requirement 3 — drop a failed payment from the tracked list so its amount
+   * returns to the collectable balance before the retry re-registers it. */
+  onDiscardFailedPayment: (paymentId: string) => void
   onCloseCheck: () => Promise<void>
   errorMessage: string
 }
@@ -62,6 +72,9 @@ type ReceiptProps = {
  * mono rows; unsent lines are the same style but removable (void, red —
  * the only place red appears outside close/cancel). Cash payment mode
  * expands this panel in place instead of opening a modal.
+ *
+ * Since ADR-FISCAL-002 a registered payment is not the end of the story: each
+ * one carries a fiscal-record status badge until the ÖKC confirms the receipt.
  */
 export function Receipt({
   tableLabel,
@@ -72,8 +85,13 @@ export function Receipt({
   sendingOrder,
   confirmedTotal,
   pendingTotal,
-  alreadyPaidTotal,
+  settledPaidTotal,
+  remaining,
+  isFullyPaid,
+  closeBlockReason,
+  payments,
   onRegisterPayment,
+  onDiscardFailedPayment,
   onCloseCheck,
   errorMessage,
 }: ReceiptProps) {
@@ -84,15 +102,10 @@ export function Receipt({
   const grandTotal = confirmedTotal + pendingTotal
   const canSendOrder = pendingLines.length > 0 && !sendingOrder
 
-  // remaining is the single source of truth for "is this check paid" — a
-  // check with confirmedTotal=630 and alreadyPaidTotal=50 is neither
-  // "unpaid" nor "paid": it is 580 short, still open, still payable in
-  // further installments. There is no sticky "hasPaid" flag anymore (that
-  // was the bug: it went true after the FIRST partial payment and hid the
-  // "Nakit al" button, making a second installment impossible).
-  const remaining = remainingBalance(confirmedTotal, alreadyPaidTotal)
-  const isFullyPaid = confirmedTotal > 0 && remaining <= 0
-  const canPay = pendingLines.length === 0 && confirmedTotal > 0 && !isFullyPaid
+  // `remaining` (not a sticky "hasPaid" flag) still drives everything, but it
+  // is now computed by App from three inputs — settled money, pending-in-flight
+  // money, and the check total — rather than from a single accumulated total.
+  const canPay = pendingLines.length === 0 && confirmedTotal > 0 && remaining > 0
 
   // An empty amount field means "exact cash for the remaining balance, no
   // change" — the common case (including the common case of a single,
@@ -107,9 +120,6 @@ export function Receipt({
   // back as changeDue, not as a recorded payment.
   const amountToRegister = clampToRemaining(receivedKurus, remaining)
   const changeDue = computeChangeDue(receivedKurus, remaining)
-  // Enabled for ANY positive entry, not just one covering the full
-  // remaining balance — this is the actual fix for the reported bug (a
-  // ₺50 entry against a ₺630 remaining balance must be payable).
   const receivedEnough = receivedKurus > 0 && remaining > 0
 
   async function handleConfirmPayment() {
@@ -130,6 +140,16 @@ export function Receipt({
     } finally {
       setSubmittingPayment(false)
     }
+  }
+
+  // Requirement 3 — "Yeniden dene": drop the failed payment (returning its
+  // amount to `remaining`) and reopen the ordinary cash flow with that amount
+  // prefilled. No bespoke retry endpoint: this registers a brand-new payment,
+  // exactly as if the cashier had typed the amount again.
+  function handleRetryPayment(payment: TrackedPayment) {
+    onDiscardFailedPayment(payment.id)
+    setReceivedInput(toMoneyInput(payment.amountTotal))
+    setCashMode(true)
   }
 
   return (
@@ -189,14 +209,16 @@ export function Receipt({
               </span>
             </div>
 
-            {alreadyPaidTotal > 0 && (
+            {settledPaidTotal > 0 && (
               <div className="flex items-baseline justify-between rounded-md bg-teal/10 px-2 py-1 text-sm">
                 <span className="text-ink-dim">Önceden ödenen</span>
                 <span className="money font-semibold tabular-nums text-teal">
-                  {formatMoney(alreadyPaidTotal)}
+                  {formatMoney(settledPaidTotal)}
                 </span>
               </div>
             )}
+
+            <PaymentStatusList payments={payments} onRetry={handleRetryPayment} />
 
             <ErrorBanner message={errorMessage} />
 
@@ -225,8 +247,21 @@ export function Receipt({
               <p className="text-center text-xs text-ink-dim">Önce siparişi gönderin</p>
             )}
 
-            {isFullyPaid && (
-              <HoldButton label="Basılı tutup kapat" holdingLabel="Kapatılıyor…" onConfirm={onCloseCheck} />
+            {/* Requirement 4 — the close is withheld, not merely disabled, while
+                a fiscal record is outstanding: a disabled HoldButton would still
+                invite the cashier to press and hold it for two seconds before
+                learning nothing happens. The reason takes its place. */}
+            {closeBlockReason ? (
+              <p
+                className="rounded-md border border-line bg-surface px-3 py-2 text-center text-sm text-ink"
+                role="status"
+              >
+                {closeBlockReason} — mali kayıt tamamlanmadan adisyon kapatılamaz.
+              </p>
+            ) : (
+              isFullyPaid && (
+                <HoldButton label="Basılı tutup kapat" holdingLabel="Kapatılıyor…" onConfirm={onCloseCheck} />
+              )
             )}
           </div>
         </>
@@ -239,9 +274,9 @@ export function Receipt({
             <p className="money font-display text-4xl font-bold tabular-nums text-ink">
               {formatMoney(remaining)}
             </p>
-            {alreadyPaidTotal > 0 && (
+            {settledPaidTotal > 0 && (
               <p className="mt-1 text-xs text-ink-dim">
-                {formatMoney(confirmedTotal)} hesaptan {formatMoney(alreadyPaidTotal)} ödendi
+                {formatMoney(confirmedTotal)} hesaptan {formatMoney(settledPaidTotal)} ödendi
               </p>
             )}
 
@@ -250,7 +285,7 @@ export function Receipt({
                 <button
                   key={note}
                   type="button"
-                  onClick={() => setReceivedInput((note / 100).toFixed(2).replace('.', ','))}
+                  onClick={() => setReceivedInput(toMoneyInput(note))}
                   className="min-h-14 rounded-md border border-line bg-surface font-semibold text-ink"
                 >
                   {formatMoney(note)}
@@ -273,9 +308,7 @@ export function Receipt({
                 <button
                   key={parts}
                   type="button"
-                  onClick={() =>
-                    setReceivedInput((splitSuggestion(remaining, parts) / 100).toFixed(2).replace('.', ','))
-                  }
+                  onClick={() => setReceivedInput(toMoneyInput(splitSuggestion(remaining, parts)))}
                   className="min-h-10 rounded-md border border-dashed border-line bg-surface text-sm text-ink-dim"
                 >
                   {label}
@@ -340,5 +373,54 @@ export function Receipt({
         </div>
       )}
     </aside>
+  )
+}
+
+/**
+ * One row per payment this session registered against the check, each carrying
+ * its fiscal-record status (requirement 1). A payment whose registration failed
+ * additionally shows the reason and a full-width retry target (requirement 3 —
+ * min-h-11 = 44px).
+ *
+ * Nothing renders for a check with no payments yet, so the ordinary
+ * add-items-and-send flow is visually untouched.
+ */
+function PaymentStatusList({
+  payments,
+  onRetry,
+}: {
+  payments: readonly TrackedPayment[]
+  onRetry: (payment: TrackedPayment) => void
+}) {
+  if (payments.length === 0) return null
+
+  return (
+    <ul className="space-y-2">
+      {payments.map((payment) => (
+        <li key={payment.id} className="rounded-md border border-line bg-surface px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="money text-sm font-semibold tabular-nums text-ink">
+              {formatMoney(payment.amountTotal)}
+            </span>
+            <FiscalStatusBadge payment={payment} />
+          </div>
+
+          {payment.status === 'failed' && (
+            <>
+              <p className="mt-1 text-xs leading-snug text-ink-dim">
+                {payment.failureReason ?? 'Mali kayıt tamamlanamadı.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onRetry(payment)}
+                className="mt-2 min-h-11 w-full rounded-md bg-amber px-3 font-semibold text-amber-ink"
+              >
+                Yeniden dene
+              </button>
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
   )
 }

@@ -1,4 +1,5 @@
 import type { main } from '../../wailsjs/go/models'
+import { PendingFiscalDot } from './PendingFiscalDot'
 
 type TablePlanProps = {
   zones: main.ZonePlanDTO[]
@@ -6,6 +7,9 @@ type TablePlanProps = {
   errorMessage: string
   onSelectAvailable: (table: main.TableDTO) => void
   onSelectOccupied: (checkId: string) => void
+  /** Checks with a payment awaiting its fiscal record — the table holding one
+   * gets an amber indicator (requirement 5). */
+  awaitingFiscalCheckIds: ReadonlySet<string>
 }
 
 /**
@@ -21,7 +25,14 @@ type TablePlanProps = {
  *  - cleaning        -> not tappable (disabled, both visually and via the
  *                       button's disabled attribute)
  */
-export function TablePlan({ zones, loading, errorMessage, onSelectAvailable, onSelectOccupied }: TablePlanProps) {
+export function TablePlan({
+  zones,
+  loading,
+  errorMessage,
+  onSelectAvailable,
+  onSelectOccupied,
+  awaitingFiscalCheckIds,
+}: TablePlanProps) {
   // Fail-open once the plan has data: a transient failure on the 30s
   // background refresh (see App.tsx's refreshTables) must not blank out an
   // already-drawn, still-usable plan — that would make every table
@@ -60,6 +71,7 @@ export function TablePlan({ zones, loading, errorMessage, onSelectAvailable, onS
                 table={table}
                 onSelectAvailable={onSelectAvailable}
                 onSelectOccupied={onSelectOccupied}
+                awaitingFiscal={Boolean(table.active_check_id && awaitingFiscalCheckIds.has(table.active_check_id))}
               />
             ))}
           </div>
@@ -73,10 +85,12 @@ function TableCard({
   table,
   onSelectAvailable,
   onSelectOccupied,
+  awaitingFiscal,
 }: {
   table: main.TableDTO
   onSelectAvailable: (table: main.TableDTO) => void
   onSelectOccupied: (checkId: string) => void
+  awaitingFiscal: boolean
 }) {
   const isOccupied = table.status === 'occupied'
   const isReserved = table.status === 'reserved'
@@ -101,8 +115,15 @@ function TableCard({
       type="button"
       disabled={isCleaning}
       onClick={handleClick}
-      className={`flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors disabled:cursor-not-allowed ${variant}`}
+      className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors disabled:cursor-not-allowed ${variant}`}
     >
+      {/* An occupied card is already painted amber, so the indicator flips to
+          amber-ink there to stay visible (see PendingFiscalDot's onAmber). */}
+      {awaitingFiscal && (
+        <span className="absolute right-1.5 top-1.5">
+          <PendingFiscalDot onAmber={isOccupied} />
+        </span>
+      )}
       <span className="block font-medium leading-tight">{table.name}</span>
       <span className="block text-xs opacity-80">{table.capacity} kişi</span>
       {isReserved && <span className="block text-[10px] uppercase tracking-wide">Rezerve</span>}

@@ -127,9 +127,35 @@ button {
   animation: change-due-pulse 180ms ease-out;
 }
 
+/* --- Bekleyen mali kayıt (ADR-FISCAL-002) ---
+ * A pending fiscal record is an open-ended wait (milliseconds on the mock
+ * adapter, minutes on a real ÖKC while the waiter takes payment at the table),
+ * so unlike the two motions above this one LOOPS rather than playing once.
+ *
+ * The 150-300ms budget in the design plan governs one-shot transitions; a loop
+ * at that tempo would strobe at ~4Hz and trip WCAG 2.3.1 (three flashes per
+ * second). 1.8s with a shallow opacity floor reads as "alive, still waiting"
+ * without pulling the eye off the receipt. Opacity only — no transform — so it
+ * never nudges layout in the adisyon list.
+ */
+@keyframes fiscal-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.fiscal-pending-pulse {
+  animation: fiscal-pending-pulse 1.8s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .receipt-line-enter,
-  .change-due-pulse {
+  .change-due-pulse,
+  .fiscal-pending-pulse {
     animation: none !important;
   }
 }

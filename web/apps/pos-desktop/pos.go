@@ -287,6 +287,49 @@ func (a *App) RegisterCashPayment(branchID, checkID string, amountTotal int64) (
 	return dto, nil
 }
 
+// GetPayment reads a single payment by id so the cashier UI can observe the
+// asynchronous fiscal registration finishing (ADR-FISCAL-002): since
+// RegisterCashPayment now returns status "pending" rather than a completed
+// sale, this is what turns the "Mali kayıt bekliyor" badge into
+// "Fiş kesildi" / "Başarısız" / "İptal".
+//
+// PERMISSION GAP — same root cause as ListCheckPayments below, and it is a
+// harder blocker here: GET /api/v1/payments/{id} is gated on
+// "payment.payment.read" (backend/configs/opa/bundles/authz.rego), granted to
+// shift_manager/manager only. A plain "cashier" session — the role this POS
+// explicitly supports, holding only "payment.sale.register" — gets 403 and can
+// therefore never see its own payment leave "pending".
+//
+// The frontend must NOT block the cashier on that (a permanently pending badge
+// would make every adisyon unclosable): it degrades to an "durum okunamıyor"
+// badge and lets the backend's own CloseCheck paid-in-full guard
+// (pos/service.CheckService.Close -> ErrInsufficientPayment) remain the real
+// gate — see frontend/src/lib/fiscalStatus.ts's `unknown` status.
+//
+// Closing this properly needs a NARROWER permission than payment.payment.read
+// (which also gates the tenant-wide ListByTenant reconciliation view — see
+// ListCheckPayments' doc comment): e.g. a payment.status.read action bound to
+// GET /{id} alone, granted to cashier + shift_manager, branch-scoped. That is a
+// policy decision for the backend/security owners, flagged here rather than
+// silently widened.
+func (a *App) GetPayment(paymentID string) (PaymentDTO, error) {
+	p, err := a.api.GetPayment(a.ctx, paymentID)
+	if err != nil {
+		return PaymentDTO{}, err
+	}
+	dto := PaymentDTO{
+		ID:          p.ID,
+		Method:      p.Method,
+		Status:      p.Status,
+		AmountTotal: p.AmountTotal,
+		Currency:    p.Currency,
+	}
+	if p.CheckID != nil {
+		dto.CheckID = *p.CheckID
+	}
+	return dto, nil
+}
+
 // ListCheckPayments returns the completed payments already recorded against
 // a check (payment.payment.read). The cashier UI calls this when selecting
 // a check — before offering "Nakit al" — to compute the REMAINING balance

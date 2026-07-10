@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
+import { PendingFiscalDot } from './PendingFiscalDot'
 
 type CheckRailProps = {
   checks: main.CheckDTO[]
@@ -7,6 +8,10 @@ type CheckRailProps = {
   onSelect: (checkId: string) => void
   onOpenTakeaway: () => Promise<void>
   canOpenCheck: boolean
+  /** Checks with at least one payment awaiting its fiscal record. Only covers
+   * payments THIS session registered — a pending payment taken at another
+   * station is invisible here (see the report's "bilinen sınır" note). */
+  awaitingFiscalCheckIds: ReadonlySet<string>
 }
 
 function elapsedLabel(openedAt: string): string {
@@ -23,7 +28,14 @@ function elapsedLabel(openedAt: string): string {
  * TablePlan.tsx (Sprint-5 Wave 2 masa planı, center panel when no adisyon is
  * selected).
  */
-export function CheckRail({ checks, selectedCheckId, onSelect, onOpenTakeaway, canOpenCheck }: CheckRailProps) {
+export function CheckRail({
+  checks,
+  selectedCheckId,
+  onSelect,
+  onOpenTakeaway,
+  canOpenCheck,
+  awaitingFiscalCheckIds,
+}: CheckRailProps) {
   const [opening, setOpening] = useState(false)
 
   async function handleOpenTakeaway() {
@@ -62,6 +74,7 @@ export function CheckRail({ checks, selectedCheckId, onSelect, onOpenTakeaway, c
                       {elapsedLabel(chk.opened_at)}
                     </span>
                   </span>
+                  {awaitingFiscalCheckIds.has(chk.id) && <PendingFiscalDot />}
                 </button>
               </li>
             ))}

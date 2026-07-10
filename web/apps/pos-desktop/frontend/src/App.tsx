@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CloseCheck,
   DevLoginEnabled,
@@ -27,6 +27,17 @@ import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
 import { TablePlan } from './components/TablePlan'
+import { useFiscalStatusPolling, type StatusResolution } from './hooks/useFiscalStatusPolling'
+import {
+  checkIdsAwaitingFiscal,
+  closeBlockReason as computeCloseBlockReason,
+  collectableRemaining,
+  isFullyPaid as computeIsFullyPaid,
+  parseStatus,
+  receivedTotalForPrint,
+  settledTotal,
+  type TrackedPayment,
+} from './lib/fiscalStatus'
 import {
   addProductToPending,
   confirmedOrdersTotal,
@@ -43,6 +54,8 @@ type PrinterEvent = {
   error?: string
 }
 
+const EMPTY_SERVER_COMPLETED: ReadonlyMap<string, number> = new Map()
+
 function App() {
   const [session, setSession] = useState<main.SessionDTO | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
@@ -56,15 +69,30 @@ function App() {
   const [selectedCheck, setSelectedCheck] = useState<main.CheckDTO | null>(null)
   const [confirmedOrders, setConfirmedOrders] = useState<main.OrderDTO[]>([])
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
-  // alreadyPaidTotal is the ONLY thing that drives whether a check is
-  // "fully paid" (see Receipt.tsx's remainingBalance) — there is no
-  // separate sticky per-check boolean anymore. It is seeded from
-  // ListCheckPayments on selection (fail-open — see the try/catch in
-  // handleSelectCheck) and accumulated locally on every successful
-  // RegisterCashPayment, so a split payment made entirely within this
-  // session is always correct even for a plain cashier session that
-  // cannot re-read ListCheckPayments after the first call.
-  const [alreadyPaidTotal, setAlreadyPaidTotal] = useState(0)
+
+  // --- Payment money, split into two buckets (ADR-FISCAL-002) -------------
+  //
+  // Before the fiscal registration went asynchronous, a single accumulated
+  // `alreadyPaidTotal` was correct: RegisterCashPayment returned a COMPLETED
+  // payment, so crediting its amount immediately matched what the backend had
+  // on record. That is no longer true — POST now returns `pending`, and
+  // pos/service.CheckService.Close's paid-in-full guard (TotalPaidForCheck)
+  // counts `completed` payments only. Carrying the old single-number model
+  // forward would show a check as fully paid the instant the cash was taken,
+  // offer "Basılı tutup kapat", and have the backend reject the close.
+  //
+  //   serverCompleted — id -> amount, from ListCheckPayments (which filters
+  //     status='completed' server-side). Keyed by id, not summed, so that a
+  //     tracked payment which later appears in this snapshot is not counted
+  //     twice. Empty for a cashier-only session (403, fail-open).
+  //   trackedPayments — every payment THIS session registered, with its live
+  //     fiscal status. Deliberately NOT cleared when the cashier deselects a
+  //     check: a pending fiscal record must keep its amber dot on the masa
+  //     planı (requirement 5) and keep polling until it settles.
+  //
+  // See lib/fiscalStatus.ts for the arithmetic these two feed.
+  const [serverCompleted, setServerCompleted] = useState<ReadonlyMap<string, number>>(EMPTY_SERVER_COMPLETED)
+  const [trackedPayments, setTrackedPayments] = useState<TrackedPayment[]>([])
 
   // Masa planı (Sprint-5 Wave 2) — full-panel floor plan shown instead of
   // ProductGrid while no adisyon is selected (see the center-panel toggle
@@ -80,23 +108,11 @@ function App() {
 
   const [printer, setPrinter] = useState<PrinterEvent | null>(null)
 
-  // Receipt printing — lastReceivedAmount is the CUMULATIVE cash the
-  // customer has physically handed over across every cash-payment step
-  // taken for the currently selected check this session (Receipt.tsx's
-  // onRegisterPayment receivedAmount, summed — not just the last step),
-  // so a split payment's printed receipt still shows the correct total
-  // "ALINAN"/change (internal/receipt.Build computes change as
-  // receivedAmount - subtotal, so this must be the sum across every
-  // installment, not only the final one). Reset to 0 on every check
-  // selection (see handleSelectCheck) so it never leaks between checks.
-  //
-  // KNOWN LIMITATION (pre-existing, unchanged by this split-payment work):
-  // if a check's payments were made in an earlier app session (e.g. the
-  // station restarted mid-split), this session never learns what cash was
-  // physically handed over for those — it only accumulates what THIS
-  // session itself registers. A reprint after such a restart still shows
-  // whatever partial amount this session collected, not the true total.
-  const [lastReceivedAmount, setLastReceivedAmount] = useState(0)
+  // Cash handed over for the check that was just closed, captured at close time
+  // (trackedPayments is cleared by then) so "Fişi yeniden yazdır" still prints
+  // the right ALINAN/para üstü. Derived from the payments whose fiscal record
+  // actually settled — see receivedTotalForPrint.
+  const [printReceivedAmount, setPrintReceivedAmount] = useState(0)
   const [printError, setPrintError] = useState('')
   const [printRetryCheckId, setPrintRetryCheckId] = useState<string | null>(null)
 
@@ -174,6 +190,42 @@ function App() {
     return () => clearInterval(id)
   }, [session, selectedCheck, refreshTables])
 
+  // --- Fiscal status polling --------------------------------------------
+  //
+  // Scoped to the whole app rather than the receipt panel, on purpose: the
+  // cashier routinely takes cash and immediately walks back to the masa planı
+  // while the ÖKC is still cutting the receipt. Polling only while the payment
+  // screen is mounted would freeze that check's amber dot (requirement 5)
+  // forever. The hook creates no timer at all once nothing is pending, so the
+  // idle cost is zero — and it stops on unmount (logout / app close) as
+  // required.
+  const handleStatusResolutions = useCallback((resolutions: StatusResolution[]) => {
+    setTrackedPayments((prev) =>
+      prev.map((p) => {
+        const resolved = resolutions.find((r) => r.id === p.id)
+        if (!resolved) return p
+        return { ...p, status: resolved.status, failureReason: resolved.failureReason }
+      }),
+    )
+  }, [])
+
+  useFiscalStatusPolling(trackedPayments, handleStatusResolutions)
+
+  const selectedCheckId = selectedCheck?.id ?? null
+
+  const trackedForSelected = useMemo(
+    () => trackedPayments.filter((p) => p.checkId === selectedCheckId),
+    [trackedPayments, selectedCheckId],
+  )
+
+  const awaitingFiscalCheckIds = useMemo(() => checkIdsAwaitingFiscal(trackedPayments), [trackedPayments])
+
+  const confirmedTotal = confirmedOrdersTotal(confirmedOrders)
+  const settledPaidTotal = settledTotal(serverCompleted, trackedForSelected)
+  const remaining = collectableRemaining(confirmedTotal, serverCompleted, trackedForSelected)
+  const fullyPaid = computeIsFullyPaid(confirmedTotal, serverCompleted, trackedForSelected)
+  const closeBlockReason = computeCloseBlockReason(trackedForSelected)
+
   async function handleDevLogin(email: string) {
     try {
       const result = await Login(email)
@@ -228,34 +280,34 @@ function App() {
     setConfirmedOrders([])
     setPendingLines([])
     setOpenChecks([])
-    setAlreadyPaidTotal(0)
+    setServerCompleted(EMPTY_SERVER_COMPLETED)
+    setTrackedPayments([])
     setZones([])
     setTablesError('')
-    setLastReceivedAmount(0)
+    setPrintReceivedAmount(0)
     setPrintError('')
     setPrintRetryCheckId(null)
   }
 
-  // refreshPaidTotal re-syncs alreadyPaidTotal from the server's own
-  // record of completed payments for a check — used both when a check is
-  // first selected (see handleSelectCheck below) and after a
-  // RegisterCashPayment call fails (see handleRegisterPayment): a failed
-  // call might still have landed server-side (network error after the
-  // write committed), so the remaining balance shown to the cashier must
-  // not silently drift from what the backend actually has on record.
+  // refreshServerPayments re-syncs the set of COMPLETED payments the server has
+  // on record for a check — used both when a check is first selected and after
+  // a RegisterCashPayment call fails (see handleRegisterPayment): a failed call
+  // might still have landed server-side (network error after the write
+  // committed), so the remaining balance shown to the cashier must not silently
+  // drift from what the backend actually has.
   //
-  // IMPORTANT — same permission gap as before: this needs
-  // "payment.payment.read", which a plain "cashier" session does not have
-  // (see pos.go's ListCheckPayments doc comment). Fail-open on ANY error
-  // (403 included) so a permission gap or transient failure never blocks
-  // the cashier's flow — it just means alreadyPaidTotal keeps whatever
-  // value local accumulation already gave it (0 on first select, or
-  // whatever partial payments this session itself already recorded).
-  const refreshPaidTotal = useCallback(async (checkId: string) => {
+  // Keyed by payment id rather than summed: settledTotal() needs the ids to
+  // avoid double-counting a payment that appears both here and in
+  // trackedPayments (which it will, as soon as it completes).
+  //
+  // IMPORTANT — permission gap: this needs "payment.payment.read", which a
+  // plain "cashier" session does not have (see pos.go's ListCheckPayments doc
+  // comment). Fail-open on ANY error (403 included) so a permission gap or
+  // transient failure never blocks the cashier's flow.
+  const refreshServerPayments = useCallback(async (checkId: string) => {
     try {
       const payments = await ListCheckPayments(checkId)
-      const paidSoFar = payments.reduce((sum, p) => sum + p.amount_total, 0)
-      setAlreadyPaidTotal(paidSoFar)
+      setServerCompleted(new Map(payments.map((p) => [p.id, p.amount_total])))
     } catch (err) {
       console.warn('ListCheckPayments failed — remaining balance may be stale for this check', err)
     }
@@ -264,11 +316,7 @@ function App() {
   async function handleSelectCheck(checkId: string) {
     setReceiptError('')
     setPendingLines([])
-    setAlreadyPaidTotal(0)
-    // Reset the cumulative "cash physically handed over" tracker for the
-    // receipt print (see lastReceivedAmount's doc comment) — it must not
-    // carry over from whatever check was selected before this one.
-    setLastReceivedAmount(0)
+    setServerCompleted(EMPTY_SERVER_COMPLETED)
     try {
       const [check, orders] = await Promise.all([GetCheck(checkId), ListCheckOrders(checkId)])
       setSelectedCheck(check)
@@ -278,11 +326,12 @@ function App() {
       return
     }
 
-    // Seed alreadyPaidTotal from any payment already recorded against this
-    // check (e.g. the app restarted mid-split, or a manager reopens a
-    // check partially paid in an earlier session) — see refreshPaidTotal's
-    // doc comment for the permission caveat.
-    await refreshPaidTotal(checkId)
+    // Seed from any completed payment already recorded against this check
+    // (e.g. the app restarted mid-split, or a manager reopens a check partially
+    // paid in an earlier session) — see refreshServerPayments' doc comment for
+    // the permission caveat. trackedPayments is NOT reset here: a payment this
+    // session registered against this check may still be mid-registration.
+    await refreshServerPayments(checkId)
   }
 
   // handleSelectTable is TablePlan's tap handler for an empty/reserved
@@ -346,33 +395,55 @@ function App() {
     }
   }
 
-  // amountToRegister is one cash-payment INSTALLMENT (already clamped to
-  // the remaining balance by Receipt.tsx — never the check's full total
-  // unless this is the only/final installment); receivedAmount is the raw
-  // cash the customer handed over for this installment. Both accumulate
-  // rather than overwrite, so a split payment across several calls ends
-  // up correct: alreadyPaidTotal reaches confirmedTotal only once every
-  // installment has been registered, and lastReceivedAmount reflects the
-  // true total cash handed over for the whole check (see its doc comment).
+  // amountToRegister is one cash-payment INSTALLMENT (already clamped to the
+  // remaining balance by Receipt.tsx); receivedAmount is the raw cash the
+  // customer handed over for this installment.
+  //
+  // The returned payment is `pending` (ADR-FISCAL-002): its amount is recorded
+  // as tracked-but-unsettled, which reserves it against the remaining balance
+  // (so the same money cannot be collected twice) WITHOUT marking the check
+  // payable-in-full. The polling hook flips it to completed/failed/voided.
   async function handleRegisterPayment(amountToRegister: number, receivedAmount: number) {
     if (!selectedCheck || !session?.branch_id) return
     setReceiptError('')
     const checkId = selectedCheck.id
     try {
       const payment = await RegisterCashPayment(session.branch_id, checkId, amountToRegister)
-      setAlreadyPaidTotal((total) => total + payment.amount_total)
-      setLastReceivedAmount((total) => total + receivedAmount)
+      setTrackedPayments((prev) => [
+        ...prev,
+        {
+          id: payment.id,
+          checkId,
+          amountTotal: payment.amount_total,
+          // Trust the server's status verbatim rather than assuming `pending` —
+          // a synchronous adapter (or a replayed idempotent POST) may hand back
+          // an already-completed payment, which must go straight to green.
+          status: parseStatus(payment.status),
+          receivedAmount,
+          registeredAtMs: Date.now(),
+        },
+      ])
     } catch (err) {
       setReceiptError(describeError(err))
       // The call may still have landed server-side despite the client-side
-      // error (e.g. a network failure after the write committed) — re-sync
-      // the remaining balance from the server rather than risk the cashier
-      // retrying a payment that already went through (see refreshPaidTotal's
-      // doc comment; fail-open, so this is a no-op for a plain cashier
-      // session that can't read payments back at all).
-      await refreshPaidTotal(checkId)
+      // error (e.g. a network failure after the write committed) — re-sync the
+      // remaining balance from the server rather than risk the cashier retrying
+      // a payment that already went through (fail-open, so this is a no-op for
+      // a plain cashier session that can't read payments back at all).
+      await refreshServerPayments(checkId)
       throw err
     }
+  }
+
+  // Requirement 3: retry a failed fiscal registration. The failed payment
+  // carries no money (it never counted toward settled or reserved — see
+  // fiscalStatus.ts), so dropping it from the tracked list simply returns its
+  // amount to the collectable balance. The retry itself is just the ordinary
+  // cash flow again: Receipt reopens cash mode with the amount prefilled and
+  // calls handleRegisterPayment, which POSTs a brand-new payment. The failed
+  // one stays on record server-side; nothing here mutates it.
+  function handleDiscardFailedPayment(paymentId: string) {
+    setTrackedPayments((prev) => prev.filter((p) => p.id !== paymentId))
   }
 
   // printReceiptFor is best-effort by design (task note: "baskı hatası
@@ -393,20 +464,30 @@ function App() {
 
   async function handleReprintReceipt() {
     if (!printRetryCheckId) return
-    await printReceiptFor(printRetryCheckId, lastReceivedAmount)
+    await printReceiptFor(printRetryCheckId, printReceivedAmount)
   }
 
   async function handleCloseCheck() {
     if (!selectedCheck) return
+    // Requirement 4 — belt and braces. The button is already hidden while a
+    // fiscal record is pending (see Receipt), but a close must never slip
+    // through: the receipt for a payment still being registered would be
+    // printed against a check the backend has not accepted as paid.
+    if (closeBlockReason) {
+      setReceiptError(`${closeBlockReason} — mali kayıt tamamlanmadan adisyon kapatılamaz.`)
+      return
+    }
     setReceiptError('')
     const checkId = selectedCheck.id
-    const receivedAmount = lastReceivedAmount
+    const receivedAmount = receivedTotalForPrint(trackedForSelected)
     try {
       await CloseCheck(checkId)
       setSelectedCheck(null)
       setConfirmedOrders([])
       setPendingLines([])
-      setAlreadyPaidTotal(0)
+      setServerCompleted(EMPTY_SERVER_COMPLETED)
+      setTrackedPayments((prev) => prev.filter((p) => p.checkId !== checkId))
+      setPrintReceivedAmount(receivedAmount)
       refreshOpenChecks()
       refreshTables(session?.branch_id)
     } catch (err) {
@@ -489,10 +570,11 @@ function App() {
       <div className="flex flex-1 overflow-hidden">
         <CheckRail
           checks={openChecks}
-          selectedCheckId={selectedCheck?.id ?? null}
+          selectedCheckId={selectedCheckId}
           onSelect={handleSelectCheck}
           onOpenTakeaway={handleOpenTakeaway}
           canOpenCheck={canOpenCheck}
+          awaitingFiscalCheckIds={awaitingFiscalCheckIds}
         />
 
         {selectedCheck ? (
@@ -504,6 +586,7 @@ function App() {
             errorMessage={tablesError}
             onSelectAvailable={handleSelectTable}
             onSelectOccupied={handleSelectCheck}
+            awaitingFiscalCheckIds={awaitingFiscalCheckIds}
           />
         )}
 
@@ -514,10 +597,15 @@ function App() {
           onRemovePendingLine={handleRemovePendingLine}
           onSendOrder={handleSendOrder}
           sendingOrder={sendingOrder}
-          confirmedTotal={confirmedOrdersTotal(confirmedOrders)}
+          confirmedTotal={confirmedTotal}
           pendingTotal={sumPendingTotal(pendingLines)}
-          alreadyPaidTotal={alreadyPaidTotal}
+          settledPaidTotal={settledPaidTotal}
+          remaining={remaining}
+          isFullyPaid={fullyPaid}
+          closeBlockReason={closeBlockReason}
+          payments={trackedForSelected}
           onRegisterPayment={handleRegisterPayment}
+          onDiscardFailedPayment={handleDiscardFailedPayment}
           onCloseCheck={handleCloseCheck}
           errorMessage={receiptError}
         />

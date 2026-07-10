@@ -3,6 +3,21 @@
 // maps the status codes callers actually hit in this flow to a specific,
 // actionable Turkish message — per the design plan's "hatalar spesifik"
 // requirement, rather than showing the raw Go error string.
+/**
+ * True when a Go-side error carries an HTTP 403. Used to distinguish "this
+ * station's role may not read payment status" (a permanent property of the
+ * session — see fiscalStatus.ts's `unknown`) from a transient read failure that
+ * is worth retrying on the next poll tick.
+ *
+ * String matching is the only option available: Wails flattens Go errors to
+ * their Error() text across the IPC boundary, so the *APIError's status code is
+ * not recoverable as a number here (see describeError below, which has always
+ * worked this way).
+ */
+export function isForbiddenError(err: unknown): boolean {
+  return String(err).includes('status 403')
+}
+
 export function describeError(err: unknown): string {
   const raw = String(err)
 

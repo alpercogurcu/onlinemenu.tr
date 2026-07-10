@@ -369,6 +369,35 @@ func (c *Client) RegisterCashPayment(ctx context.Context, branchID, checkID stri
 	return out, nil
 }
 
+// GetPayment calls GET /api/v1/payments/{id} — the ONLY way a client can
+// observe the outcome of the asynchronous fiscal registration (ADR-FISCAL-002):
+// POST /api/v1/payments now returns immediately with status "pending" and the
+// ÖKC receipt is cut out-of-band, moving the payment to
+// completed | failed | voided some time later (milliseconds for the mock
+// adapter, minutes for a real device where a waiter must physically take the
+// payment).
+//
+// ListCheckPayments cannot substitute for this: payment/repo.PaymentRepo's
+// ListByCheck filters `status = 'completed'`, so a still-pending payment is
+// invisible there — it simply does not appear in the list until it has already
+// finished. Polling this endpoint per payment id is the only observation path.
+//
+// PERMISSION GAP (blocking for the plain "cashier" role — see pos.go's
+// GetPayment doc comment): this requires "payment.payment.read", which
+// backend/configs/opa/bundles/authz.rego grants to shift_manager/manager only.
+// A cashier-only session gets 403 here, and therefore cannot observe its own
+// payment reaching "completed". Callers must degrade rather than block.
+func (c *Client) GetPayment(ctx context.Context, paymentID string) (Payment, error) {
+	if paymentID == "" {
+		return Payment{}, fmt.Errorf("apiclient: get payment: payment id is required")
+	}
+	var out Payment
+	if err := c.do(ctx, http.MethodGet, "/api/v1/payments/"+url.PathEscape(paymentID), nil, &out); err != nil {
+		return Payment{}, fmt.Errorf("apiclient: get payment: %w", err)
+	}
+	return out, nil
+}
+
 // listPaymentsResponse mirrors payment/http listPayments' envelope
 // (map[string]any{"payments": out}).
 type listPaymentsResponse struct {

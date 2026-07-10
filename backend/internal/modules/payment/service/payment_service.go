@@ -346,6 +346,10 @@ func (s *PaymentService) VoidSale(ctx context.Context, tenantID, paymentID uuid.
 	if err != nil {
 		return fmt.Errorf("payment/service: void sale: load submission: %w", err)
 	}
+	// A replayed void is idempotent success, not an error.
+	if sub.Status == domain.FiscalSubmissionVoided {
+		return nil
+	}
 	// Only a registration the device actually completed can be voided. A
 	// pending/submitted row races the worker: voiding it while SubmitSale is in
 	// flight would let the later 'completed' result be silently dropped by the

@@ -34,16 +34,13 @@ var (
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
-	ctr, err := tcpostgres.Run(ctx,
-		"pgvector/pgvector:pg17",
-		tcpostgres.WithDatabase("testdb"),
-		tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	ctr, err := startPostgres(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "start postgres container: %v\n", err)
-		os.Exit(1)
+		// No container runtime (typical local dev without Docker): leave
+		// sharedPool nil so requireDB skips the DB-backed tests, and still run
+		// the pure unit tests that share this binary.
+		fmt.Fprintf(os.Stderr, "postgres container unavailable, skipping DB-backed tests: %v\n", err)
+		os.Exit(m.Run())
 	}
 
 	superDSN, err := ctr.ConnectionString(ctx, "sslmode=disable")
@@ -81,6 +78,32 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(rc)
+}
+
+// startPostgres converts testcontainers' missing-runtime panic into an error.
+// MustExtractDockerHost panics (rather than returning) when no Docker daemon is
+// reachable, which would take the whole test binary down with it.
+func startPostgres(ctx context.Context) (ctr *tcpostgres.PostgresContainer, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("container runtime unavailable: %v", r)
+		}
+	}()
+	return tcpostgres.Run(ctx,
+		"pgvector/pgvector:pg17",
+		tcpostgres.WithDatabase("testdb"),
+		tcpostgres.WithUsername("postgres"),
+		tcpostgres.WithPassword("postgres"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+}
+
+// requireDB skips a test when no Postgres container could be started.
+func requireDB(t *testing.T) {
+	t.Helper()
+	if sharedPool == nil {
+		t.Skip("postgres container unavailable (is Docker running?)")
+	}
 }
 
 // migrationsBase returns the absolute path to backend/migrations.
@@ -183,6 +206,7 @@ func newPool(ctx context.Context, baseDSN, user, password string) *db.Pool {
 // ---------------------------------------------------------------------------
 
 func TestPaymentRepo_Create_GetByID(t *testing.T) {
+	requireDB(t)
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()
 	checkID := uuid.New()
@@ -218,6 +242,7 @@ func TestPaymentRepo_Create_GetByID(t *testing.T) {
 }
 
 func TestPaymentRepo_GetByIdempotencyKey(t *testing.T) {
+	requireDB(t)
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()
 	key := uuid.New().String()
@@ -248,6 +273,7 @@ func TestPaymentRepo_GetByIdempotencyKey(t *testing.T) {
 }
 
 func TestPaymentRepo_Complete_WithReceipt(t *testing.T) {
+	requireDB(t)
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()
 
@@ -296,6 +322,7 @@ func TestPaymentRepo_Complete_WithReceipt(t *testing.T) {
 }
 
 func TestPaymentRepo_TotalPaidForCheck(t *testing.T) {
+	requireDB(t)
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()
 	checkID := uuid.New()
@@ -348,6 +375,7 @@ func TestPaymentRepo_TotalPaidForCheck(t *testing.T) {
 // (e.g. a payment created but not yet fiscally completed) are excluded,
 // mirroring TotalPaidForCheck's status filter.
 func TestPaymentRepo_ListByCheck(t *testing.T) {
+	requireDB(t)
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()
 	checkID := uuid.New()
@@ -435,6 +463,7 @@ func TestPaymentRepo_ListByCheck(t *testing.T) {
 }
 
 func TestPaymentRepo_RLSIsolation(t *testing.T) {
+	requireDB(t)
 	ctx := context.Background()
 	r := repo.NewPaymentRepo()
 

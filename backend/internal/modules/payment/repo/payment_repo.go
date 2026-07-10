@@ -80,10 +80,13 @@ func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, tx pgx.Tx, tenant
 // Complete marks the payment as completed and links the fiscal receipt.
 func (r *PaymentRepo) Complete(ctx context.Context, tx pgx.Tx, paymentID, receiptID uuid.UUID) error {
 	now := time.Now().UTC()
+	// status guard: double completion is already blocked one layer up by the
+	// submission's MarkResult transition, but a completed/voided payment must
+	// be structurally impossible to overwrite even if that layer regresses.
 	tag, err := tx.Exec(ctx, `
 		UPDATE payments
 		SET status = 'completed', fiscal_receipt_id = $2, completed_at = $3
-		WHERE id = $1
+		WHERE id = $1 AND status = 'pending'
 	`, paymentID, receiptID, now)
 	if err != nil {
 		return fmt.Errorf("payment/repo: complete: %w", err)
@@ -94,10 +97,45 @@ func (r *PaymentRepo) Complete(ctx context.Context, tx pgx.Tx, paymentID, receip
 	return nil
 }
 
+// Fail marks a pending payment as failed after the fiscal registration was
+// rejected. Only pending payments can fail — a completed one carries money and
+// must be voided instead.
+func (r *PaymentRepo) Fail(ctx context.Context, tx pgx.Tx, paymentID uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE payments SET status = 'failed' WHERE id = $1 AND status = 'pending'
+	`, paymentID)
+	if err != nil {
+		return fmt.Errorf("payment/repo: fail: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Void marks a payment as voided (fiş iptali). A void may cancel either a
+// registration that never completed or one whose receipt was cancelled on the
+// device afterwards, hence both source states.
+func (r *PaymentRepo) Void(ctx context.Context, tx pgx.Tx, paymentID uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE payments SET status = 'voided'
+		WHERE id = $1 AND status IN ('pending', 'completed')
+	`, paymentID)
+	if err != nil {
+		return fmt.Errorf("payment/repo: void: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // InsertFiscalReceipt persists a fiscal receipt and returns its ID.
+// ZNo and VendorRef have no dedicated columns; they are folded into the
+// receipt_data JSONB document under z_no / vendor_ref.
 func (r *PaymentRepo) InsertFiscalReceipt(ctx context.Context, tx pgx.Tx, rec domain.FiscalReceipt) (uuid.UUID, error) {
 	id := uuid.New()
-	data, err := json.Marshal(rec.ReceiptData)
+	data, err := json.Marshal(mergeReceiptData(rec))
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("payment/repo: marshal receipt data: %w", err)
 	}
@@ -199,6 +237,25 @@ func InsertOutbox(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, aggregateT
 		return fmt.Errorf("payment/repo: insert outbox: %w", err)
 	}
 	return nil
+}
+
+// mergeReceiptData folds the ZNo/VendorRef fields into the receipt_data
+// document. fiscal_receipts has no columns for them and the schema is
+// deliberately kept stable, so the JSONB payload carries them instead. An
+// explicit ReceiptData entry wins over the struct field: callers that already
+// placed a value there are not silently overwritten.
+func mergeReceiptData(rec domain.FiscalReceipt) map[string]any {
+	data := make(map[string]any, len(rec.ReceiptData)+2)
+	for k, v := range rec.ReceiptData {
+		data[k] = v
+	}
+	if _, ok := data["z_no"]; !ok && rec.ZNo != "" {
+		data["z_no"] = rec.ZNo
+	}
+	if _, ok := data["vendor_ref"]; !ok && rec.VendorRef != "" {
+		data["vendor_ref"] = rec.VendorRef
+	}
+	return data
 }
 
 func scanPayment(row pgx.Row) (domain.Payment, error) {

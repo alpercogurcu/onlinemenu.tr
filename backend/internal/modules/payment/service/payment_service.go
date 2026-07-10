@@ -3,8 +3,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -19,32 +21,56 @@ import (
 
 // PaymentService orchestrates payment creation, fiscal registration, and outbox publication.
 type PaymentService struct {
-	db          *db.Pool
-	paymentRepo *repo.PaymentRepo
-	fiscal      domain.FiscalDeviceAdapter
-	logger      *zap.Logger
+	db             *db.Pool
+	paymentRepo    *repo.PaymentRepo
+	submissionRepo *repo.FiscalSubmissionRepo
+	fiscal         domain.FiscalDeviceAdapter
+	adapterType    string
+	logger         *zap.Logger
 }
 
 // Params groups fx-injected dependencies.
 type Params struct {
 	fx.In
 
-	DB          *db.Pool
-	PaymentRepo *repo.PaymentRepo
-	Fiscal      domain.FiscalDeviceAdapter
-	Logger      *zap.Logger
+	DB             *db.Pool
+	PaymentRepo    *repo.PaymentRepo
+	SubmissionRepo *repo.FiscalSubmissionRepo
+	Fiscal         domain.FiscalDeviceAdapter
+	Logger         *zap.Logger
 }
 
 func NewPaymentService(p Params) *PaymentService {
 	return &PaymentService{
-		db:          p.DB,
-		paymentRepo: p.PaymentRepo,
-		fiscal:      p.Fiscal,
-		logger:      p.Logger,
+		db:             p.DB,
+		paymentRepo:    p.PaymentRepo,
+		submissionRepo: p.SubmissionRepo,
+		fiscal:         p.Fiscal,
+		adapterType:    adapterTypeOf(p.Fiscal),
+		logger:         p.Logger,
 	}
 }
 
-// RegisterSaleRequest carries the inputs for a new payment.
+// adapterTypeOf resolves the value stored in fiscal_submissions.adapter_type,
+// which routes a claimed submission back to the driver that owns it. Real
+// drivers report their own type; only the mock is recognised structurally.
+func adapterTypeOf(a domain.FiscalDeviceAdapter) string {
+	if named, ok := a.(interface{ AdapterType() string }); ok {
+		return named.AdapterType()
+	}
+	if _, ok := a.(domain.MockFiscalAdapter); ok {
+		return "mock"
+	}
+	return "unknown"
+}
+
+// PaymentService is the sink adapters deliver normalized results to.
+var _ domain.FiscalResultSink = (*PaymentService)(nil)
+
+// RegisterSaleRequest carries the inputs for a new payment. Lines describe the
+// basket the fiscal device must print; Meta is display metadata. TerminalSerial
+// optionally pins the submission to one device (vendors that broadcast a basket
+// to every terminal in a branch ignore it).
 type RegisterSaleRequest struct {
 	TenantID       uuid.UUID
 	BranchID       uuid.UUID
@@ -53,10 +79,19 @@ type RegisterSaleRequest struct {
 	Method         domain.PaymentMethod
 	AmountTotal    int64
 	Currency       string
+	Lines          []domain.FiscalLine
+	Meta           domain.FiscalMeta
+	TerminalSerial string
 }
 
-// RegisterSale creates a payment, calls the fiscal adapter, and persists a receipt.
-// ADR-FISCAL-001: fiscal adapter is always called, even for mock devices.
+// RegisterSale creates a pending payment and enqueues its fiscal submission in
+// the same transaction (ADR-FISCAL-002). The device adapter is deliberately NOT
+// called here: a real ÖKC takes seconds or minutes to collect the payment, and
+// holding a database transaction open for that is unworkable. SubmissionWorker
+// picks the row up and drives it to a terminal state through OnFiscalResult.
+//
+// ADR-FISCAL-001: fiscal registration stays mandatory — the submission row is
+// written unconditionally, even for the mock adapter.
 // ADR-SEC-003:    IdempotencyKey must be non-empty (enforced by HTTP middleware and here).
 func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleRequest) (domain.Payment, error) {
 	if req.IdempotencyKey == "" {
@@ -101,39 +136,25 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 			return fmt.Errorf("payment/service: create payment: %w", err)
 		}
 
-		// ADR-FISCAL-001: fiscal registration is mandatory for every payment.
-		receipt, err := s.fiscal.RegisterSale(ctx, domain.FiscalSale{
-			TenantID:    req.TenantID,
-			PaymentID:   payment.ID,
-			AmountTotal: req.AmountTotal,
-			Currency:    req.Currency,
-			Method:      req.Method,
-		})
+		submissionID := uuid.New()
+		sale := buildFiscalSale(submissionID, payment, req)
+		salePayload, err := json.Marshal(sale)
 		if err != nil {
-			return fmt.Errorf("payment/service: fiscal registration: %w", err)
-		}
-		receipt.TenantID = req.TenantID
-		receipt.PaymentID = payment.ID
-
-		receiptID, err := s.paymentRepo.InsertFiscalReceipt(ctx, tx, receipt)
-		if err != nil {
-			return fmt.Errorf("payment/service: persist fiscal receipt: %w", err)
+			return fmt.Errorf("payment/service: marshal fiscal sale: %w", err)
 		}
 
-		if err := s.paymentRepo.Complete(ctx, tx, payment.ID, receiptID); err != nil {
-			return fmt.Errorf("payment/service: complete payment: %w", err)
+		if err := s.submissionRepo.Insert(ctx, tx, repo.FiscalSubmission{
+			ID:             submissionID,
+			TenantID:       req.TenantID,
+			BranchID:       req.BranchID,
+			PaymentID:      payment.ID,
+			AdapterType:    s.adapterType,
+			TerminalSerial: req.TerminalSerial,
+			SalePayload:    salePayload,
+		}); err != nil {
+			return fmt.Errorf("payment/service: enqueue fiscal submission: %w", err)
 		}
-		payment.Status = domain.PaymentStatusCompleted
-		payment.FiscalReceiptID = &receiptID
-
-		return repo.InsertOutbox(ctx, tx, req.TenantID, "payment", payment.ID.String(), "payment.completed", map[string]any{
-			"tenant_id":    req.TenantID,
-			"payment_id":   payment.ID,
-			"check_id":     req.CheckID,
-			"method":       req.Method,
-			"amount_total": req.AmountTotal,
-			"currency":     req.Currency,
-		})
+		return nil
 	})
 	if errors.Is(err, repo.ErrDuplicateIdempotencyKey) {
 		// The pre-check missed a concurrent winner; by the time Postgres reported
@@ -161,6 +182,212 @@ func (s *PaymentService) fetchExistingByIdempotencyKey(ctx context.Context, tena
 		return domain.Payment{}, fmt.Errorf("payment/service: register sale: fetch after conflict: %w", err)
 	}
 	return payment, nil
+}
+
+// buildFiscalSale maps a payment plus its request into the vendor-neutral sale.
+//
+// When the caller supplies no lines we synthesize a single "Satış" line for the
+// full amount so the mock/dev flow keeps working. Real devices demand a
+// per-item basket with device-section and tax mapping (ADR-FISCAL-002 §2) and
+// their adapters are expected to reject this synthetic line.
+func buildFiscalSale(submissionID uuid.UUID, payment domain.Payment, req RegisterSaleRequest) domain.FiscalSale {
+	lines := req.Lines
+	if len(lines) == 0 {
+		lines = []domain.FiscalLine{{
+			Name:             "Satis",
+			UnitPriceMinor:   req.AmountTotal,
+			QuantityMilli:    1000,
+			TaxRatePermyriad: 0,
+			CategoryID:       uuid.Nil,
+			Unit:             "C62",
+		}}
+	}
+	return domain.FiscalSale{
+		SubmissionID: submissionID,
+		TenantID:     req.TenantID,
+		BranchID:     req.BranchID,
+		PaymentID:    payment.ID,
+		CheckID:      req.CheckID,
+		Currency:     req.Currency,
+		TotalMinor:   req.AmountTotal,
+		Lines:        lines,
+		Payments: []domain.FiscalPayment{{
+			Method:      req.Method,
+			AmountMinor: req.AmountTotal,
+		}},
+		Meta: req.Meta,
+	}
+}
+
+// OnFiscalResult applies a normalized adapter result: it moves the submission to
+// its terminal state and, only if that transition actually happened, performs
+// the side effects (receipt, payment status, outbox event).
+//
+// Idempotency is enforced by MarkResult's guarded UPDATE. A duplicate delivery —
+// webhook retry, reconciliation sweep, or a worker re-claim — finds the row
+// already terminal, transitions nothing, and returns without any side effect.
+func (s *PaymentService) OnFiscalResult(ctx context.Context, res domain.FiscalResult) error {
+	if res.TenantID == uuid.Nil {
+		return fmt.Errorf("payment/service: fiscal result: tenant id is required")
+	}
+	if res.SubmissionID == uuid.Nil {
+		return fmt.Errorf("payment/service: fiscal result: submission id is required")
+	}
+	// Every side effect below keys off PaymentID. An adapter that forgets to
+	// echo it must fail here, not silently write an orphan receipt.
+	if res.PaymentID == uuid.Nil {
+		return fmt.Errorf("payment/service: fiscal result: payment id is required")
+	}
+
+	err := s.db.WithTenantTx(ctx, res.TenantID, func(tx pgx.Tx) error {
+		transitioned, err := s.submissionRepo.MarkResult(
+			ctx, tx, res.SubmissionID, res.Status, res.Raw, res.FailureReason, res.CompletedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("payment/service: mark submission result: %w", err)
+		}
+		if !transitioned {
+			s.logger.Debug("payment: duplicate fiscal result ignored",
+				zap.Stringer("submission_id", res.SubmissionID),
+				zap.String("status", string(res.Status)),
+			)
+			return nil
+		}
+
+		switch res.Status {
+		case domain.FiscalSubmissionCompleted:
+			return s.applyCompleted(ctx, tx, res)
+		case domain.FiscalSubmissionFailed, domain.FiscalSubmissionExpired:
+			return s.applyFailed(ctx, tx, res)
+		case domain.FiscalSubmissionVoided:
+			return s.applyVoided(ctx, tx, res)
+		default:
+			return fmt.Errorf("payment/service: fiscal result: unsupported status %q", res.Status)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("payment/service: on fiscal result: %w", err)
+	}
+	return nil
+}
+
+func (s *PaymentService) applyCompleted(ctx context.Context, tx pgx.Tx, res domain.FiscalResult) error {
+	issuedAt := res.CompletedAt
+	if issuedAt.IsZero() {
+		issuedAt = time.Now().UTC()
+	}
+	receiptID, err := s.paymentRepo.InsertFiscalReceipt(ctx, tx, domain.FiscalReceipt{
+		TenantID:      res.TenantID,
+		PaymentID:     res.PaymentID,
+		DeviceType:    res.DeviceType,
+		ReceiptNumber: res.ReceiptNo,
+		ZNo:           res.ZNo,
+		VendorRef:     res.VendorRef,
+		IssuedAt:      issuedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("persist fiscal receipt: %w", err)
+	}
+	if err := s.paymentRepo.Complete(ctx, tx, res.PaymentID, receiptID); err != nil {
+		return fmt.Errorf("complete payment: %w", err)
+	}
+	return repo.InsertOutbox(ctx, tx, res.TenantID, "payment", res.PaymentID.String(), "payment.completed", map[string]any{
+		"tenant_id":     res.TenantID,
+		"branch_id":     res.BranchID,
+		"payment_id":    res.PaymentID,
+		"submission_id": res.SubmissionID,
+		"receipt_no":    res.ReceiptNo,
+		"device_type":   res.DeviceType,
+	})
+}
+
+func (s *PaymentService) applyFailed(ctx context.Context, tx pgx.Tx, res domain.FiscalResult) error {
+	if err := s.paymentRepo.Fail(ctx, tx, res.PaymentID); err != nil {
+		return fmt.Errorf("fail payment: %w", err)
+	}
+	s.logger.Warn("payment: fiscal registration failed",
+		zap.Stringer("payment_id", res.PaymentID),
+		zap.Stringer("submission_id", res.SubmissionID),
+		zap.String("reason", res.FailureReason),
+	)
+	return nil
+}
+
+func (s *PaymentService) applyVoided(ctx context.Context, tx pgx.Tx, res domain.FiscalResult) error {
+	if err := s.paymentRepo.Void(ctx, tx, res.PaymentID); err != nil {
+		return fmt.Errorf("void payment: %w", err)
+	}
+	return repo.InsertOutbox(ctx, tx, res.TenantID, "payment", res.PaymentID.String(), "payment.voided", map[string]any{
+		"tenant_id":     res.TenantID,
+		"branch_id":     res.BranchID,
+		"payment_id":    res.PaymentID,
+		"submission_id": res.SubmissionID,
+		"reason":        res.FailureReason,
+	})
+}
+
+// VoidSale cancels a previously registered sale on the device (fiş iptali).
+// Like SubmitSale, the adapter may finish synchronously (non-nil result, applied
+// immediately) or acknowledge and deliver the result later through the sink.
+func (s *PaymentService) VoidSale(ctx context.Context, tenantID, paymentID uuid.UUID) error {
+	if !s.fiscal.Capabilities().VoidSale {
+		return fmt.Errorf("payment/service: void sale: adapter does not support voiding")
+	}
+
+	var sub repo.FiscalSubmission
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		sub, err = s.submissionRepo.GetByPaymentID(ctx, tx, paymentID)
+		return err
+	})
+	if errors.Is(err, repo.ErrNotFound) {
+		return pub.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("payment/service: void sale: load submission: %w", err)
+	}
+	// Only a registration the device actually completed can be voided. A
+	// pending/submitted row races the worker: voiding it while SubmitSale is in
+	// flight would let the later 'completed' result be silently dropped by the
+	// MarkResult gate, leaving a printed receipt behind a voided payment.
+	if sub.Status != domain.FiscalSubmissionCompleted {
+		return fmt.Errorf("payment/service: void sale: submission is %q, only completed registrations can be voided", sub.Status)
+	}
+
+	res, err := s.fiscal.VoidSale(ctx, domain.FiscalSubmissionRef{
+		SubmissionID:   sub.ID,
+		TenantID:       sub.TenantID,
+		BranchID:       sub.BranchID,
+		TerminalSerial: sub.TerminalSerial,
+	})
+	if err != nil {
+		return fmt.Errorf("payment/service: void sale: adapter: %w", err)
+	}
+	if res == nil {
+		return nil // vendor will deliver the void result asynchronously
+	}
+
+	stampResultIdentity(res, sub)
+	if res.Status == "" {
+		res.Status = domain.FiscalSubmissionVoided
+	}
+	// A device may refuse the void (receipt already closed on a Z report, for
+	// example). Never launder that refusal into a voided payment: report it and
+	// leave the submission untouched.
+	if res.Status != domain.FiscalSubmissionVoided {
+		return fmt.Errorf("payment/service: void sale: adapter reported %q: %s", res.Status, res.FailureReason)
+	}
+	return s.OnFiscalResult(ctx, *res)
+}
+
+// stampResultIdentity overwrites the identifiers on an adapter result with the
+// values we already know from the submission row. Adapters are not required to
+// echo them back, and our copy is authoritative.
+func stampResultIdentity(res *domain.FiscalResult, sub repo.FiscalSubmission) {
+	res.SubmissionID = sub.ID
+	res.TenantID = sub.TenantID
+	res.BranchID = sub.BranchID
+	res.PaymentID = sub.PaymentID
 }
 
 // GetByID returns a payment by its ID.

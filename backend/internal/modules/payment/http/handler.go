@@ -99,6 +99,63 @@ type paymentResponse struct {
 	CompletedAt     *string    `json:"completed_at"`
 }
 
+// registerSaleRequest is the POST /api/v1/payments body. Lines and meta are
+// optional: when lines are omitted the service synthesizes a single-line basket
+// for the total, which keeps the mock/dev flow working (ADR-FISCAL-002 §2).
+type registerSaleRequest struct {
+	BranchID       uuid.UUID           `json:"branch_id"`
+	CheckID        *uuid.UUID          `json:"check_id"`
+	Method         string              `json:"method"`
+	AmountTotal    int64               `json:"amount_total"`
+	Currency       string              `json:"currency"`
+	Lines          []fiscalLineRequest `json:"lines"`
+	Meta           fiscalMetaRequest   `json:"meta"`
+	TerminalSerial string              `json:"terminal_serial"`
+}
+
+// fiscalLineRequest mirrors domain.FiscalLine. Quantities are thousandths
+// (1000 = 1 unit) and tax rates permyriad (1000 = 10.00%).
+type fiscalLineRequest struct {
+	Name             string    `json:"name"`
+	UnitPriceMinor   int64     `json:"unit_price_minor"`
+	QuantityMilli    int64     `json:"quantity_milli"`
+	TaxRatePermyriad int       `json:"tax_rate_permyriad"`
+	CategoryID       uuid.UUID `json:"category_id"`
+	Unit             string    `json:"unit"`
+}
+
+type fiscalMetaRequest struct {
+	TableLabel  string `json:"table_label"`
+	WaiterName  string `json:"waiter_name"`
+	CheckNumber int    `json:"check_number"`
+}
+
+func (m fiscalMetaRequest) toDomain() domain.FiscalMeta {
+	return domain.FiscalMeta{
+		TableLabel:  m.TableLabel,
+		WaiterName:  m.WaiterName,
+		CheckNumber: m.CheckNumber,
+	}
+}
+
+func toFiscalLines(lines []fiscalLineRequest) []domain.FiscalLine {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]domain.FiscalLine, len(lines))
+	for i, l := range lines {
+		out[i] = domain.FiscalLine{
+			Name:             l.Name,
+			UnitPriceMinor:   l.UnitPriceMinor,
+			QuantityMilli:    l.QuantityMilli,
+			TaxRatePermyriad: l.TaxRatePermyriad,
+			CategoryID:       l.CategoryID,
+			Unit:             l.Unit,
+		}
+	}
+	return out
+}
+
 func toPaymentResponse(p domain.Payment) paymentResponse {
 	resp := paymentResponse{
 		ID:              p.ID,
@@ -181,13 +238,7 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		BranchID    uuid.UUID  `json:"branch_id"`
-		CheckID     *uuid.UUID `json:"check_id"`
-		Method      string     `json:"method"`
-		AmountTotal int64      `json:"amount_total"`
-		Currency    string     `json:"currency"`
-	}
+	var req registerSaleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
@@ -201,6 +252,8 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 	// We read it here for the service call.
 	idempKey := r.Header.Get("Idempotency-Key")
 
+	// The payment comes back 'pending': fiscal registration is asynchronous
+	// (ADR-FISCAL-002) and clients observe completion via GET or the WS feed.
 	payment, err := h.payments.RegisterSale(r.Context(), service.RegisterSaleRequest{
 		TenantID:       p.TenantID,
 		BranchID:       req.BranchID,
@@ -209,6 +262,9 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		Method:         domain.PaymentMethod(req.Method),
 		AmountTotal:    req.AmountTotal,
 		Currency:       req.Currency,
+		Lines:          toFiscalLines(req.Lines),
+		Meta:           req.Meta.toDomain(),
+		TerminalSerial: req.TerminalSerial,
 	})
 	if err != nil {
 		h.logger.Error("payment: register sale", zap.Error(err))

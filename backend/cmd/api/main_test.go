@@ -45,6 +45,7 @@ func TestFxGraphValidation(t *testing.T) {
 		fx.Provide(newHTTPConfig),
 		fx.Provide(newOutboxConfig),
 		fx.Provide(newPosWSConfig),
+		fx.Provide(newFiscalConfig),
 
 		db.Module,
 		eventbus.Module,

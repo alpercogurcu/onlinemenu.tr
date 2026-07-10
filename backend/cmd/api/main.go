@@ -26,6 +26,7 @@ import (
 	"onlinemenu.tr/internal/modules/identity"
 	"onlinemenu.tr/internal/modules/inventory"
 	"onlinemenu.tr/internal/modules/payment"
+	"onlinemenu.tr/internal/modules/payment/fiscal/tokenx"
 	"onlinemenu.tr/internal/modules/pos"
 	posws "onlinemenu.tr/internal/modules/pos/ws"
 	"onlinemenu.tr/internal/modules/tenant"
@@ -59,6 +60,7 @@ func main() {
 		fx.Provide(newHTTPConfig),
 		fx.Provide(newOutboxConfig),
 		fx.Provide(newPosWSConfig),
+		fx.Provide(newFiscalConfig),
 
 		db.Module,
 		eventbus.Module,
@@ -408,6 +410,28 @@ func newPosWSConfig() posws.Config {
 		}
 	}
 	return posws.Config{AllowedOriginPatterns: patterns}
+}
+
+// newFiscalConfig selects the fiscal device adapter (ADR-FISCAL-002).
+// FISCAL_DEVICE_TYPE defaults to mock for dev/CI; production deployments set
+// beko_x30tr_cloud plus the TOKENX_* credentials. The Token client secret will
+// move to Vault dynamic secrets together with the other runtime credentials.
+func newFiscalConfig() payment.FiscalConfig {
+	cfg := payment.FiscalConfig{
+		DeviceType:    envOr("FISCAL_DEVICE_TYPE", "mock"),
+		WebhookSecret: envOr("TOKENX_WEBHOOK_SECRET", ""),
+	}
+	if cfg.DeviceType == tokenx.DeviceType {
+		cfg.TokenX = tokenx.Config{
+			APIURL:                mustEnv("TOKENX_API_URL"),
+			AuthURL:               mustEnv("TOKENX_AUTH_URL"),
+			ClientID:              mustEnv("TOKENX_CLIENT_ID"),
+			ClientSecret:          mustEnv("TOKENX_CLIENT_SECRET"),
+			BasketMode:            tokenx.BasketMode(envOr("TOKENX_BASKET_MODE", "instant")),
+			DefaultTerminalSerial: envOr("TOKENX_DEFAULT_TERMINAL", ""),
+		}
+	}
+	return cfg
 }
 
 func newOutboxConfig() outbox.Config {

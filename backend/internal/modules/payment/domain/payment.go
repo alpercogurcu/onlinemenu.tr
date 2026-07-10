@@ -2,32 +2,44 @@
 package domain
 
 import (
-	"context"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// PaymentMethod represents how the payment was made.
+// PaymentMethod represents how the payment was made. Vendor-specific codes
+// (Token type 1/3/7/9/8/17, …) are mapped inside fiscal adapters only.
 type PaymentMethod string
 
 const (
-	PaymentMethodCash     PaymentMethod = "cash"
-	PaymentMethodTerminal PaymentMethod = "terminal"
+	PaymentMethodCash        PaymentMethod = "cash"
+	PaymentMethodTerminal    PaymentMethod = "terminal" // card via ÖKC / EFT-POS terminal
+	PaymentMethodMealCard    PaymentMethod = "meal_card"
+	PaymentMethodComp        PaymentMethod = "comp"      // ikram
+	PaymentMethodNoCharge    PaymentMethod = "no_charge" // ödemesiz
+	PaymentMethodOpenAccount PaymentMethod = "open_account"
 )
 
 // Valid reports whether the method is a recognised value.
 func (m PaymentMethod) Valid() bool {
-	return m == PaymentMethodCash || m == PaymentMethodTerminal
+	switch m {
+	case PaymentMethodCash, PaymentMethodTerminal, PaymentMethodMealCard,
+		PaymentMethodComp, PaymentMethodNoCharge, PaymentMethodOpenAccount:
+		return true
+	}
+	return false
 }
 
 // PaymentStatus is the lifecycle state of a payment record.
+// pending → completed | failed; a completed payment whose receipt is later
+// cancelled on the device becomes voided (fiş iptali).
 type PaymentStatus string
 
 const (
 	PaymentStatusPending   PaymentStatus = "pending"
 	PaymentStatusCompleted PaymentStatus = "completed"
 	PaymentStatusFailed    PaymentStatus = "failed"
+	PaymentStatusVoided    PaymentStatus = "voided"
 )
 
 // Payment is the aggregate root for a single payment transaction.
@@ -44,30 +56,4 @@ type Payment struct {
 	FiscalReceiptID *uuid.UUID
 	CreatedAt       time.Time
 	CompletedAt     *time.Time
-}
-
-// FiscalSale is the input handed to a FiscalDeviceAdapter for registration.
-type FiscalSale struct {
-	TenantID    uuid.UUID
-	PaymentID   uuid.UUID
-	AmountTotal int64
-	Currency    string
-	Method      PaymentMethod
-}
-
-// FiscalReceipt is the response from a fiscal device after successful registration.
-type FiscalReceipt struct {
-	ID            uuid.UUID
-	TenantID      uuid.UUID
-	PaymentID     uuid.UUID
-	DeviceType    string
-	ReceiptNumber string
-	ReceiptData   map[string]any
-	IssuedAt      time.Time
-}
-
-// FiscalDeviceAdapter is the interface all fiscal device drivers must satisfy.
-// ADR-FISCAL-001: every payment must call RegisterSale, even for mock/none devices.
-type FiscalDeviceAdapter interface {
-	RegisterSale(ctx context.Context, sale FiscalSale) (FiscalReceipt, error)
 }

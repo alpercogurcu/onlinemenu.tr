@@ -13,6 +13,11 @@ import "encoding/json"
 // echoed on every FiscalResult this adapter produces.
 const DeviceType = "beko_x30tr_cloud"
 
+// Vendor is the fiscal_terminals.vendor value for every Token X device,
+// independent of the transport (Cloud today, Wire later). DeviceType names the
+// driver; Vendor names the manufacturer's platform.
+const Vendor = "tokenx"
+
 // BasketMode selects the Token endpoint used to deliver a basket. The mode is
 // a physical setting on the device; the backend must match it per terminal.
 type BasketMode string

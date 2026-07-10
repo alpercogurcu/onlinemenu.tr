@@ -138,6 +138,31 @@ func (a *Adapter) Capabilities() domain.FiscalCapabilities {
 	}
 }
 
+var _ domain.SectionSyncer = (*Adapter)(nil)
+
+// FetchSections reads the terminal's section (kısım) table from Token's fiscal
+// info endpoint. Section.TaxPercent is already permyriad (percent×100), the
+// same encoding as domain.DeviceSection.TaxPermyriad, so no scaling happens
+// here — a conversion would be the exact hardcoding ADR-FISCAL-002 §2 forbids.
+func (a *Adapter) FetchSections(ctx context.Context, terminalSerial string) ([]domain.DeviceSection, error) {
+	if terminalSerial == "" {
+		return nil, fmt.Errorf("%w: terminal serial is required to fetch sections", ErrInvalidConfig)
+	}
+	info, err := a.client.FiscalInfo(ctx, terminalSerial)
+	if err != nil {
+		return nil, fmt.Errorf("fetch sections for terminal %s: %w", terminalSerial, err)
+	}
+	out := make([]domain.DeviceSection, len(info.Sections))
+	for i, s := range info.Sections {
+		out[i] = domain.DeviceSection{
+			SectionNo:    s.SectionNo,
+			Name:         s.Name,
+			TaxPermyriad: s.TaxPercent,
+		}
+	}
+	return out, nil
+}
+
 // AdapterType is the fiscal_submissions.adapter_type value that routes a
 // claimed submission back to this driver.
 func (a *Adapter) AdapterType() string { return DeviceType }

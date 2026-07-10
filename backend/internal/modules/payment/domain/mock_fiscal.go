@@ -40,3 +40,16 @@ func (MockFiscalAdapter) VoidSale(_ context.Context, ref FiscalSubmissionRef) (*
 func (MockFiscalAdapter) Capabilities() FiscalCapabilities {
 	return FiscalCapabilities{VoidSale: true}
 }
+
+var _ SectionSyncer = MockFiscalAdapter{}
+
+// FetchSections returns the three VAT sections a Turkish ÖKC ships with by
+// default (%1, %10, %20), so the admin section-mapping flow is exercisable in
+// dev and CI without a paired device.
+func (MockFiscalAdapter) FetchSections(_ context.Context, _ string) ([]DeviceSection, error) {
+	return []DeviceSection{
+		{SectionNo: 1, Name: "KDV %1", TaxPermyriad: 100},
+		{SectionNo: 2, Name: "KDV %10", TaxPermyriad: 1000},
+		{SectionNo: 3, Name: "KDV %20", TaxPermyriad: 2000},
+	}, nil
+}

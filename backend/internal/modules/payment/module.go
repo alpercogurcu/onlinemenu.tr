@@ -38,6 +38,7 @@ var Module = fx.Module("payment",
 		repo.NewFiscalSubmissionRepo,
 		repo.NewFiscalTerminalDirectory,
 		repo.NewFiscalSectionDirectory,
+		repo.NewFiscalAdminRepo,
 		newFiscalAdapter,
 		service.NewPaymentService,
 		fx.Annotate(func(s *service.PaymentService) domain.FiscalResultSink { return s },
@@ -46,10 +47,12 @@ var Module = fx.Module("payment",
 		service.NewReconciler,
 		newTokenXWebhookHandler,
 		paymenthttp.NewHandler,
+		paymenthttp.NewFiscalHandler,
 		fx.Annotate(newSaleReader, fx.As(new(pub.SaleReader))),
 	),
-	fx.Invoke(func(h *paymenthttp.HandlerWithCache, wh *paymenthttp.TokenXWebhookHandler, r *chi.Mux) {
+	fx.Invoke(func(h *paymenthttp.HandlerWithCache, fh *paymenthttp.FiscalHandler, wh *paymenthttp.TokenXWebhookHandler, r *chi.Mux) {
 		h.RegisterRoutes(r)
+		fh.RegisterRoutes(r)
 		wh.RegisterRoutes(r)
 	}),
 	fx.Invoke(registerSubmissionWorker),

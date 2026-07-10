@@ -190,6 +190,59 @@ func TestAdapterImplementsDomainInterface(t *testing.T) {
 	srv := newTestServer(t, serverOpts{})
 	var adapter domain.FiscalDeviceAdapter = newTestAdapter(t, srv, BasketModeInstant, staticTerminal(TerminalRef{Serial: "T1"}))
 	assert.NotNil(t, adapter)
+
+	_, ok := adapter.(domain.SectionSyncer)
+	assert.True(t, ok, "the admin section-sync endpoint type-asserts this capability")
+}
+
+// TestAdapterFetchSections pins the tax-rate encoding: Token's taxPercent is
+// already permyriad (percent×100), so it must reach domain.DeviceSection
+// unscaled. Any conversion here would silently print a wrong VAT rate on a
+// legal receipt (ADR-FISCAL-002 §2).
+func TestAdapterFetchSections(t *testing.T) {
+	t.Parallel()
+	srv := newTestServer(t, serverOpts{api: func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"sections":[
+			{"sectionNo":1,"name":"KDV %1","taxPercent":100},
+			{"sectionNo":4,"name":"KDV %20","taxPercent":2000}
+		],"terminal":{"serialNo":"AV1"}}}`))
+	}})
+	adapter := newTestAdapter(t, srv, BasketModeInstant, staticTerminal(TerminalRef{Serial: "AV1"}))
+
+	sections, err := adapter.FetchSections(context.Background(), "AV1")
+	require.NoError(t, err)
+	require.Len(t, sections, 2)
+	assert.Equal(t, domain.DeviceSection{SectionNo: 1, Name: "KDV %1", TaxPermyriad: 100}, sections[0])
+	assert.Equal(t, domain.DeviceSection{SectionNo: 4, Name: "KDV %20", TaxPermyriad: 2000}, sections[1])
+
+	req := srv.lastRequest(t)
+	assert.Equal(t, http.MethodGet, req.Method)
+	assert.Equal(t, "/v1/fiscal-info", req.Path)
+	assert.Equal(t, "terminal-id=AV1", req.Query)
+}
+
+func TestAdapterFetchSectionsRequiresSerial(t *testing.T) {
+	t.Parallel()
+	srv := newTestServer(t, serverOpts{})
+	adapter := newTestAdapter(t, srv, BasketModeInstant, staticTerminal(TerminalRef{Serial: "T1"}))
+
+	_, err := adapter.FetchSections(context.Background(), "")
+	assert.ErrorIs(t, err, ErrInvalidConfig)
+	assert.Empty(t, srv.recorded(), "an empty serial must not reach the API")
+}
+
+func TestAdapterFetchSectionsPropagatesAPIError(t *testing.T) {
+	t.Parallel()
+	srv := newTestServer(t, serverOpts{api: func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}})
+	adapter := newTestAdapter(t, srv, BasketModeInstant, staticTerminal(TerminalRef{Serial: "AV1"}))
+
+	_, err := adapter.FetchSections(context.Background(), "AV1")
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode)
 }
 
 func TestNewValidatesConfig(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"onlinemenu.tr/internal/modules/payment/domain"
 	paymenthttp "onlinemenu.tr/internal/modules/payment/http"
 	"onlinemenu.tr/internal/platform/auth"
 )
@@ -29,10 +30,16 @@ func TestRegisterRoutes_AllRoutesRequirePermission(t *testing.T) {
 	engine := newSmokeTestEngine(t)
 	cache := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 1})
 	hwc := paymenthttp.NewHandler(paymenthttp.Params{Logger: zap.NewNop(), Engine: engine, Cache: cache})
+	// The fiscal admin routes are walked by the same audit: a nil store is never
+	// reached, because every one of them must answer 403 before the handler body.
+	fh := paymenthttp.NewFiscalHandler(paymenthttp.FiscalParams{
+		Adapter: domain.MockFiscalAdapter{}, Logger: zap.NewNop(), Engine: engine,
+	})
 
 	mux := chi.NewMux()
 	mux.Use(recoverMiddleware)
 	hwc.RegisterRoutes(mux)
+	fh.RegisterRoutes(mux)
 
 	principal := auth.Principal{
 		PersonID: uuid.New(),

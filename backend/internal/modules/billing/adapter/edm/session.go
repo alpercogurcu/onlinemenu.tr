@@ -16,9 +16,9 @@ const sessionTTL = 18 * time.Minute
 // sessionManager handles EDM SOAP session caching in Redis.
 // Sessions are stored per (tenantID, endpoint) to avoid cross-tenant collisions.
 type sessionManager struct {
-	c      *client
-	redis  *redis.Client
-	creds  func(tenantID uuid.UUID) (username, password string, err error)
+	c     *client
+	redis *redis.Client
+	creds func(tenantID uuid.UUID) (username, password string, err error)
 }
 
 // getOrCreate returns a valid session ID, logging in if none is cached.

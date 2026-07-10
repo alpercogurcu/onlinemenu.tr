@@ -124,21 +124,21 @@ type SupplyRule struct {
 // Tenant is the read-only projection that other modules may reference.
 // It includes legal identity fields added in migration 000002.
 type Tenant struct {
-	ID             uuid.UUID `json:"id"`
-	Name           string    `json:"name"`
-	LegalName      string    `json:"legal_name"`
-	TradeName      string    `json:"trade_name"`
-	Slug           string    `json:"slug"`
-	Plan           Plan      `json:"plan"`
-	EnabledModules []string  `json:"enabled_modules"`
+	ID             uuid.UUID    `json:"id"`
+	Name           string       `json:"name"`
+	LegalName      string       `json:"legal_name"`
+	TradeName      string       `json:"trade_name"`
+	Slug           string       `json:"slug"`
+	Plan           Plan         `json:"plan"`
+	EnabledModules []string     `json:"enabled_modules"`
 	IdentityType   IdentityType `json:"identity_type"`
-	TaxNo          string    `json:"tax_no"`
-	TaxOffice      string    `json:"tax_office"`
-	MersisNo       string    `json:"mersis_no"`
-	Address        Address   `json:"address"`
-	Phone          string    `json:"phone"`
-	ContactEmail   string    `json:"contact_email"`
-	IsActive       bool      `json:"is_active"`
+	TaxNo          string       `json:"tax_no"`
+	TaxOffice      string       `json:"tax_office"`
+	MersisNo       string       `json:"mersis_no"`
+	Address        Address      `json:"address"`
+	Phone          string       `json:"phone"`
+	ContactEmail   string       `json:"contact_email"`
+	IsActive       bool         `json:"is_active"`
 }
 
 // Branch is the read-only projection of a physical location belonging to a tenant.

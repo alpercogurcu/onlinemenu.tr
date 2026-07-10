@@ -218,19 +218,19 @@ func (h *Handler) terminate(w http.ResponseWriter, r *http.Request) {
 }
 
 type employeeBody struct {
-	PersonID         string `json:"person_id"`
-	Department       string `json:"department"`
-	JobTitle         string `json:"job_title"`
-	EmploymentType   string `json:"employment_type"`
-	TCKimlikHash     string `json:"tc_kimlik_hash"`
-	HireDate         string `json:"hire_date"`
-	ContactPhone     string `json:"contact_phone"`
-	ContactAddress   string `json:"contact_address"`
-	EmergencyName    string `json:"emergency_name"`
-	EmergencyPhone   string `json:"emergency_phone"`
+	PersonID          string `json:"person_id"`
+	Department        string `json:"department"`
+	JobTitle          string `json:"job_title"`
+	EmploymentType    string `json:"employment_type"`
+	TCKimlikHash      string `json:"tc_kimlik_hash"`
+	HireDate          string `json:"hire_date"`
+	ContactPhone      string `json:"contact_phone"`
+	ContactAddress    string `json:"contact_address"`
+	EmergencyName     string `json:"emergency_name"`
+	EmergencyPhone    string `json:"emergency_phone"`
 	EmergencyRelation string `json:"emergency_relation"`
-	Status           string `json:"status"`
-	Notes            string `json:"notes"`
+	Status            string `json:"status"`
+	Notes             string `json:"notes"`
 }
 
 func (b employeeBody) toDomain() domain.Employee {
@@ -262,17 +262,17 @@ func (b employeeBody) toDomain() domain.Employee {
 
 func employeeResponse(e domain.Employee) map[string]any {
 	resp := map[string]any{
-		"id":              e.ID,
-		"person_id":       e.PersonID,
-		"department":      e.Department,
-		"job_title":       e.JobTitle,
-		"employment_type": string(e.EmploymentType),
-		"hire_date":       e.HireDate.Format("2006-01-02"),
-		"status":          string(e.Status),
-		"notes":           e.Notes,
-		"contact_info":    e.ContactInfo,
+		"id":                e.ID,
+		"person_id":         e.PersonID,
+		"department":        e.Department,
+		"job_title":         e.JobTitle,
+		"employment_type":   string(e.EmploymentType),
+		"hire_date":         e.HireDate.Format("2006-01-02"),
+		"status":            string(e.Status),
+		"notes":             e.Notes,
+		"contact_info":      e.ContactInfo,
 		"emergency_contact": e.EmergencyContact,
-		"created_at":      e.CreatedAt,
+		"created_at":        e.CreatedAt,
 	}
 	if e.TerminationDate != nil {
 		resp["termination_date"] = e.TerminationDate.Format("2006-01-02")

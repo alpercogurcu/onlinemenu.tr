@@ -8,7 +8,7 @@ import "github.com/google/uuid"
 // ProviderConfig carries the resolved configuration for one external provider binding.
 // Sensitive credentials are fetched from Vault at runtime; only the Vault path is stored here.
 type ProviderConfig struct {
-	Provider        string         // e.g. "edm", "parasut", "yemeksepeti"
+	Provider        string // e.g. "edm", "parasut", "yemeksepeti"
 	TenantID        uuid.UUID
 	BranchID        *uuid.UUID     // nil = tenant-wide default
 	Config          map[string]any // non-sensitive configuration from JSONB

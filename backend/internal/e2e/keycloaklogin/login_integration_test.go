@@ -73,13 +73,13 @@ var (
 )
 
 var (
-	kcBaseURL   string  // e.g. http://localhost:32769
-	kcIssuer    string  // kcBaseURL + /realms/onlinemenu
-	sharedPool  *db.Pool
-	ctxSigner   *auth.ContextTokenSigner
-	personSvc   *identitysvc.PersonService
-	membSvc     *identitysvc.MembershipService
-	contextSvc  *identitysvc.ContextService
+	kcBaseURL  string // e.g. http://localhost:32769
+	kcIssuer   string // kcBaseURL + /realms/onlinemenu
+	sharedPool *db.Pool
+	ctxSigner  *auth.ContextTokenSigner
+	personSvc  *identitysvc.PersonService
+	membSvc    *identitysvc.MembershipService
+	contextSvc *identitysvc.ContextService
 )
 
 func TestMain(m *testing.M) {

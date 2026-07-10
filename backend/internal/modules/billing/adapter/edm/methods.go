@@ -132,7 +132,7 @@ func (a *Adapter) sendInvoiceWithSession(
 	}
 
 	return &requestReturn{
-		IntlTxnID: extractXMLValue(respStr, "INTL_TXN_ID"),
+		IntlTxnID:  extractXMLValue(respStr, "INTL_TXN_ID"),
 		ReturnCode: extractXMLValue(respStr, "RETURN_CODE"),
 	}, nil
 }

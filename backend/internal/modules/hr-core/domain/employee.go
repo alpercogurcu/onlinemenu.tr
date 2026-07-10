@@ -56,27 +56,27 @@ type ContactInfo struct {
 
 // EmergencyContact holds emergency contact data stored as flexible JSON.
 type EmergencyContact struct {
-	Name  string `json:"name,omitempty"`
-	Phone string `json:"phone,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Phone    string `json:"phone,omitempty"`
 	Relation string `json:"relation,omitempty"`
 }
 
 // Employee is the aggregate root for an employment record.
 // It links a platform-level person to a specific tenant's HR data.
 type Employee struct {
-	ID              uuid.UUID
-	PersonID        uuid.UUID
-	TenantID        uuid.UUID
-	Department      string
-	JobTitle        string
-	EmploymentType  EmploymentType
-	TCKimlikHash    string // KVKK: salted hash only — never store plaintext
-	HireDate        time.Time
-	TerminationDate *time.Time
-	ContactInfo     ContactInfo
+	ID               uuid.UUID
+	PersonID         uuid.UUID
+	TenantID         uuid.UUID
+	Department       string
+	JobTitle         string
+	EmploymentType   EmploymentType
+	TCKimlikHash     string // KVKK: salted hash only — never store plaintext
+	HireDate         time.Time
+	TerminationDate  *time.Time
+	ContactInfo      ContactInfo
 	EmergencyContact EmergencyContact
-	Status          EmployeeStatus
-	Notes           string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	Status           EmployeeStatus
+	Notes            string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }

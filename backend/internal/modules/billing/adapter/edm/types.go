@@ -24,7 +24,7 @@ type userResult struct {
 
 // requestReturn is the common RETURN block from EDM send operations.
 type requestReturn struct {
-	IntlTxnID string
+	IntlTxnID  string
 	ReturnCode string
 }
 

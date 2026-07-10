@@ -26,15 +26,15 @@ type CheckRecipientRequest struct {
 
 // RecipientInfo is the result of a GİB alias lookup.
 type RecipientInfo struct {
-	VKN        string
-	Alias      string // GİB posta kutusu alias
-	CompanyName string
+	VKN          string
+	Alias        string // GİB posta kutusu alias
+	CompanyName  string
 	IsRegistered bool // false = e-arşiv only
 }
 
 // SubmitResult is returned after successfully submitting an invoice to the provider.
 type SubmitResult struct {
-	ExternalID  string    // provider's transaction ID (e.g. INTL_TXN_ID in EDM)
+	ExternalID  string // provider's transaction ID (e.g. INTL_TXN_ID in EDM)
 	SubmittedAt time.Time
 }
 

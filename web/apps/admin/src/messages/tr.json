@@ -32,6 +32,8 @@
     "roles": "Roller",
     "settings": "Ayarlar",
     "generalSettings": "Genel",
-    "integrations": "Entegrasyonlar"
+    "integrations": "Entegrasyonlar",
+    "fiscalTerminals": "Fiscal Terminaller",
+    "fiscalSections": "Kısım Eşleme"
   }
 }

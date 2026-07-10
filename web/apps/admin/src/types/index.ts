@@ -117,6 +117,36 @@ export interface Payment {
   created_at: string
 }
 
+// Fiscal (ADR-FISCAL-001/002) — Token X Connect Cloud terminal directory and
+// the category -> device VAT section mapping used to route sale lines.
+export type BasketMode = "instant" | "list"
+export interface FiscalTerminal {
+  id: string
+  tenant_id: string
+  branch_id: string
+  vendor: string
+  terminal_serial: string
+  vendor_merchant_ref: string
+  vendor_branch_ref: string
+  label: string
+  basket_mode: BasketMode
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+// A VAT "section" the device itself reports (synced_at reflects the last
+// successful sync-sections call for that specific row, not the terminal).
+export interface FiscalSection {
+  section_no: number
+  name: string
+  tax_permyriad: number
+  synced_at: string
+}
+export interface FiscalSectionMapping {
+  category_id: string
+  section_no: number
+}
+
 // Inventory (ADR-DATA-005 Faz 1 — warehouse-scoped, not branch-scoped)
 export type StockItemKind = "raw" | "intermediate" | "packaging" | "finished"
 export interface StockItem {

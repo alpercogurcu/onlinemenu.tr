@@ -7,8 +7,10 @@ import {
   CreditCard,
   FileText,
   LayoutDashboard,
+  ListTree,
   Package,
   Receipt,
+  Router,
   Settings,
   ShieldCheck,
   ShoppingBag,
@@ -186,6 +188,16 @@ export function getSettingsMenuConfig(
       title: t("navigation.integrations"),
       url: "/settings/integrations",
       icon: Package,
+    },
+    {
+      title: t("navigation.fiscalTerminals"),
+      url: "/settings/fiscal-terminals",
+      icon: Router,
+    },
+    {
+      title: t("navigation.fiscalSections"),
+      url: "/settings/fiscal-sections",
+      icon: ListTree,
     },
   ]
 }

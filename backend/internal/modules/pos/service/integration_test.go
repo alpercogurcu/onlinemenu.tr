@@ -218,7 +218,7 @@ func newTableService() *service.TableService {
 
 func openTestCheck(t *testing.T, ctx context.Context, svc *service.CheckService) domain.Check {
 	t.Helper()
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableLabel: "Masa Concurrency",
 		OpenedBy:   staffA,
@@ -236,10 +236,10 @@ func TestCheckService_Close_Idempotent_SecondCallConflicts(t *testing.T) {
 	svc := newCheckService()
 	c := openTestCheck(t, ctx, svc)
 
-	_, err := svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err := svc.Close(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	require.NoError(t, err)
 
-	_, err = svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err = svc.Close(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition, "closing an already-closed check must be rejected")
 }
 
@@ -261,7 +261,7 @@ func TestCheckService_ConcurrentClose_EmitsExactlyOneEvent(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			_, err := svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+			_, err := svc.Close(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 			switch {
 			case err == nil:
 				successCount.Add(1)
@@ -294,10 +294,10 @@ func TestCheckService_CloseThenCancel_SecondCallConflicts(t *testing.T) {
 	svc := newCheckService()
 	c := openTestCheck(t, ctx, svc)
 
-	_, err := svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err := svc.Close(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	require.NoError(t, err)
 
-	_, err = svc.Cancel(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err = svc.Cancel(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition, "cancelling an already-closed check must be rejected")
 }
 
@@ -315,7 +315,7 @@ func TestCheckService_Open_DefaultsPaxToOne(t *testing.T) {
 	ctx := context.Background()
 	svc := newCheckService()
 
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableLabel: "Masa Pax Default",
 		OpenedBy:   staffA,
@@ -331,10 +331,9 @@ func TestCheckService_Open_DefaultsPaxToOne(t *testing.T) {
 // TestCheckService_Open_ExplicitPax_Preserved asserts a client-supplied pax
 // is neither overwritten nor clamped.
 func TestCheckService_Open_ExplicitPax_Preserved(t *testing.T) {
-	ctx := context.Background()
 	svc := newCheckService()
 
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, context.Background()), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableLabel: "Masa Pax Explicit",
 		Pax:        4,
@@ -348,11 +347,10 @@ func TestCheckService_Open_ExplicitPax_Preserved(t *testing.T) {
 // negative edge cases explicitly (0 is Go's int zero value, so this also
 // doubles as "omitted from the request body").
 func TestCheckService_Open_NonPositivePax_FallsBackToOne(t *testing.T) {
-	ctx := context.Background()
 	svc := newCheckService()
 
 	for _, pax := range []int{0, -3} {
-		c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+		c, err := svc.Open(chainWideCtx(t, context.Background()), tenantA, chainWidePrincipal(), domain.Check{
 			BranchID:   branchA,
 			TableLabel: "Masa Pax Nonpositive",
 			Pax:        pax,

@@ -3,9 +3,12 @@ package service_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -239,12 +242,18 @@ func newPurchaseReceiptService() *service.PurchaseReceiptService {
 	})
 }
 
-// chainWidePrincipal returns a staff principal with no single-branch scope
-// (BranchID == uuid.Nil), matching a chain-wide membership (ADR-AUTH-001 /
-// identity domain.Membership: "nil = chain-wide"). Used by lifecycle tests
-// that exercise both requesting-branch and source-branch actions in one
-// flow; auth.Principal.HasBranchAccess treats it as authorized for any
-// branch. Branch-scoped authz enforcement itself is covered by the
+// chainWidePrincipal returns a manager staff principal with no single-branch
+// scope (BranchID == uuid.Nil), matching a chain-wide membership
+// (ADR-AUTH-001 / identity domain.Membership: "nil = chain-wide"). Used by
+// lifecycle tests that exercise both requesting-branch and source-branch
+// actions in one flow — a transfer order's Submit checks source_branch_id
+// while Approve/Fulfil check the requesting branch, so no single branch_id
+// can satisfy such a flow.
+//
+// It MUST be paired with chainWideCtx: since requireBranch was hardened to
+// fail closed, a nil BranchID grants nothing on its own; chain-wide reach
+// comes exclusively from the OPA-derived scope=="tenant" that the manager
+// role resolves to. Branch-scoped authz enforcement itself is covered by the
 // dedicated tests in branch_authz_test.go.
 func chainWidePrincipal() auth.Principal {
 	return auth.Principal{
@@ -252,8 +261,43 @@ func chainWidePrincipal() auth.Principal {
 		Ctx:      auth.ContextStaff,
 		TenantID: tenantA,
 		BranchID: uuid.Nil,
-		RoleIDs:  []uuid.UUID{uuid.New()},
+		RoleIDs:  []uuid.UUID{managerRoleID},
 	}
+}
+
+var (
+	scopeEngineOnce sync.Once
+	scopeEngineVal  *auth.Engine
+)
+
+// chainWideCtx returns a context carrying the scope auth.RequirePermission
+// resolves for a manager principal against the real OPA bundle — the same
+// value production middleware plants before the service layer runs. Tests
+// asserting a DENIAL must keep context.Background(): a tenant scope exempts
+// every principal and would mask the very check under test.
+func chainWideCtx(t *testing.T, parent context.Context) context.Context {
+	t.Helper()
+	scopeEngineOnce.Do(func() { scopeEngineVal = newScopeTestEngine(t) })
+
+	// The scope is derived from ONE representative action because
+	// configs/opa/bundles/authz.rego resolves scope at the ROLE level today
+	// (`scope := "tenant" if has_role("manager")`, action-independent). If the
+	// policy ever moves to per-action scope, this single-action derivation stops
+	// representing the other call sites and must be revisited.
+	var scoped context.Context
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		scoped = r.Context()
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil).
+		WithContext(auth.WithPrincipal(parent, chainWidePrincipal()))
+	auth.RequirePermission(scopeEngineVal, "inventory.warehouse.update")(next).
+		ServeHTTP(httptest.NewRecorder(), req)
+
+	require.NotNil(t, scoped, "manager principal must pass OPA to yield a tenant-scoped context")
+	scope, ok := auth.ScopeFromContext(scoped)
+	require.True(t, ok)
+	require.Equal(t, "tenant", scope)
+	return scoped
 }
 
 func createTestWarehouse(t *testing.T, ctx context.Context, tenantID, branchID uuid.UUID) domain.Warehouse {
@@ -287,7 +331,7 @@ func createTestStockItem(t *testing.T, ctx context.Context, tenantID uuid.UUID) 
 func seedSourceStock(t *testing.T, ctx context.Context, tenantID, warehouseID, stockItemID uuid.UUID, qty float64, unit string) {
 	t.Helper()
 	inv := newInventoryService()
-	_, _, err := inv.RecordMovement(ctx, tenantID, chainWidePrincipal(), service.RecordMovementRequest{
+	_, _, err := inv.RecordMovement(chainWideCtx(t, ctx), tenantID, chainWidePrincipal(), service.RecordMovementRequest{
 		WarehouseID: warehouseID,
 		StockItemID: stockItemID,
 		Type:        domain.MovementTypeIn,
@@ -326,24 +370,24 @@ func TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive(t *testing.T
 	assert.Equal(t, domain.BTOStatusDraft, bto.Status)
 
 	// 2. Submit.
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.BTOStatusSubmitted, bto.Status)
 
 	// 3. Source branch approves the full requested quantity.
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, domain.BTOStatusApproved, bto.Status)
 
 	// 4. Source branch begins fulfilling.
-	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.BTOStatusFulfilling, bto.Status)
 
 	// 5. A shipment is created against the BTO and approved.
-	shipment, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	shipment, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		TransferOrderID: &bto.ID,
@@ -353,13 +397,13 @@ func TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive(t *testing.T
 		},
 	})
 	require.NoError(t, err)
-	shipment, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	shipment, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ShipmentStatusApproved, shipment.Status)
 
 	// 6. Advance to in_transit: source warehouse loses 40kg, BTO -> shipped,
 	// shipped_qty denormalized onto the BTO item.
-	shipment, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	shipment, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ShipmentStatusInTransit, shipment.Status)
 
@@ -379,7 +423,7 @@ func TestTransferOrderAndShipment_FullLifecycle_AutoClosesOnReceive(t *testing.T
 
 	// 7. Receive into the destination warehouse: destination gains 40kg, BTO
 	// -> received -> auto-closed (single item, fully received), atomically.
-	shipment, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
+	shipment, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ShipmentStatusReceived, shipment.Status)
 
@@ -418,7 +462,7 @@ func TestShipmentReceive_RejectsWrongStatus(t *testing.T) {
 	shSvc := newShipmentService()
 	invSvc := newInventoryService()
 
-	shipment, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	shipment, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		Priority:        domain.PriorityNormal,
@@ -430,7 +474,7 @@ func TestShipmentReceive_RejectsWrongStatus(t *testing.T) {
 	assert.Equal(t, domain.ShipmentStatusDraft, shipment.Status)
 
 	// Still draft: receive must be rejected, and must not touch stock at all.
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
 	require.Error(t, err)
 	var te *pub.TransitionError
 	assert.ErrorAs(t, err, &te)
@@ -486,17 +530,17 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	createAndAdvance := func(qty float64) domain.Shipment {
-		sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		sh, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 			FromWarehouseID: sourceWH.ID,
 			ToBranchID:      branchReq,
 			TransferOrderID: &bto.ID,
@@ -505,9 +549,9 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 			},
 		})
 		require.NoError(t, err)
-		sh, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
-		sh, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		return sh
 	}
@@ -535,7 +579,7 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 	// transition is quantity-gated on the BTO's full total across ALL of its
 	// shipments, not on any single shipment's own receive event) so that a
 	// still-outstanding sibling shipment can still Advance.
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
 	require.NoError(t, err)
 	afterReceive1, err := toSvc.Get(ctx, tenantA, bto.ID)
 	require.NoError(t, err)
@@ -547,7 +591,7 @@ func TestTransferOrder_PartialFulfilment_TwoShipments_AutoClosesOnLastReceive(t 
 	assert.InDelta(t, 25.0, btoItemsAfterReceive1[0].ReceivedQty, 0.001)
 
 	// Receive shipment 2: completes the total (25+15=40) -> auto-close.
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
 	require.NoError(t, err)
 	afterReceive2, err := toSvc.Get(ctx, tenantA, bto.ID)
 	require.NoError(t, err)
@@ -587,17 +631,17 @@ func TestTransferOrder_InterleavedShipments_SecondAdvanceNotBlockedByFirstReceiv
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	createShipment := func(qty float64) domain.Shipment {
-		sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		sh, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 			FromWarehouseID: sourceWH.ID,
 			ToBranchID:      branchReq,
 			TransferOrderID: &bto.ID,
@@ -612,11 +656,11 @@ func TestTransferOrder_InterleavedShipments_SecondAdvanceNotBlockedByFirstReceiv
 	// Shipment 1 (25kg): create, advance (fulfilling -> shipped), receive
 	// (partial: 25 of 40 -> BTO must stay 'shipped', not jump to 'received').
 	ship1 := createShipment(25)
-	_, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), ship1.ID)
+	_, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship1.ID)
 	require.NoError(t, err)
-	_, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), ship1.ID)
+	_, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship1.ID)
 	require.NoError(t, err)
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
 	require.NoError(t, err)
 
 	afterReceive1, err := toSvc.Get(ctx, tenantA, bto.ID)
@@ -626,9 +670,9 @@ func TestTransferOrder_InterleavedShipments_SecondAdvanceNotBlockedByFirstReceiv
 	// Shipment 2 (15kg): created and advanced AFTER ship1 already received.
 	// This is the exact step that used to 409 before the fix.
 	ship2 := createShipment(15)
-	_, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), ship2.ID)
+	_, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship2.ID)
 	require.NoError(t, err)
-	_, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), ship2.ID)
+	_, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship2.ID)
 	require.NoError(t, err, "ship2's Advance must not be blocked by ship1's earlier receive")
 
 	afterShip2, err := toSvc.Get(ctx, tenantA, bto.ID)
@@ -636,7 +680,7 @@ func TestTransferOrder_InterleavedShipments_SecondAdvanceNotBlockedByFirstReceiv
 	assert.Equal(t, domain.BTOStatusShipped, afterShip2.Status)
 
 	// Receive shipment 2: completes the total (25+15=40) -> shipped -> received -> closed.
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
 	require.NoError(t, err)
 
 	afterReceive2, err := toSvc.Get(ctx, tenantA, bto.ID)
@@ -679,11 +723,11 @@ func TestTransferOrderApprove_SetsUnitPrice(t *testing.T) {
 		assert.Nil(t, it.Currency)
 	}
 
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	price := 12.50
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: itemPriced.ID, ApprovedQty: 10, UnitPrice: &price, Currency: "TRY"},
 		{StockItemID: itemFree.ID, ApprovedQty: 5}, // no price: free/approved_suppliers policy item
 	})
@@ -732,20 +776,20 @@ func TestTransferOrderAndShipment_PriceFlow_ReceiveSetsBranchLocalCost(t *testin
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	price := 7.25
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40, UnitPrice: &price, Currency: "TRY"},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	// Shipment created against the priced BTO: no per-line override given,
 	// so the price must be copied from the BTO item.
-	shipment, shItems, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	shipment, shItems, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		TransferOrderID: &bto.ID,
@@ -760,9 +804,9 @@ func TestTransferOrderAndShipment_PriceFlow_ReceiveSetsBranchLocalCost(t *testin
 	require.NotNil(t, shItems[0].Currency)
 	assert.Equal(t, "TRY", *shItems[0].Currency)
 
-	shipment, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	shipment, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
-	shipment, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	shipment, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
 
 	// Before receive: destination warehouse has no stock_levels row at all
@@ -770,7 +814,7 @@ func TestTransferOrderAndShipment_PriceFlow_ReceiveSetsBranchLocalCost(t *testin
 	_, err = invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
 	assert.Error(t, err, "destination level must not exist before anything is received into it")
 
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
 	require.NoError(t, err)
 
 	destLevel, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
@@ -818,16 +862,16 @@ func TestTransferOrderAndShipment_NoPriceLeavesCostNil(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40}, // no UnitPrice
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
-	shipment, shItems, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	shipment, shItems, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		TransferOrderID: &bto.ID,
@@ -840,11 +884,11 @@ func TestTransferOrderAndShipment_NoPriceLeavesCostNil(t *testing.T) {
 	assert.Nil(t, shItems[0].UnitPrice)
 	assert.Nil(t, shItems[0].Currency)
 
-	shipment, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	shipment, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
-	shipment, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), shipment.ID)
+	shipment, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID)
 	require.NoError(t, err)
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), shipment.ID, destWH.ID)
 	require.NoError(t, err)
 
 	destLevel, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
@@ -876,16 +920,16 @@ func TestShipmentCreate_OverridesBTOPricePerLine(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	btoPrice := 7.25
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40, UnitPrice: &btoPrice, Currency: "TRY"},
 	})
 	require.NoError(t, err)
 
 	overridePrice := 9.99
-	_, shItems, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	_, shItems, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		TransferOrderID: &bto.ID,
@@ -926,18 +970,18 @@ func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *test
 		},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	price := 8.40
-	bto, err = toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err = toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: item.ID, ApprovedQty: 40, UnitPrice: &price, Currency: "TRY"},
 	})
 	require.NoError(t, err)
-	bto, err = toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err = toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 
 	createAndAdvance := func(qty float64) domain.Shipment {
-		sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+		sh, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 			FromWarehouseID: sourceWH.ID,
 			ToBranchID:      branchReq,
 			TransferOrderID: &bto.ID,
@@ -946,9 +990,9 @@ func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *test
 			},
 		})
 		require.NoError(t, err)
-		sh, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
-		sh, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		return sh
 	}
@@ -961,7 +1005,7 @@ func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *test
 	ship2 := createAndAdvance(15)
 
 	// Receive shipment 1 (25kg of 40kg): destination gets its first cost stamp.
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship1.ID, destWH.ID)
 	require.NoError(t, err)
 
 	afterPartial, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
@@ -971,7 +1015,7 @@ func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *test
 	assert.InDelta(t, 8.40, *afterPartial.LastUnitCost, 0.0001)
 
 	// Receive shipment 2 (15kg): completes the BTO (40/40), same price.
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), ship2.ID, destWH.ID)
 	require.NoError(t, err)
 
 	afterFull, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
@@ -987,7 +1031,7 @@ func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *test
 	// already-recorded cost -- the "doluysa" guard in
 	// ShipmentService.Receive must not clobber a known cost with a later
 	// priceless movement.
-	adhoc, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	adhoc, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		Items: []service.CreateShipmentItemRequest{
@@ -995,11 +1039,11 @@ func TestTransferOrder_PartialDelivery_CostSurvivesLaterPricelessReceive(t *test
 		},
 	})
 	require.NoError(t, err)
-	adhoc, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), adhoc.ID)
+	adhoc, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), adhoc.ID)
 	require.NoError(t, err)
-	adhoc, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), adhoc.ID)
+	adhoc, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), adhoc.ID)
 	require.NoError(t, err)
-	_, err = shSvc.Receive(ctx, tenantA, chainWidePrincipal(), adhoc.ID, destWH.ID)
+	_, err = shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), adhoc.ID, destWH.ID)
 	require.NoError(t, err)
 
 	final, err := invSvc.GetLevel(ctx, tenantA, destWH.ID, item.ID)
@@ -1023,7 +1067,7 @@ func TestShipmentAdvance_RejectsInsufficientStock(t *testing.T) {
 	shSvc := newShipmentService()
 	invSvc := newInventoryService()
 
-	sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	sh, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: sourceWH.ID,
 		ToBranchID:      branchReq,
 		Items: []service.CreateShipmentItemRequest{
@@ -1031,10 +1075,10 @@ func TestShipmentAdvance_RejectsInsufficientStock(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	sh, err = shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+	sh, err = shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 	require.NoError(t, err)
 
-	_, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
+	_, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 	require.Error(t, err)
 	var ve *pub.ValidationError
 	assert.ErrorAs(t, err, &ve)

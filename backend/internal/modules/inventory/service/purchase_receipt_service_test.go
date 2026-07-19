@@ -36,7 +36,7 @@ func TestPurchaseReceipt_PolicyEnforcement_ExclusiveHQ_Rejected(t *testing.T) {
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	_, _, err = rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	_, _, err = rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID: wh.ID,
 		Currency:    "TRY",
 		Items: []service.CreateReceiptItemRequest{
@@ -64,7 +64,7 @@ func TestPurchaseReceipt_PolicyEnforcement_ApprovedSuppliers_ApprovedSupplier_OK
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	rcpt, items, err := rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	rcpt, items, err := rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID:     wh.ID,
 		SupplierPartyID: &supplierID,
 		Currency:        "TRY",
@@ -95,7 +95,7 @@ func TestPurchaseReceipt_PolicyEnforcement_ApprovedSuppliers_UnapprovedSupplier_
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	_, _, err = rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	_, _, err = rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID:     wh.ID,
 		SupplierPartyID: &unapprovedSupplierID,
 		Currency:        "TRY",
@@ -124,7 +124,7 @@ func TestPurchaseReceipt_PolicyEnforcement_ApprovedSuppliers_NilSupplier_Rejecte
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	_, _, err = rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	_, _, err = rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID: wh.ID,
 		Currency:    "TRY",
 		Items: []service.CreateReceiptItemRequest{
@@ -149,7 +149,7 @@ func TestPurchaseReceipt_PolicyEnforcement_Free_OK(t *testing.T) {
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	rcpt, items, err := rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	rcpt, items, err := rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID:  wh.ID,
 		SupplierName: "Semt Pazarı",
 		Currency:     "TRY",
@@ -181,7 +181,7 @@ func TestPurchaseReceipt_SetsLastCostAndOnHand(t *testing.T) {
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	_, _, err = rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	_, _, err = rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID: wh.ID,
 		Currency:    "TRY",
 		Items: []service.CreateReceiptItemRequest{
@@ -227,7 +227,7 @@ func TestPurchaseReceipt_Atomicity_OneViolatingLineRejectsWholeReceipt(t *testin
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	_, _, err = rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	_, _, err = rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID: wh.ID,
 		Currency:    "TRY",
 		Items: []service.CreateReceiptItemRequest{
@@ -267,7 +267,7 @@ func TestPurchaseReceipt_GetAndListRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	rcptSvc := newPurchaseReceiptService()
-	created, _, err := rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
+	created, _, err := rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateReceiptRequest{
 		WarehouseID:  wh.ID,
 		SupplierName: "Semt Pazarı",
 		Currency:     "TRY",

@@ -79,9 +79,9 @@ func TestTransferOrderAuthz_Submit(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		bto := newDraftBTOForAuthz(t, ctx, toSvc, item.ID)
-		updated, err := toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+		updated, err := toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.BTOStatusSubmitted, updated.Status)
 	})
@@ -90,7 +90,7 @@ func TestTransferOrderAuthz_Submit(t *testing.T) {
 func newSubmittedBTOForAuthz(t *testing.T, ctx context.Context, toSvc *service.TransferOrderService, itemID uuid.UUID) domain.BranchTransferOrder {
 	t.Helper()
 	bto := newDraftBTOForAuthz(t, ctx, toSvc, itemID)
-	bto, err := toSvc.Submit(ctx, tenantA, chainWidePrincipal(), bto.ID)
+	bto, err := toSvc.Submit(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 	require.NoError(t, err)
 	return bto
 }
@@ -114,9 +114,9 @@ func TestTransferOrderAuthz_Approve(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		bto := newSubmittedBTOForAuthz(t, ctx, toSvc, item.ID)
-		updated, err := toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), approvals)
+		updated, err := toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), approvals)
 		require.NoError(t, err)
 		assert.Equal(t, domain.BTOStatusApproved, updated.Status)
 	})
@@ -140,9 +140,9 @@ func TestTransferOrderAuthz_Reject(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		bto := newSubmittedBTOForAuthz(t, ctx, toSvc, item.ID)
-		updated, err := toSvc.Reject(ctx, tenantA, chainWidePrincipal(), bto.ID)
+		updated, err := toSvc.Reject(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.BTOStatusRejected, updated.Status)
 	})
@@ -151,7 +151,7 @@ func TestTransferOrderAuthz_Reject(t *testing.T) {
 func newApprovedBTOForAuthz(t *testing.T, ctx context.Context, toSvc *service.TransferOrderService, itemID uuid.UUID) domain.BranchTransferOrder {
 	t.Helper()
 	bto := newSubmittedBTOForAuthz(t, ctx, toSvc, itemID)
-	bto, err := toSvc.Approve(ctx, tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
+	bto, err := toSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID, uuid.New(), []service.ApprovalItem{
 		{StockItemID: itemID, ApprovedQty: 5},
 	})
 	require.NoError(t, err)
@@ -176,9 +176,9 @@ func TestTransferOrderAuthz_Fulfil(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		bto := newApprovedBTOForAuthz(t, ctx, toSvc, item.ID)
-		updated, err := toSvc.Fulfil(ctx, tenantA, chainWidePrincipal(), bto.ID)
+		updated, err := toSvc.Fulfil(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.BTOStatusFulfilling, updated.Status)
 	})
@@ -229,9 +229,9 @@ func TestTransferOrderAuthz_Cancel(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt regardless of status", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt regardless of status", func(t *testing.T) {
 		bto := newApprovedBTOForAuthz(t, ctx, toSvc, item.ID)
-		updated, err := toSvc.Cancel(ctx, tenantA, chainWidePrincipal(), bto.ID)
+		updated, err := toSvc.Cancel(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), bto.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.BTOStatusCancelled, updated.Status)
 	})
@@ -265,15 +265,15 @@ func TestShipmentAuthz_Create(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
-		_, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), newReq())
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
+		_, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), newReq())
 		require.NoError(t, err)
 	})
 }
 
 func newDraftShipmentForAuthz(t *testing.T, ctx context.Context, shSvc *service.ShipmentService, whID, itemID uuid.UUID) domain.Shipment {
 	t.Helper()
-	sh, _, err := shSvc.Create(ctx, tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
+	sh, _, err := shSvc.Create(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), service.CreateShipmentRequest{
 		FromWarehouseID: whID,
 		ToBranchID:      branchReq,
 		Items:           []service.CreateShipmentItemRequest{{StockItemID: itemID, RequestedQty: 10, Unit: "kg"}},
@@ -301,9 +301,9 @@ func TestShipmentAuthz_Approve(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		sh := newDraftShipmentForAuthz(t, ctx, shSvc, sourceWH.ID, item.ID)
-		updated, err := shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		updated, err := shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ShipmentStatusApproved, updated.Status)
 	})
@@ -318,7 +318,7 @@ func TestShipmentAuthz_Advance(t *testing.T) {
 		wh := createTestWarehouse(t, ctx, tenantA, branchSrc)
 		seedSourceStock(t, ctx, tenantA, wh.ID, item.ID, 100, "kg")
 		sh := newDraftShipmentForAuthz(t, ctx, shSvc, wh.ID, item.ID)
-		sh, err := shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err := shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		return sh
 	}
@@ -336,9 +336,9 @@ func TestShipmentAuthz_Advance(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		sh := newApprovedShipment()
-		updated, err := shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		updated, err := shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ShipmentStatusInTransit, updated.Status)
 	})
@@ -363,9 +363,9 @@ func TestShipmentAuthz_Cancel(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		sh := newDraftShipmentForAuthz(t, ctx, shSvc, sourceWH.ID, item.ID)
-		updated, err := shSvc.Cancel(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		updated, err := shSvc.Cancel(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ShipmentStatusCancelled, updated.Status)
 	})
@@ -381,9 +381,9 @@ func TestShipmentAuthz_Receive(t *testing.T) {
 		destWH := createTestWarehouse(t, ctx, tenantA, branchReq)
 		seedSourceStock(t, ctx, tenantA, sourceWH.ID, item.ID, 100, "kg")
 		sh := newDraftShipmentForAuthz(t, ctx, shSvc, sourceWH.ID, item.ID)
-		sh, err := shSvc.Approve(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err := shSvc.Approve(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
-		sh, err = shSvc.Advance(ctx, tenantA, chainWidePrincipal(), sh.ID)
+		sh, err = shSvc.Advance(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID)
 		require.NoError(t, err)
 		return sh, destWH
 	}
@@ -401,9 +401,9 @@ func TestShipmentAuthz_Receive(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		sh, destWH := newInTransitShipment()
-		updated, err := shSvc.Receive(ctx, tenantA, chainWidePrincipal(), sh.ID, destWH.ID)
+		updated, err := shSvc.Receive(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), sh.ID, destWH.ID)
 		require.NoError(t, err)
 		assert.Equal(t, domain.ShipmentStatusReceived, updated.Status)
 	})
@@ -447,8 +447,8 @@ func TestPurchaseReceiptAuthz_CreateReceipt(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
-		_, _, err := rcptSvc.CreateReceipt(ctx, tenantA, chainWidePrincipal(), newReq())
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
+		_, _, err := rcptSvc.CreateReceipt(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), newReq())
 		require.NoError(t, err)
 	})
 }
@@ -477,8 +477,8 @@ func TestInventoryAuthz_RecordMovement(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
-		_, _, err := inv.RecordMovement(ctx, tenantA, chainWidePrincipal(), newReq())
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
+		_, _, err := inv.RecordMovement(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), newReq())
 		require.NoError(t, err)
 	})
 }
@@ -512,9 +512,9 @@ func TestWarehouseAuthz_Update(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		wh := createTestWarehouse(t, ctx, tenantA, branchSrc)
-		updated, err := whSvc.Update(ctx, tenantA, chainWidePrincipal(), newUpdateReq(wh.ID))
+		updated, err := whSvc.Update(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), newUpdateReq(wh.ID))
 		require.NoError(t, err)
 		assert.Equal(t, "Depo Updated", updated.Name)
 	})
@@ -536,9 +536,9 @@ func TestWarehouseAuthz_Delete(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		wh := createTestWarehouse(t, ctx, tenantA, branchSrc)
-		err := whSvc.Delete(ctx, tenantA, chainWidePrincipal(), wh.ID)
+		err := whSvc.Delete(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), wh.ID)
 		require.NoError(t, err)
 	})
 }

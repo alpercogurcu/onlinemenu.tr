@@ -63,7 +63,7 @@ func TestCheckService_Open_WithTable_OccupiesTableAndDerivesLabel(t *testing.T) 
 	svc := newCheckService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableID:    &tbl.ID,
 		TableLabel: "ignored client value",
@@ -89,12 +89,12 @@ func TestCheckService_Open_TableAlreadyOccupied_Returns409(t *testing.T) {
 	svc := newCheckService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	_, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	_, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	_, err = svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
 	})
 	assert.ErrorIs(t, err, pub.ErrTableOccupied)
@@ -105,7 +105,7 @@ func TestCheckService_Open_TableBranchMismatch(t *testing.T) {
 	svc := newCheckService()
 	tableInBranchA := newOpenTestTable(t, ctx, branchA)
 
-	_, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	_, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID: branchB, TableID: &tableInBranchA.ID, OpenedBy: staffA,
 	})
 	assert.ErrorIs(t, err, pub.ErrTableBranchMismatch)
@@ -131,7 +131,7 @@ func TestCheckService_Open_ConcurrentSameTable_OneSucceeds(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			_, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+			_, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 				BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
 			})
 			switch {
@@ -156,12 +156,12 @@ func TestCheckService_Close_ReleasesTableToCleaning(t *testing.T) {
 	svc := newCheckService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err = svc.Close(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	require.NoError(t, err)
 
 	tableRepo := repo.NewTableRepo()
@@ -180,12 +180,12 @@ func TestCheckService_Cancel_ReleasesTableToCleaning(t *testing.T) {
 	svc := newCheckService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.Cancel(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err = svc.Cancel(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	require.NoError(t, err)
 
 	tableRepo := repo.NewTableRepo()
@@ -209,7 +209,7 @@ func TestCheckService_Close_TableManuallyReset_StillSucceeds(t *testing.T) {
 	svc := newCheckService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	c, err := svc.Open(ctx, tenantA, chainWidePrincipal(), domain.Check{
+	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
 	})
 	require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestCheckService_Close_TableManuallyReset_StillSucceeds(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = svc.Close(ctx, tenantA, chainWidePrincipal(), c.ID, staffA)
+	_, err = svc.Close(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), c.ID, staffA)
 	assert.NoError(t, err, "closing the check must succeed even though the table is no longer 'occupied'")
 }
 
@@ -240,7 +240,7 @@ func TestTableService_SetStatus_ManualOccupyForbidden(t *testing.T) {
 	tableSvc := newTableService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	_, err := tableSvc.SetStatus(ctx, tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusOccupied)
+	_, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusOccupied)
 	assert.ErrorIs(t, err, service.ErrManualOccupyForbidden)
 }
 
@@ -249,11 +249,11 @@ func TestTableService_SetStatus_ValidManualTransitions(t *testing.T) {
 	tableSvc := newTableService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	reserved, err := tableSvc.SetStatus(ctx, tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved)
+	reserved, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved)
 	require.NoError(t, err)
 	assert.Equal(t, domain.TableStatusReserved, reserved.Status)
 
-	emptied, err := tableSvc.SetStatus(ctx, tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusEmpty)
+	emptied, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusEmpty)
 	require.NoError(t, err)
 	assert.Equal(t, domain.TableStatusEmpty, emptied.Status)
 }
@@ -264,10 +264,10 @@ func TestTableService_SetStatus_InvalidTransitionRejected(t *testing.T) {
 	tbl := newOpenTestTable(t, ctx, branchA) // starts "empty"
 
 	// empty -> cleaning is allowed by the machine, but cleaning -> reserved is not.
-	_, err := tableSvc.SetStatus(ctx, tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusCleaning)
+	_, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusCleaning)
 	require.NoError(t, err)
 
-	_, err = tableSvc.SetStatus(ctx, tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved)
+	_, err = tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition)
 }
 
@@ -372,7 +372,7 @@ func TestTableService_ListTables_OrderedByZoneThenTable(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	entries, err := tableSvc.ListTables(ctx, tenantA, chainWidePrincipal(), branch)
+	entries, err := tableSvc.ListTables(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), branch)
 	require.NoError(t, err)
 	require.Len(t, entries, 3)
 
@@ -443,7 +443,7 @@ func TestTableService_ListTables_SameFloorAndName_KeepsZonesContiguous(t *testin
 	})
 	require.NoError(t, err)
 
-	entries, err := tableSvc.ListTables(ctx, tenantA, chainWidePrincipal(), branch)
+	entries, err := tableSvc.ListTables(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), branch)
 	require.NoError(t, err)
 	require.Len(t, entries, 4)
 
@@ -467,17 +467,16 @@ func TestTableService_ListTables_SameFloorAndName_KeepsZonesContiguous(t *testin
 // the regression test for the "PATCH silently deactivates" defect: a patch
 // that only sets Name must leave Floor/IsActive exactly as they were.
 func TestTableService_UpdateZone_PartialPatch_LeavesOmittedFieldsUnchanged(t *testing.T) {
-	ctx := context.Background()
 	tableSvc := newTableService()
 
-	created, err := tableSvc.CreateZone(ctx, tenantA, chainWidePrincipal(), domain.TableZone{
+	created, err := tableSvc.CreateZone(chainWideCtx(t, context.Background()), tenantA, chainWidePrincipal(), domain.TableZone{
 		BranchID: branchA, Name: "Zemin Kat", Floor: 2,
 	})
 	require.NoError(t, err)
 	require.True(t, created.IsActive)
 
 	newName := "Zemin Kat (Yenilendi)"
-	updated, err := tableSvc.UpdateZone(ctx, tenantA, chainWidePrincipal(), created.ID, service.ZonePatch{
+	updated, err := tableSvc.UpdateZone(chainWideCtx(t, context.Background()), tenantA, chainWidePrincipal(), created.ID, service.ZonePatch{
 		Name: &newName,
 	})
 	require.NoError(t, err)
@@ -495,7 +494,7 @@ func TestTableService_UpdateTable_PartialPatch_LeavesOmittedFieldsUnchanged(t *t
 	tbl := newOpenTestTable(t, ctx, branchA)
 
 	newCapacity := 8
-	updated, err := tableSvc.UpdateTable(ctx, tenantA, chainWidePrincipal(), tbl.ID, service.TablePatch{
+	updated, err := tableSvc.UpdateTable(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, service.TablePatch{
 		Capacity: &newCapacity,
 	})
 	require.NoError(t, err)

@@ -12,6 +12,9 @@ package service_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -42,18 +45,55 @@ func branchPrincipal(branchID uuid.UUID) auth.Principal {
 	}
 }
 
-// chainWidePrincipal returns a staff principal with no single-branch
+// chainWidePrincipal returns a manager staff principal with no single-branch
 // restriction (BranchID == uuid.Nil), the realistic shape of a manager's
-// membership — exempt from branch-scope checks via
-// auth.Principal.HasBranchAccess regardless of OPA scope.
+// membership. It is exempt from branch-scope checks ONLY when paired with
+// chainWideCtx: since requireBranch was hardened to fail closed, a nil
+// BranchID grants nothing on its own — chain-wide reach comes exclusively
+// from the OPA-derived scope=="tenant" the manager role resolves to.
 func chainWidePrincipal() auth.Principal {
 	return auth.Principal{
 		PersonID: uuid.New(),
 		Ctx:      auth.ContextStaff,
 		TenantID: tenantA,
 		BranchID: uuid.Nil,
-		RoleIDs:  []uuid.UUID{uuid.New()},
+		RoleIDs:  []uuid.UUID{managerRoleID},
 	}
+}
+
+var (
+	scopeEngineOnce sync.Once
+	scopeEngineVal  *auth.Engine
+)
+
+// chainWideCtx returns a context carrying the scope auth.RequirePermission
+// resolves for a manager principal against the real OPA bundle — the same
+// value production middleware plants before the service layer runs. Tests
+// asserting a DENIAL must keep context.Background(): a tenant scope exempts
+// every principal and would mask the very check under test.
+func chainWideCtx(t *testing.T, parent context.Context) context.Context {
+	t.Helper()
+	scopeEngineOnce.Do(func() { scopeEngineVal = newScopeTestEngine(t) })
+
+	// The scope is derived from ONE representative action because
+	// configs/opa/bundles/authz.rego resolves scope at the ROLE level today
+	// (`scope := "tenant" if has_role("manager")`, action-independent). If the
+	// policy ever moves to per-action scope, this single-action derivation stops
+	// representing the other call sites and must be revisited.
+	var scoped context.Context
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		scoped = r.Context()
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", nil).
+		WithContext(auth.WithPrincipal(parent, chainWidePrincipal()))
+	auth.RequirePermission(scopeEngineVal, "billing.invoice.create")(next).
+		ServeHTTP(httptest.NewRecorder(), req)
+
+	require.NotNil(t, scoped, "manager principal must pass OPA to yield a tenant-scoped context")
+	scope, ok := auth.ScopeFromContext(scoped)
+	require.True(t, ok)
+	require.Equal(t, "tenant", scope)
+	return scoped
 }
 
 func newGenerateRequest(branchID uuid.UUID, idempotencyKey string) service.GenerateInvoiceRequest {
@@ -87,8 +127,8 @@ func TestBillingAuthz_GenerateInvoice(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
-		inv, err := svc.GenerateInvoice(ctx, chainWidePrincipal(), newGenerateRequest(branchA, "authz-chainwide-001"))
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
+		inv, err := svc.GenerateInvoice(chainWideCtx(t, ctx), chainWidePrincipal(), newGenerateRequest(branchA, "authz-chainwide-001"))
 		require.NoError(t, err)
 		assert.Equal(t, branchA, inv.BranchID)
 	})
@@ -153,9 +193,9 @@ func TestBillingAuthz_RetrySubmission(t *testing.T) {
 		assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 	})
 
-	t.Run("chain-wide principal is exempt", func(t *testing.T) {
+	t.Run("manager (tenant scope) is exempt", func(t *testing.T) {
 		id := insertDraftInvoice(t, ctx, branchA, "authz-retry-chainwide-001")
-		inv, err := svc.RetrySubmission(ctx, chainWidePrincipal(), tenantA, id)
+		inv, err := svc.RetrySubmission(chainWideCtx(t, ctx), chainWidePrincipal(), tenantA, id)
 		require.NoError(t, err)
 		assert.Equal(t, domain.InvoiceStatusSubmitted, inv.Status)
 	})

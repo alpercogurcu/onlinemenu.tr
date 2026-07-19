@@ -50,9 +50,16 @@ var managerRoleID = uuid.MustParse("00000001-0000-0000-0000-000000000006")
 
 func newScopeTestEngine(t *testing.T) *auth.Engine {
 	t.Helper()
+	// The decision cache is deliberately a CLOSED client: auth.Engine tolerates
+	// cache errors (miss -> evaluate, write failure -> warn), and a live pool
+	// pointed at a dead address spawns a background reconnect goroutine after
+	// PoolSize failed dials that never exits and trips TestMain's goleak check.
+	cache := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 1})
+	require.NoError(t, cache.Close())
+
 	eng, err := auth.NewEngine(
 		auth.EngineConfig{BundlePath: "../../../../configs/opa/bundles"},
-		redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 1}),
+		cache,
 		zap.NewNop(),
 	)
 	require.NoError(t, err)
@@ -88,16 +95,20 @@ func TestRequireBranch_ManagerScopeExemptsEvenWithMismatchedPrincipalBranch(t *t
 	assert.NoError(t, gotErr, "manager's OPA scope=tenant must exempt even though principal.BranchID != resourceBranch")
 }
 
-// TestRequireBranch_NoScopeInContext_FallsBackToHasBranchAccess proves the
-// requireBranch helper degrades gracefully (does not panic or silently
-// allow) when called without going through auth.RequirePermission at all —
-// e.g. a future direct-service-call caller that forgot the middleware. In
-// that case only auth.Principal.HasBranchAccess governs.
-func TestRequireBranch_NoScopeInContext_FallsBackToHasBranchAccess(t *testing.T) {
+// TestRequireBranch_NoScopeInContext_Denies proves requireBranch fails CLOSED
+// when called without going through auth.RequirePermission at all — e.g. a
+// future direct-service-call caller that forgot the middleware. With no OPA
+// scope in ctx the only remaining path is an exact BranchID match, so a
+// chain-wide principal (nil BranchID), which auth.Principal.HasBranchAccess
+// would wave through as "every branch", is refused.
+func TestRequireBranch_NoScopeInContext_Denies(t *testing.T) {
 	own := uuid.New()
 	other := uuid.New()
-	p := auth.Principal{PersonID: uuid.New(), Ctx: auth.ContextStaff, TenantID: uuid.New(), BranchID: own, RoleIDs: []uuid.UUID{uuid.New()}}
+	branchScoped := auth.Principal{PersonID: uuid.New(), Ctx: auth.ContextStaff, TenantID: uuid.New(), BranchID: own, RoleIDs: []uuid.UUID{uuid.New()}}
+	chainWide := auth.Principal{PersonID: uuid.New(), Ctx: auth.ContextStaff, TenantID: uuid.New(), BranchID: uuid.Nil, RoleIDs: []uuid.UUID{uuid.New()}}
 
-	assert.NoError(t, service.RequireBranchForTest(context.Background(), p, own))
-	assert.ErrorIs(t, service.RequireBranchForTest(context.Background(), p, other), pub.ErrBranchForbidden)
+	assert.NoError(t, service.RequireBranchForTest(context.Background(), branchScoped, own))
+	assert.ErrorIs(t, service.RequireBranchForTest(context.Background(), branchScoped, other), pub.ErrBranchForbidden)
+	assert.ErrorIs(t, service.RequireBranchForTest(context.Background(), chainWide, other), pub.ErrBranchForbidden)
+	assert.ErrorIs(t, service.RequireBranchForTest(context.Background(), chainWide, uuid.Nil), pub.ErrBranchForbidden)
 }

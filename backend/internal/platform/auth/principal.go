@@ -65,6 +65,17 @@ func (p Principal) IsCustomer() bool { return p.Ctx == ContextCustomer }
 // HasBranchAccess reports whether the principal's context covers the given branch.
 // Chain-wide staff (BranchID == uuid.Nil) can access every branch in their tenant.
 // Customer principals always return false (they have no branch context).
+//
+// WARNING: do NOT call this directly from a module's service layer for
+// ADR-AUTH-001 layer 3 branch authorization — use that module's own
+// requireBranch, which additionally requires the OPA-derived tenant scope
+// before honouring a chain-wide principal. The nil-BranchID == "every branch"
+// semantics here are only safe for tenant-level ownership checks
+// (tenant/http handler, branchAccessMiddleware), where a chain-wide
+// membership legitimately means chain-wide reach. In a service acting on
+// branch-scoped money or stock it fails OPEN: memberships.branch_id is
+// nullable with no constraint keeping a branch-scoped system role bound to a
+// branch, so a mis-provisioned chain-wide cashier would pass this check.
 func (p Principal) HasBranchAccess(branchID uuid.UUID) bool {
 	if p.Ctx != ContextStaff {
 		return false

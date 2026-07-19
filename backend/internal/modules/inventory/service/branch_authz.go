@@ -28,9 +28,20 @@ import (
 // correctly recognised as exempt, rather than rejected on a coincidental
 // mismatch.
 //
-// When no tenant-wide exemption applies, the principal must directly cover
-// branchID per auth.Principal.HasBranchAccess (exact match, or chain-wide
-// staff whose Principal.BranchID == uuid.Nil).
+// When no tenant-wide exemption applies, the principal must be staff whose
+// own Principal.BranchID is set AND equals branchID exactly. This is
+// deliberately STRICTER than auth.Principal.HasBranchAccess, which reads a
+// nil BranchID as "every branch": correct for a chain owner, unsafe here,
+// because nothing in the schema stops that shape from applying to a
+// branch-scoped role — memberships.branch_id is nullable with no constraint
+// tying a branch-scoped system role (warehouse) to a non-null branch, so a
+// mis-provisioned chain-wide warehouse operator would otherwise be able to
+// move stock in every branch of the chain. Legitimate chain-wide staff are
+// unaffected: they hold the manager role and exit at the tenant-scope check
+// above. A caller that reached this function without auth.RequirePermission
+// has no scope in ctx and therefore fails CLOSED. This mirrors
+// payment/service.requireBranch deliberately: the copies are separate
+// because inventory must not import payment (module isolation).
 //
 // Callers MUST invoke this after loading the entity (its branch_id is only
 // known once loaded) but BEFORE any state-machine transition check, so a
@@ -41,7 +52,7 @@ func requireBranch(ctx context.Context, principal auth.Principal, branchID uuid.
 	if scope, ok := auth.ScopeFromContext(ctx); ok && scope == "tenant" {
 		return nil
 	}
-	if principal.HasBranchAccess(branchID) {
+	if principal.IsStaff() && principal.BranchID != uuid.Nil && principal.BranchID == branchID {
 		return nil
 	}
 	return pub.ErrBranchForbidden

@@ -1,13 +1,22 @@
 version: '3'
 
+# .env dosyası varsa (sops:decrypt ile üretilir) task'ların shell komutlarına
+# ortam değişkeni olarak enjekte edilir. Dosya yoksa Task sessizce atlar.
+dotenv: ['.env']
+
 vars:
   GO_MODULE: onlinemenu.tr
 
 tasks:
   dev:
     desc: "air ile hot-reload API (compose zaten ayakta olmalı)"
+    vars:
+      # air GOPATH/bin altında kurulu olabilir ama PATH'te olmayabilir;
+      # PATH'te varsa onu, yoksa $(go env GOPATH)/bin altındakini kullan.
+      AIR_BIN:
+        sh: command -v air 2>/dev/null || echo "$(go env GOPATH)/bin/air"
     cmds:
-      - air -c .air.toml
+      - "{{.AIR_BIN}} -c .air.toml"
 
   build:
     desc: "Tüm Go binary'lerini build et (ko ile)"
@@ -52,16 +61,26 @@ tasks:
 
   lint:
     desc: "golangci-lint + go-arch-lint"
+    vars:
+      # Bu araçlar $(go env GOPATH)/bin altında kurulu olabilir ama PATH'te
+      # olmayabilir; PATH'te varsa onu, yoksa GOPATH/bin altındakini kullan.
+      GOLANGCI_LINT_BIN:
+        sh: command -v golangci-lint 2>/dev/null || echo "$(go env GOPATH)/bin/golangci-lint"
+      GO_ARCH_LINT_BIN:
+        sh: command -v go-arch-lint 2>/dev/null || echo "$(go env GOPATH)/bin/go-arch-lint"
     cmds:
-      - golangci-lint run
-      - go-arch-lint check
+      - "{{.GOLANGCI_LINT_BIN}} run"
+      - "{{.GO_ARCH_LINT_BIN}} check"
       - ./scripts/lint_sql_rules.sh
 
   fmt:
     desc: "Go kod formatla"
+    vars:
+      GOIMPORTS_BIN:
+        sh: command -v goimports 2>/dev/null || echo "$(go env GOPATH)/bin/goimports"
     cmds:
       - gofmt -w .
-      - goimports -w .
+      - "{{.GOIMPORTS_BIN}} -w ."
 
   vet:
     desc: "go vet"
@@ -88,25 +107,59 @@ tasks:
     cmds:
       - go run ./cmd/eventgen contracts/events internal/platform/events/generated
 
+  # cmd/migrate yalnızca "pgx5://" şemasını tanır (golang-migrate pgx/v5 driver)
+  # ve RLS FORCE nedeniyle tablo sahibi rol (app_migrator) ile çalışmalı.
+  # .env içindeki DATABASE_URL ise "postgres://" şemalı ve app_runtime rollüdür
+  # (runtime RLS zorunluluğu, bkz. ADR-SEC-002) — migration için kullanılamaz.
+  # Bu yüzden migrate task'ları DATABASE_URL yerine OUTBOX_MIGRATOR_DSN'i
+  # ("postgres://" → "pgx5://" şema dönüşümüyle) MIGRATE_DSN olarak türetip
+  # cmd/migrate'e DATABASE_URL adıyla enjekte eder.
   migrate:up:
-    desc: "Tüm modül migration'larını çalıştır"
+    desc: "Tüm modül migration'larını çalıştır (app_migrator rolü + pgx5 şeması)"
+    vars:
+      MIGRATE_DSN:
+        sh: |
+          if [ -z "$OUTBOX_MIGRATOR_DSN" ]; then
+            echo "HATA: OUTBOX_MIGRATOR_DSN .env icinde tanimli degil (app_migrator rolu gerekir, bkz. ADR-SEC-002)." >&2
+            exit 1
+          fi
+          echo "$OUTBOX_MIGRATOR_DSN" | sed -e 's#^postgres://#pgx5://#' -e 's#^postgresql://#pgx5://#'
     cmds:
-      - go run ./cmd/migrate up
+      - DATABASE_URL="{{.MIGRATE_DSN}}" go run ./cmd/migrate up
 
   migrate:down:
-    desc: "Son migration'ı geri al"
+    desc: "Son migration'ı geri al (app_migrator rolü + pgx5 şeması)"
+    vars:
+      MIGRATE_DSN:
+        sh: |
+          if [ -z "$OUTBOX_MIGRATOR_DSN" ]; then
+            echo "HATA: OUTBOX_MIGRATOR_DSN .env icinde tanimli degil (app_migrator rolu gerekir, bkz. ADR-SEC-002)." >&2
+            exit 1
+          fi
+          echo "$OUTBOX_MIGRATOR_DSN" | sed -e 's#^postgres://#pgx5://#' -e 's#^postgresql://#pgx5://#'
     cmds:
-      - go run ./cmd/migrate down 1
+      - DATABASE_URL="{{.MIGRATE_DSN}}" go run ./cmd/migrate down 1
 
   migrate:new:
     desc: "Yeni migration oluştur (task migrate:new MODULE=pos NAME=add_table)"
+    vars:
+      MIGRATE_CLI_BIN:
+        sh: command -v migrate 2>/dev/null || echo "$(go env GOPATH)/bin/migrate"
     cmds:
-      - migrate create -ext sql -dir migrations/{{.MODULE}} {{.NAME}}
+      - "{{.MIGRATE_CLI_BIN}} create -ext sql -dir migrations/{{.MODULE}} {{.NAME}}"
 
   migrate:verify:
-    desc: "RLS policy sayısını doğrula"
+    desc: "RLS policy sayısını doğrula (app_migrator rolü + pgx5 şeması)"
+    vars:
+      MIGRATE_DSN:
+        sh: |
+          if [ -z "$OUTBOX_MIGRATOR_DSN" ]; then
+            echo "HATA: OUTBOX_MIGRATOR_DSN .env icinde tanimli degil (app_migrator rolu gerekir, bkz. ADR-SEC-002)." >&2
+            exit 1
+          fi
+          echo "$OUTBOX_MIGRATOR_DSN" | sed -e 's#^postgres://#pgx5://#' -e 's#^postgresql://#pgx5://#'
     cmds:
-      - go run ./cmd/migrate verify
+      - DATABASE_URL="{{.MIGRATE_DSN}}" go run ./cmd/migrate verify
 
   sops:decrypt:
     desc: ".env.sops → .env (lokal dev için)"

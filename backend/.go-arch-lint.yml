@@ -251,8 +251,13 @@ deps:
   # --- Edge-Sync ---
   # edge-sync packages must NOT import any cloud module (postgres, vault, OPA, etc.).
   # They may import edgedb and each other's lower layers.
-  edgesync_domain:
-    mayDependOn: []
+  # edgesync_domain is intentionally OMITTED here (not just "mayDependOn: []"):
+  # go-arch-lint's schema validator rejects an explicit empty mayDependOn list
+  # ("should have ref in 'mayDependOn'/'canUse' or at least one flag of
+  # ['anyProjectDeps', 'anyVendorDeps']"), but a component absent from `deps:`
+  # still defaults to zero allowed project/vendor deps — same "depends on
+  # nothing" enforcement, without tripping that validator. Verified by
+  # temporarily adding a platform import to edge-sync/domain: still flagged.
   edgesync_outbox:
     mayDependOn: [edgesync_domain]
   edgesync_sync:

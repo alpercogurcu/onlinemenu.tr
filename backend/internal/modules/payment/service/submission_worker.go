@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"onlinemenu.tr/internal/modules/payment/domain"
 	"onlinemenu.tr/internal/modules/payment/repo"
@@ -26,6 +29,10 @@ const (
 	// undocumented (ADR-FISCAL-002 open question).
 	defaultSubmitTimeout   = 60 * time.Second
 	defaultStaleClaimAfter = 10 * time.Minute
+	// defaultMaxConcurrency caps how many terminals are driven at once. Kept
+	// modest: each slot holds a pgx connection during its bookkeeping writes, and
+	// a batch rarely spans more distinct terminals than this.
+	defaultMaxConcurrency = 4
 	// postSubmitWriteTimeout bounds the bookkeeping writes that run detached
 	// from the worker context after the vendor side is already affected.
 	postSubmitWriteTimeout = 15 * time.Second
@@ -40,6 +47,9 @@ type SubmissionWorkerConfig struct {
 	MaxRetries      int
 	SubmitTimeout   time.Duration
 	StaleClaimAfter time.Duration
+	// MaxConcurrency bounds how many terminals are submitted to in parallel.
+	// Ordering within a terminal is never affected by this value.
+	MaxConcurrency int
 }
 
 func (c SubmissionWorkerConfig) withDefaults() SubmissionWorkerConfig {
@@ -57,6 +67,9 @@ func (c SubmissionWorkerConfig) withDefaults() SubmissionWorkerConfig {
 	}
 	if c.StaleClaimAfter <= 0 {
 		c.StaleClaimAfter = defaultStaleClaimAfter
+	}
+	if c.MaxConcurrency <= 0 {
+		c.MaxConcurrency = defaultMaxConcurrency
 	}
 	return c
 }
@@ -132,17 +145,65 @@ func (w *SubmissionWorker) Run(ctx context.Context) {
 // submissions it processed. Exported so tests (and a future asynq trigger) can
 // drive the loop deterministically.
 //
+// The claimed batch is sharded by terminal: rows for the same terminal run
+// sequentially in claim order (a fiscal device must print receipts in order),
+// while distinct terminals run in parallel up to cfg.MaxConcurrency. That is
+// what keeps one unreachable terminal from head-of-line blocking every other
+// tenant's submissions.
+//
 // Only the claim itself can fail the whole cycle; a per-submission failure is
 // logged and leaves that row for a later attempt, so one poisonous basket cannot
-// stall the others.
+// stall the others — not even the rest of its own terminal's shard.
+//
+// RunOnce returns only after every shard has drained, so within one process a
+// terminal never has two baskets in flight. Two caveats this barrier does NOT
+// cover, both pre-existing: a row pushed to MarkRetry clears claimed_at and can
+// be overtaken by a newer row for the same terminal on a later cycle, and
+// ClaimPending's FOR UPDATE SKIP LOCKED admits several worker processes, which
+// the barrier cannot coordinate. Strict end-to-end receipt ordering would need
+// a per-terminal lease in the claim query.
 func (w *SubmissionWorker) RunOnce(ctx context.Context) (int, error) {
 	batch, err := w.queue.ClaimPending(ctx, w.cfg.BatchSize, w.cfg.StaleClaimAfter)
 	if err != nil {
 		return 0, fmt.Errorf("payment/worker: claim pending: %w", err)
 	}
+	if len(batch) == 0 {
+		return 0, nil
+	}
 
+	shards := shardByTerminal(batch)
+
+	limit := w.cfg.MaxConcurrency
+	if limit > len(shards) {
+		limit = len(shards)
+	}
+
+	// A plain errgroup on the caller's context, NOT errgroup.WithContext: a
+	// derived cancel would let one shard's error abort submissions to unrelated,
+	// healthy terminals. Shards only ever report cancellation.
+	var g errgroup.Group
+	g.SetLimit(limit)
+
+	var processed atomic.Int64
+	for _, shard := range shards {
+		g.Go(func() error {
+			n, err := w.processShard(ctx, shard)
+			processed.Add(int64(n))
+			return err
+		})
+	}
+	err = g.Wait()
+
+	return int(processed.Load()), err
+}
+
+// processShard drives one terminal's submissions in claim order. A per-row
+// failure is logged and the shard continues: every row here is already claimed,
+// so skipping one would strand it until the stale-claim window instead of
+// letting it take its retry now.
+func (w *SubmissionWorker) processShard(ctx context.Context, shard []repo.FiscalSubmission) (int, error) {
 	processed := 0
-	for _, sub := range batch {
+	for _, sub := range shard {
 		if ctx.Err() != nil {
 			return processed, ctx.Err()
 		}
@@ -157,6 +218,42 @@ func (w *SubmissionWorker) RunOnce(ctx context.Context) (int, error) {
 		processed++
 	}
 	return processed, nil
+}
+
+// terminalShardKey identifies the physical device a submission prints on.
+//
+// The branch is the whole key, deliberately. Device routing on the submit path
+// is branch-scoped: the driver resolves the terminal from (tenant, branch) alone
+// — domain.FiscalSale carries no serial at all, and the submission's
+// TerminalSerial only ever reaches an adapter through FiscalSubmissionRef on the
+// void path. Sharding on the serial would therefore split rows that print on one
+// shared device into parallel shards and reorder its receipts, which is why the
+// serial is not part of this key.
+type terminalShardKey struct {
+	tenantID uuid.UUID
+	branchID uuid.UUID
+}
+
+func shardKeyOf(sub repo.FiscalSubmission) terminalShardKey {
+	return terminalShardKey{tenantID: sub.TenantID, branchID: sub.BranchID}
+}
+
+// shardByTerminal groups the batch by terminal, preserving the claim order both
+// within each shard and across the returned shards (first-seen order), so the
+// result is deterministic for a given batch.
+func shardByTerminal(batch []repo.FiscalSubmission) [][]repo.FiscalSubmission {
+	index := make(map[terminalShardKey]int, len(batch))
+	shards := make([][]repo.FiscalSubmission, 0, len(batch))
+	for _, sub := range batch {
+		key := shardKeyOf(sub)
+		if i, ok := index[key]; ok {
+			shards[i] = append(shards[i], sub)
+			continue
+		}
+		index[key] = len(shards)
+		shards = append(shards, []repo.FiscalSubmission{sub})
+	}
+	return shards
 }
 
 func (w *SubmissionWorker) process(ctx context.Context, sub repo.FiscalSubmission) error {

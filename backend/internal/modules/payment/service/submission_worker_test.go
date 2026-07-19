@@ -340,6 +340,10 @@ func TestRunOnce_OnePoisonousSubmissionDoesNotStallTheBatch(t *testing.T) {
 
 // TestRunOnce_HealthyRowsSurviveAPoisonNeighbour isolates the same guarantee
 // with a working sink: the corrupt row fails, the healthy ones complete.
+//
+// Asserted by payment id rather than by slice index: these rows belong to
+// different terminals, so they are dispatched concurrently and the order they
+// reach the sink in is deliberately not guaranteed.
 func TestRunOnce_HealthyRowsSurviveAPoisonNeighbour(t *testing.T) {
 	poison := newSubmission(t, 0)
 	poison.SalePayload = []byte("{not json")
@@ -353,11 +357,13 @@ func TestRunOnce_HealthyRowsSurviveAPoisonNeighbour(t *testing.T) {
 	n, err := w.RunOnce(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 2, n, "both rows resolved: one failed terminally, one completed")
-	require.Len(t, s.results, 2)
-	assert.Equal(t, domain.FiscalSubmissionFailed, s.results[0].Status)
-	assert.Equal(t, poison.PaymentID, s.results[0].PaymentID)
-	assert.Equal(t, domain.FiscalSubmissionCompleted, s.results[1].Status)
-	assert.Equal(t, good.PaymentID, s.results[1].PaymentID)
+
+	byPayment := make(map[uuid.UUID]domain.FiscalSubmissionStatus, len(s.results))
+	for _, res := range s.results {
+		byPayment[res.PaymentID] = res.Status
+	}
+	assert.Equal(t, domain.FiscalSubmissionFailed, byPayment[poison.PaymentID])
+	assert.Equal(t, domain.FiscalSubmissionCompleted, byPayment[good.PaymentID])
 }
 
 func TestRunOnce_EmptyBatch(t *testing.T) {
@@ -383,6 +389,306 @@ func TestRunOnce_AsyncAdapter_MarksSubmittedForWholeBatch(t *testing.T) {
 	assert.Equal(t, 2, n)
 	assert.Len(t, q.submitted, 2)
 	assert.Empty(t, s.results, "async adapter must not reach the sink from the worker")
+}
+
+// ---------------------------------------------------------------------------
+// Terminal sharding & bounded parallelism
+// ---------------------------------------------------------------------------
+
+// onDevice repoints a submission at an explicit tenant/branch — the pair that
+// actually selects the physical device — so a test controls its shard.
+func onDevice(sub repo.FiscalSubmission, tenantID, branchID uuid.UUID) repo.FiscalSubmission {
+	sub.TenantID = tenantID
+	sub.BranchID = branchID
+	return sub
+}
+
+func TestShardByTerminal(t *testing.T) {
+	tenantA, tenantB := uuid.New(), uuid.New()
+	branch1, branch2 := uuid.New(), uuid.New()
+
+	withBranch := func(sub repo.FiscalSubmission, tenantID, branchID uuid.UUID, serial string) repo.FiscalSubmission {
+		sub = onDevice(sub, tenantID, branchID)
+		sub.TerminalSerial = serial
+		return sub
+	}
+
+	tests := []struct {
+		name  string
+		batch func(t *testing.T) []repo.FiscalSubmission
+		want  [][]int // expected shards, as indexes into the batch
+	}{
+		{
+			name: "same device collapses into one ordered shard",
+			batch: func(t *testing.T) []repo.FiscalSubmission {
+				return []repo.FiscalSubmission{
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+				}
+			},
+			want: [][]int{{0, 1, 2}},
+		},
+		{
+			name: "distinct branches shard apart, interleaving preserved",
+			batch: func(t *testing.T) []repo.FiscalSubmission {
+				return []repo.FiscalSubmission{
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+					withBranch(newSubmission(t, 0), tenantA, branch2, "SER-2"),
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+				}
+			},
+			want: [][]int{{0, 2}, {1}},
+		},
+		{
+			name: "the same branch id in another tenant is a different device",
+			batch: func(t *testing.T) []repo.FiscalSubmission {
+				return []repo.FiscalSubmission{
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+					withBranch(newSubmission(t, 0), tenantB, branch1, "SER-1"),
+				}
+			},
+			want: [][]int{{0}, {1}},
+		},
+		{
+			// The load-bearing case: the submit path routes by branch alone
+			// (domain.FiscalSale has no serial), so mixed serials within a branch
+			// all print on one device and must share a single ordered shard.
+			// Splitting them would reorder that device's receipts.
+			name: "mixed serials in one branch stay in a single ordered shard",
+			batch: func(t *testing.T) []repo.FiscalSubmission {
+				return []repo.FiscalSubmission{
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-1"),
+					withBranch(newSubmission(t, 0), tenantA, branch1, ""),
+					withBranch(newSubmission(t, 0), tenantA, branch1, "SER-2"),
+				}
+			},
+			want: [][]int{{0, 1, 2}},
+		},
+		{
+			name: "empty serials shard by branch",
+			batch: func(t *testing.T) []repo.FiscalSubmission {
+				return []repo.FiscalSubmission{
+					withBranch(newSubmission(t, 0), tenantA, branch1, ""),
+					withBranch(newSubmission(t, 0), tenantA, branch1, ""),
+					withBranch(newSubmission(t, 0), tenantA, branch2, ""),
+				}
+			},
+			want: [][]int{{0, 1}, {2}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := tc.batch(t)
+			shards := shardByTerminal(batch)
+
+			got := make([][]int, 0, len(shards))
+			for _, shard := range shards {
+				ids := make([]int, 0, len(shard))
+				for _, sub := range shard {
+					for i, orig := range batch {
+						if orig.ID == sub.ID {
+							ids = append(ids, i)
+							break
+						}
+					}
+				}
+				got = append(got, ids)
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// blockingAdapter records dispatch order and in-flight concurrency, and can hold
+// a chosen submission hostage. Unlike fakeAdapter it does not hold its mutex
+// across the call, so it can actually observe parallelism.
+type blockingAdapter struct {
+	mu       sync.Mutex
+	started  []uuid.UUID
+	finished []uuid.UUID
+	inFlight int
+	maxSeen  int
+
+	release  chan struct{} // closed to free the blocked submissions
+	blockID  uuid.UUID     // submission held until release is closed
+	blockAll bool          // hold every submission instead of just blockID
+}
+
+func (a *blockingAdapter) SubmitSale(ctx context.Context, sale domain.FiscalSale) (*domain.FiscalResult, error) {
+	a.mu.Lock()
+	a.started = append(a.started, sale.SubmissionID)
+	a.inFlight++
+	if a.inFlight > a.maxSeen {
+		a.maxSeen = a.inFlight
+	}
+	blocked := a.blockAll || sale.SubmissionID == a.blockID
+	a.mu.Unlock()
+
+	if blocked {
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+		}
+	}
+
+	a.mu.Lock()
+	a.inFlight--
+	a.finished = append(a.finished, sale.SubmissionID)
+	a.mu.Unlock()
+
+	return &domain.FiscalResult{Status: domain.FiscalSubmissionCompleted}, nil
+}
+
+func (a *blockingAdapter) VoidSale(context.Context, domain.FiscalSubmissionRef) (*domain.FiscalResult, error) {
+	return nil, nil
+}
+
+func (a *blockingAdapter) Capabilities() domain.FiscalCapabilities {
+	return domain.FiscalCapabilities{}
+}
+
+func (a *blockingAdapter) snapshot() (started, finished []uuid.UUID, maxSeen int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]uuid.UUID(nil), a.started...), append([]uuid.UUID(nil), a.finished...), a.maxSeen
+}
+
+// TestRunOnce_SameTerminalStaysSequentialAndOrdered is the receipt-order
+// guarantee: a fiscal device must print in claim order, so one device's rows
+// are never overlapped or reordered no matter how much headroom the pool has.
+// The differing serials are deliberate — they must not buy any parallelism,
+// because the submit path routes on the branch alone.
+func TestRunOnce_SameTerminalStaysSequentialAndOrdered(t *testing.T) {
+	tenantID, branchID := uuid.New(), uuid.New()
+	subs := []repo.FiscalSubmission{
+		onDevice(newSubmission(t, 0), tenantID, branchID),
+		onDevice(newSubmission(t, 0), tenantID, branchID),
+		onDevice(newSubmission(t, 0), tenantID, branchID),
+	}
+	subs[1].TerminalSerial = "SER-OTHER"
+
+	q := &fakeQueue{batch: subs}
+	a := &blockingAdapter{}
+	w := newTestWorker(q, a, &fakeSink{}, SubmissionWorkerConfig{MaxConcurrency: 8})
+
+	n, err := w.RunOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+
+	started, _, maxSeen := a.snapshot()
+	assert.Equal(t, 1, maxSeen, "one terminal must never have two baskets in flight")
+	want := []uuid.UUID{subs[0].ID, subs[1].ID, subs[2].ID}
+	assert.Equal(t, want, started, "receipts must be submitted in claim order")
+}
+
+// TestRunOnce_SlowTerminalDoesNotBlockOthers is the O3 regression guard: before
+// sharding, a single hung terminal delayed every other tenant's submissions.
+func TestRunOnce_SlowTerminalDoesNotBlockOthers(t *testing.T) {
+	tenantID := uuid.New()
+	slow := onDevice(newSubmission(t, 0), tenantID, uuid.New())
+	fast1 := onDevice(newSubmission(t, 0), tenantID, uuid.New())
+	fast2 := onDevice(newSubmission(t, 0), tenantID, uuid.New())
+
+	q := &fakeQueue{batch: []repo.FiscalSubmission{slow, fast1, fast2}}
+	a := &blockingAdapter{release: make(chan struct{}), blockID: slow.ID}
+	w := newTestWorker(q, a, &fakeSink{}, SubmissionWorkerConfig{MaxConcurrency: 4})
+
+	done := make(chan int, 1)
+	go func() {
+		n, err := w.RunOnce(context.Background())
+		assert.NoError(t, err)
+		done <- n
+	}()
+
+	// The healthy terminals must finish while the slow one is still hostage.
+	require.Eventually(t, func() bool {
+		_, finished, _ := a.snapshot()
+		return len(finished) == 2
+	}, 2*time.Second, 5*time.Millisecond, "healthy terminals blocked behind the slow one")
+
+	select {
+	case <-done:
+		t.Fatal("RunOnce returned before the slow terminal was released")
+	default:
+	}
+
+	close(a.release)
+	select {
+	case n := <-done:
+		assert.Equal(t, 3, n)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunOnce did not drain after the slow terminal was released")
+	}
+}
+
+// TestRunOnce_HonoursMaxConcurrency keeps the pool bounded: an unbounded
+// fan-out would exhaust the pgx pool during the post-submit writes.
+func TestRunOnce_HonoursMaxConcurrency(t *testing.T) {
+	tenantID := uuid.New()
+	const terminals = 8
+	batch := make([]repo.FiscalSubmission, 0, terminals)
+	for range terminals {
+		batch = append(batch, onDevice(newSubmission(t, 0), tenantID, uuid.New()))
+	}
+
+	q := &fakeQueue{batch: batch}
+	// Every submission blocks, so all admitted slots pile up at once and maxSeen
+	// reflects the true ceiling rather than a scheduling accident.
+	a := &blockingAdapter{release: make(chan struct{}), blockAll: true}
+	w := newTestWorker(q, a, &fakeSink{}, SubmissionWorkerConfig{MaxConcurrency: 3})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, err := w.RunOnce(context.Background())
+		assert.NoError(t, err)
+	}()
+
+	require.Eventually(t, func() bool {
+		_, _, maxSeen := a.snapshot()
+		return maxSeen == 3
+	}, 2*time.Second, 5*time.Millisecond, "pool never reached its configured ceiling")
+
+	close(a.release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunOnce did not drain")
+	}
+
+	_, _, maxSeen := a.snapshot()
+	assert.LessOrEqual(t, maxSeen, 3, "pool exceeded MaxConcurrency")
+}
+
+// TestRunOnce_CancellationStopsDispatch ensures a shutdown mid-batch surfaces
+// the cancellation instead of driving the remaining rows at a dead context.
+func TestRunOnce_CancellationStopsDispatch(t *testing.T) {
+	tenantID, branchID := uuid.New(), uuid.New()
+	batch := []repo.FiscalSubmission{
+		onDevice(newSubmission(t, 0), tenantID, branchID),
+		onDevice(newSubmission(t, 0), tenantID, branchID),
+	}
+
+	q := &fakeQueue{batch: batch}
+	a := &blockingAdapter{}
+	w := newTestWorker(q, a, &fakeSink{}, SubmissionWorkerConfig{MaxConcurrency: 4})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := w.RunOnce(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	started, _, _ := a.snapshot()
+	assert.Empty(t, started, "no basket may be dispatched on a cancelled context")
+}
+
+func TestSubmissionWorkerConfig_MaxConcurrencyDefault(t *testing.T) {
+	assert.Equal(t, defaultMaxConcurrency, SubmissionWorkerConfig{}.withDefaults().MaxConcurrency)
+	assert.Equal(t, defaultMaxConcurrency, SubmissionWorkerConfig{MaxConcurrency: -1}.withDefaults().MaxConcurrency)
+	assert.Equal(t, 2, SubmissionWorkerConfig{MaxConcurrency: 2}.withDefaults().MaxConcurrency)
 }
 
 // ---------------------------------------------------------------------------

@@ -246,6 +246,16 @@ func (s *PaymentService) OnFiscalResult(ctx context.Context, res domain.FiscalRe
 		return fmt.Errorf("payment/service: fiscal result: payment id is required")
 	}
 
+	// The sink is the single authority for CompletedAt, regardless of what an
+	// adapter set: it drives the fiscal status poll's recency window, which
+	// must key off THIS server's clock, not a device's. A synchronous or
+	// webhook-fed adapter already sets it this way today, but relying on every
+	// current and future caller to remember is exactly how an ÖKC with a
+	// skewed clock would silently vanish from (or flood) the poll window.
+	// DeviceOperationAt is untouched — it carries the device's legal time and
+	// has no such requirement.
+	res.CompletedAt = time.Now().UTC()
+
 	err := s.db.WithTenantTx(ctx, res.TenantID, func(tx pgx.Tx) error {
 		transitioned, err := s.submissionRepo.MarkResult(
 			ctx, tx, res.SubmissionID, res.Status, res.Raw, res.FailureReason, res.CompletedAt,
@@ -287,6 +297,9 @@ func (s *PaymentService) applyCompleted(ctx context.Context, tx pgx.Tx, res doma
 	if issuedAt.IsZero() {
 		issuedAt = res.CompletedAt
 	}
+	// Unreachable in practice since OnFiscalResult always stamps CompletedAt
+	// before reaching here; kept as defense-in-depth in case that invariant
+	// ever moves.
 	if issuedAt.IsZero() {
 		issuedAt = time.Now().UTC()
 	}

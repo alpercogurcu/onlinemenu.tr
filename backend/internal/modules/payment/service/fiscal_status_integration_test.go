@@ -240,6 +240,48 @@ func TestOnFiscalResult_ReceiptFallsBackToServerTime(t *testing.T) {
 	assert.WithinDuration(t, serverAt, issuedAt, time.Second)
 }
 
+// TestOnFiscalResult_IgnoresAdapterSuppliedCompletedAt is the single-authority
+// guarantee itself: OnFiscalResult must overwrite whatever CompletedAt an
+// adapter hands it with the server's own clock before persisting. A driver
+// that fed a device timestamp straight into CompletedAt (a synchronous ÖKC
+// with a skewed clock, for instance) must not be able to push the row outside
+// or inside the fiscal status poll's recency window.
+func TestOnFiscalResult_IgnoresAdapterSuppliedCompletedAt(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	svc := newPaymentService()
+
+	// A submission-time this far off the real clock could only end up in
+	// completed_at if the stamp in OnFiscalResult were removed or bypassed.
+	deviceSkewedCompletedAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Now().UTC()
+
+	payment, err := svc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID:       tenantA,
+		BranchID:       branchA,
+		IdempotencyKey: uuid.New().String(),
+		Method:         domain.PaymentMethodCash,
+		AmountTotal:    1900,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, svc.OnFiscalResult(ctx, domain.FiscalResult{
+		SubmissionID: submissionID(t, tenantA, payment.ID),
+		TenantID:     tenantA,
+		BranchID:     branchA,
+		PaymentID:    payment.ID,
+		Status:       domain.FiscalSubmissionCompleted,
+		DeviceType:   "beko_x30tr_cloud",
+		ReceiptNo:    "0055",
+		CompletedAt:  deviceSkewedCompletedAt,
+	}))
+	after := time.Now().UTC()
+
+	_, completedAt := receiptAndSubmissionTimes(t, payment.ID)
+	assert.False(t, completedAt.Before(before) || completedAt.After(after),
+		"completed_at must be stamped by the server's OnFiscalResult clock, not the caller-supplied value %s", deviceSkewedCompletedAt)
+}
+
 func receiptAndSubmissionTimes(t *testing.T, paymentID uuid.UUID) (issuedAt, completedAt time.Time) {
 	t.Helper()
 	ctx := context.Background()

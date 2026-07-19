@@ -138,6 +138,13 @@ type FiscalResult struct {
 	// server's clock: an ÖKC whose clock is hours off would otherwise push its
 	// result outside the window (invisible to the cashier) or far into the
 	// future.
+	//
+	// Adapters do not need to populate this: FiscalResultSink's implementation
+	// (the payment service's OnFiscalResult) overwrites it unconditionally with
+	// its own clock reading before persisting, regardless of what a driver, a
+	// mock, or a replayed webhook sets here. It remains a field on this struct
+	// only because SubmitSale/VoidSale results and reconciliation flow through
+	// the same type before reaching the sink.
 	CompletedAt time.Time
 
 	// DeviceOperationAt is the vendor/device-reported moment of the sale

@@ -179,6 +179,14 @@ func (r *FiscalSubmissionRepo) MarkSubmitted(ctx context.Context, tx pgx.Tx, id 
 // Allowed source states depend on the target: a sale completes or fails only
 // from pending/submitted, while a void may also cancel an already-completed
 // registration (fiş iptali).
+//
+// completedAt must be non-zero and is written verbatim: it is required to
+// already be the API host's clock (the payment service's OnFiscalResult stamps
+// it unconditionally before calling here). A COALESCE(..., NOW()) fallback
+// previously papered over a zero value, but NOW() reads the DATABASE host's
+// clock — reintroducing exactly the API-vs-DB clock skew that CreatedAt's
+// explicit stamping (see FiscalSubmission.CreatedAt) already guards against.
+// Failing loudly instead of silently mixing clocks is the point.
 func (r *FiscalSubmissionRepo) MarkResult(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -188,6 +196,10 @@ func (r *FiscalSubmissionRepo) MarkResult(
 	lastError string,
 	completedAt time.Time,
 ) (bool, error) {
+	if completedAt.IsZero() {
+		return false, fmt.Errorf("payment/repo: mark result: completed_at is required")
+	}
+
 	var sourceStates string
 	switch status {
 	case domain.FiscalSubmissionCompleted, domain.FiscalSubmissionFailed, domain.FiscalSubmissionExpired:
@@ -198,21 +210,15 @@ func (r *FiscalSubmissionRepo) MarkResult(
 		return false, fmt.Errorf("payment/repo: mark result: %q is not a terminal status", status)
 	}
 
-	var completed *time.Time
-	if !completedAt.IsZero() {
-		utc := completedAt.UTC()
-		completed = &utc
-	}
-
 	tag, err := tx.Exec(ctx, fmt.Sprintf(`
 		UPDATE fiscal_submissions
 		SET status         = $2,
 		    result_payload = $3,
 		    last_error     = $4,
-		    completed_at   = COALESCE($5, NOW()),
+		    completed_at   = $5,
 		    claimed_at     = NULL
 		WHERE id = $1 AND status IN %s
-	`, sourceStates), id, string(status), nullableJSON(resultPayload), nullableText(lastError), completed)
+	`, sourceStates), id, string(status), nullableJSON(resultPayload), nullableText(lastError), completedAt.UTC())
 	if err != nil {
 		return false, fmt.Errorf("payment/repo: mark submission result: %w", err)
 	}

@@ -139,20 +139,23 @@ func (c *Client) cachedToken() (string, bool) {
 	return c.token, true
 }
 
+// fetchToken makes a single auth attempt. It does not retry on its own: the
+// only caller is do()'s closure, which already retries the whole operation
+// (auth + API call) through c.retry. A second backoff loop here would nest
+// inside that one, turning a persistently rate-limited auth endpoint into up
+// to (maxRetries+1)² requests instead of the shared, bounded budget.
 func (c *Client) fetchToken(ctx context.Context) (string, error) {
 	endpoint := c.authURL + "/v1/auth/token"
 
-	var out authResponse
-	err := c.retry(ctx, func() error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
-		if err != nil {
-			return fmt.Errorf("build auth request: %w", err)
-		}
-		req.SetBasicAuth(c.clientID, c.clientSecret)
-		req.Header.Set("Accept", "application/json")
-		return c.send(req, endpoint, &out)
-	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
 	if err != nil {
+		return "", fmt.Errorf("tokenx auth: build request: %w", err)
+	}
+	req.SetBasicAuth(c.clientID, c.clientSecret)
+	req.Header.Set("Accept", "application/json")
+
+	var out authResponse
+	if err := c.send(req, endpoint, &out); err != nil {
 		return "", fmt.Errorf("tokenx auth: %w", err)
 	}
 	if out.AccessToken == "" {

@@ -313,6 +313,34 @@ func TestClientRetriesOnRateLimit(t *testing.T) {
 	}
 }
 
+// TestClientDoesNotNestAuthRetries pins the fix for a nested-retry bug: before
+// the fix, a persistently rate-limited auth endpoint was retried inside
+// fetchToken (up to maxRetries+1 attempts) AND inside do()'s outer retry
+// (another maxRetries+1 iterations that each re-triggered fetchToken),
+// compounding into (maxRetries+1)^2 auth calls. With a single retry layer,
+// the auth endpoint may be hit at most maxRetries+1 times total, using the
+// same shared backoff schedule, and the basket endpoint is never reached
+// because auth never succeeds.
+func TestClientDoesNotNestAuthRetries(t *testing.T) {
+	t.Parallel()
+	srv := newTestServer(t, serverOpts{
+		auth: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) },
+		api:  func(http.ResponseWriter, *http.Request) { t.Error("API must not be called when auth never succeeds") },
+	})
+	client, _, sleeps := newTestClient(srv)
+
+	err := client.AddInstantBasket(context.Background(), "T1", Basket{})
+	require.Error(t, err)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+
+	assert.Equal(t, int64(maxRetries+1), srv.authHits.Load(),
+		"auth must be retried through the single shared budget, not nested (maxRetries+1, not (maxRetries+1)^2)")
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, sleeps.recorded(),
+		"backoff schedule must be the single shared 1s/2s/4s budget")
+}
+
 func TestClientRetryResendsRequestBody(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64

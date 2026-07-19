@@ -1,8 +1,9 @@
 version: '3'
 
-# .env dosyası varsa (sops:decrypt ile üretilir) task'ların shell komutlarına
-# ortam değişkeni olarak enjekte edilir. Dosya yoksa Task sessizce atlar.
-dotenv: ['.env']
+# NOT: dotenv burada DEĞİL, kök Taskfile'da tanımlı (dotenv: ['backend/.env']).
+# Task, include edilen Taskfile'larda dotenv bildirimini reddediyor; buraya
+# eklemek kök seviyedeki TÜM task'ları kırar ("Included Taskfiles can't have
+# dotenv declarations").
 
 vars:
   GO_MODULE: onlinemenu.tr

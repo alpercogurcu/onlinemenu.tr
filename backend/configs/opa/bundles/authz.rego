@@ -246,6 +246,17 @@ allow if {
 # terminal outcome) — deliberately NOT payment.payment.read, which exposes the
 # full payment history and stays a reconciliation permission. Cashier needs it
 # because the cashier is the one holding the check open at the counter.
+#
+# This action ALSO covers the per-check settlement read
+# (GET /api/v1/payments/checks/{checkID}/settlement), which reports a single
+# check's completed payments (id + amount only) and pending total. Same scope,
+# keyed by check rather than by branch: "the money state of the sale in front of
+# you". It exists because the branch poll only reports outcomes settled in the
+# last 5 minutes; once a payment aged out, the cashier — who cannot read
+# payments — saw the balance jump back to the full amount and collected it a
+# second time. Kept on this action rather than a new one so there is a single
+# permission governing what counter staff may learn about money; the DTO stays
+# narrow (no method, timestamp or receipt reference) to keep that true.
 allow if {
 	input.action == "payment.fiscal_status.read"
 	any_role({"cashier", "shift_manager"})

@@ -66,6 +66,7 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("payment.sale.register"), httpx.Idempotency(hwc.cache)).Post("/", hwc.h.registerSale)
 		// Static segment: chi resolves it ahead of the /{id} wildcard below.
 		r.With(hwc.h.permit("payment.fiscal_status.read")).Get("/fiscal-pending", hwc.h.fiscalPending)
+		r.With(hwc.h.permit("payment.fiscal_status.read")).Get("/checks/{checkID}/settlement", hwc.h.checkSettlement)
 		r.With(hwc.h.permit("payment.payment.read")).Get("/{id}", hwc.h.getPayment)
 	})
 }

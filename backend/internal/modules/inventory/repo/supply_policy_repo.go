@@ -112,7 +112,7 @@ func marshalApprovedSuppliers(ids []uuid.UUID) (any, error) {
 	}
 	b, err := json.Marshal(ids)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("inventory/repo/supply_policy: marshal approved suppliers: %w", err)
 	}
 	return string(b), nil
 }

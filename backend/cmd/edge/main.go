@@ -113,7 +113,7 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		logger.Info("edge: graceful shutdown initiated")
-		return srv.Shutdown(shutdownCtx)
+		return srv.Shutdown(shutdownCtx) //nolint:contextcheck // gCtx is already Done() here; the HTTP drain needs its own live deadline, not the cancelled parent.
 	})
 
 	if err := g.Wait(); err != nil {

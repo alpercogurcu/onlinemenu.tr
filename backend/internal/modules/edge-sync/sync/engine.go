@@ -65,7 +65,7 @@ func (e *Engine) tick(ctx context.Context) {
 func (e *Engine) drainOnShutdown(ctx context.Context) {
 	drainCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	n, err := e.outbox.PendingCount(drainCtx)
+	n, err := e.outbox.PendingCount(drainCtx) //nolint:contextcheck // caller's ctx is already cancelled (this runs from the ctx.Done() branch of Run); the drain needs its own live deadline to reach the DB.
 	if err != nil || n == 0 {
 		return
 	}

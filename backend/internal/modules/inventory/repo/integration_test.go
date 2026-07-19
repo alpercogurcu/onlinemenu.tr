@@ -351,7 +351,7 @@ func TestStockLevelRepo_ListByWarehouse(t *testing.T) {
 
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		for i := range 3 {
-			itemID := createStockItemInTx(t, tx, tenantA)
+			itemID := createStockItemInTx(t, ctx, tx, tenantA)
 			_, err := lvlRepo.AdjustOnHand(ctx, tx, tenantA, warehouseID, itemID, float64(i+1), "kg")
 			require.NoError(t, err)
 		}
@@ -366,12 +366,12 @@ func TestStockLevelRepo_ListByWarehouse(t *testing.T) {
 
 // createStockItemInTx creates a stock item using an already-open tx (for tests
 // that build several fixtures within a single withTx block).
-func createStockItemInTx(t *testing.T, tx pgx.Tx, tenantID uuid.UUID) uuid.UUID {
+func createStockItemInTx(t *testing.T, ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) uuid.UUID {
 	t.Helper()
 	itemRepo := repo.NewStockItemRepo()
 	newID, err := uuid.NewV7()
 	require.NoError(t, err)
-	item, err := itemRepo.Create(context.Background(), tx, domain.StockItem{
+	item, err := itemRepo.Create(ctx, tx, domain.StockItem{
 		ID:            newID,
 		TenantID:      tenantID,
 		SKU:           "SKU-" + uuid.NewString(),
@@ -496,7 +496,7 @@ func TestStockMovementRepo_ListByWarehouse(t *testing.T) {
 
 	withTx(t, tenantA, func(tx pgx.Tx) {
 		for range 5 {
-			itemID := createStockItemInTx(t, tx, tenantA)
+			itemID := createStockItemInTx(t, ctx, tx, tenantA)
 			_, err := mvRepo.Create(ctx, tx, domain.StockMovement{
 				TenantID:    tenantA,
 				WarehouseID: warehouseID,

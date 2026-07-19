@@ -104,7 +104,7 @@ func registerLoop(lc fx.Lifecycle, logger *zap.Logger, name string, run func(con
 	var cancel context.CancelFunc
 	done := make(chan struct{})
 	lc.Append(fx.Hook{
-		OnStart: func(context.Context) error {
+		OnStart: func(context.Context) error { //nolint:contextcheck // runCtx must outlive fx's short-lived OnStart context — the loop runs for the app's full lifetime and is cancelled explicitly in OnStop below.
 			runCtx, c := context.WithCancel(context.Background())
 			cancel = c
 			go func() {

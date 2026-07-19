@@ -97,7 +97,7 @@ func (h *Hub) ServeKitchenWS(w http.ResponseWriter, r *http.Request) {
 	// and self-correcting (the next status change re-broadcasts), and
 	// strictly better than the alternative (register first), where a live
 	// event could race ahead of the full-state snapshot on the wire.
-	snapshot, err := h.buildSnapshot(ctx, principal.TenantID, branchID)
+	snapshot, err := h.buildSnapshot(ctx, principal.TenantID, branchID) //nolint:contextcheck // ctx is the connection's own lifetime (see comment above), not r.Context() — the connection outlives this request.
 	if err != nil {
 		h.logger.Error("pos/ws: build snapshot failed", zap.Error(err))
 		wsConn.Close(websocket.StatusInternalError, "snapshot failed")
@@ -110,7 +110,7 @@ func (h *Hub) ServeKitchenWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wctx, wcancel := context.WithTimeout(ctx, h.timing.writeTimeout)
-	err = wsConn.Write(wctx, websocket.MessageText, data)
+	err = wsConn.Write(wctx, websocket.MessageText, data) //nolint:contextcheck // wctx derives from the connection's own ctx (not r.Context()), consistent with the rest of the connection's lifetime.
 	wcancel()
 	if err != nil {
 		h.logger.Warn("pos/ws: snapshot write failed", zap.Error(err))
@@ -121,8 +121,8 @@ func (h *Hub) ServeKitchenWS(w http.ResponseWriter, r *http.Request) {
 	h.register(c)
 	defer h.unregister(c)
 
-	go c.writePump(ctx)
-	go c.heartbeatPump(ctx)
+	go c.writePump(ctx)     //nolint:contextcheck // ctx is the connection's own lifetime; the pump must keep running past this request handler's return.
+	go c.heartbeatPump(ctx) //nolint:contextcheck // same connection-lifetime ctx as writePump above.
 
 	<-readDone.Done()
 	cancel()

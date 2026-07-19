@@ -36,6 +36,8 @@ func (t MovementType) AffectsOnHand() bool {
 	switch t {
 	case MovementTypeIn, MovementTypeOut, MovementTypeAdjust, MovementTypeTransfer:
 		return true
+	case MovementTypeReserve, MovementTypeRelease:
+		return false
 	}
 	return false
 }

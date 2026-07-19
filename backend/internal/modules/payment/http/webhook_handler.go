@@ -120,9 +120,10 @@ func (h *TokenXWebhookHandler) handleCompleted(w http.ResponseWriter, r *http.Re
 	// The webhook carries only the basketID; recover the owning tenant and
 	// payment from our own submission record before touching any state.
 	var routing repo.SubmissionRouting
-	err = h.db.WithAllTenantsReadTx(r.Context(), func(tx pgx.Tx) error {
+	ctx := r.Context()
+	err = h.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		routing, err = h.subs.GetRouting(r.Context(), tx, res.SubmissionID)
+		routing, err = h.subs.GetRouting(ctx, tx, res.SubmissionID)
 		return err
 	})
 	if errors.Is(err, repo.ErrNotFound) {

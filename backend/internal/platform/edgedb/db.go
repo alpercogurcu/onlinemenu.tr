@@ -50,4 +50,9 @@ func (d *DB) Migrate(ctx context.Context) error {
 func (d *DB) SQL() *sql.DB { return d.inner }
 
 // Close closes the database handle.
-func (d *DB) Close() error { return d.inner.Close() }
+func (d *DB) Close() error {
+	if err := d.inner.Close(); err != nil {
+		return fmt.Errorf("edgedb: close: %w", err)
+	}
+	return nil
+}

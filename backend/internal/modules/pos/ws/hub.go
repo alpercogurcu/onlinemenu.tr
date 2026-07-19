@@ -127,7 +127,7 @@ func (h *Hub) Register(lc fx.Lifecycle) {
 		OnStart: func(_ context.Context) error {
 			subCtx, cancel := context.WithCancel(context.Background())
 			h.subCancel = cancel
-			if err := h.bus.Subscribe(subCtx, orderEventSubjectFilter, kitchenWSDurable, h.handleOrderEvent); err != nil {
+			if err := h.bus.Subscribe(subCtx, orderEventSubjectFilter, kitchenWSDurable, h.handleOrderEvent); err != nil { //nolint:contextcheck // subCtx is Hub's own long-lived subscription context (see comment above), not the short-lived fx OnStart context.
 				cancel()
 				return fmt.Errorf("pos/ws: subscribe to order events: %w", err)
 			}

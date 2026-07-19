@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 const sessionTTL = 18 * time.Minute
@@ -16,9 +17,10 @@ const sessionTTL = 18 * time.Minute
 // sessionManager handles EDM SOAP session caching in Redis.
 // Sessions are stored per (tenantID, endpoint) to avoid cross-tenant collisions.
 type sessionManager struct {
-	c     *client
-	redis *redis.Client
-	creds func(tenantID uuid.UUID) (username, password string, err error)
+	c      *client
+	redis  *redis.Client
+	creds  func(tenantID uuid.UUID) (username, password string, err error)
+	logger *zap.Logger
 }
 
 // getOrCreate returns a valid session ID, logging in if none is cached.
@@ -64,7 +66,10 @@ func (m *sessionManager) login(ctx context.Context, tenantID uuid.UUID, _ string
 
 	key := m.sessionKey(tenantID)
 	if setErr := m.redis.Set(ctx, key, sessionID, sessionTTL).Err(); setErr != nil {
-		// Non-fatal: proceed with the session but it won't be cached.
+		// Non-fatal: proceed with the session but it won't be cached — the next
+		// call will just log in again. Still worth logging so a persistently
+		// unreachable Redis (and thus a login-per-request storm) is visible.
+		m.logger.Warn("edm/session: cache session in redis", zap.Error(setErr), zap.String("key", key))
 	}
 
 	return sessionID, nil

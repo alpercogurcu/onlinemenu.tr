@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/billing/domain"
 )
@@ -26,16 +27,21 @@ type Adapter struct {
 	cfg      Config
 }
 
-// New constructs an EDM Adapter.  The Redis client is used for SOAP session caching.
-func New(cfg Config, redisClient *redis.Client) *Adapter {
+// New constructs an EDM Adapter. The Redis client is used for SOAP session caching.
+// logger may be nil, in which case a no-op logger is used.
+func New(cfg Config, redisClient *redis.Client, logger *zap.Logger) *Adapter {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	c := newClient(cfg.Endpoint)
 	return &Adapter{
 		c:   c,
 		cfg: cfg,
 		sessions: &sessionManager{
-			c:     c,
-			redis: redisClient,
-			creds: cfg.CredentialsFn,
+			c:      c,
+			redis:  redisClient,
+			creds:  cfg.CredentialsFn,
+			logger: logger,
 		},
 	}
 }

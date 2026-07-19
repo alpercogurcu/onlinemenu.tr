@@ -9,11 +9,6 @@ const (
 	actionGetInvoiceStatus = "GetInvoiceStatusRequest"
 )
 
-// loginResponseBody is used to parse the EDM LOGIN_RESPONSE SESSION_ID.
-type loginResponseBody struct {
-	SessionID string
-}
-
 // userResult holds a GİB mailbox alias lookup result.
 type userResult struct {
 	Identifier string

@@ -29,7 +29,7 @@ var Module = fx.Module("billing",
 // Faz 1: defaults to MockAdapter.
 // To use EDM in production, replace this with:
 //
-//	edm.New(edm.Config{Endpoint: ..., CredentialsFn: ...}, redisClient)
+//	edm.New(edm.Config{Endpoint: ..., CredentialsFn: ...}, redisClient, logger)
 func newBillingAdapter() domain.BillingAdapter {
 	return mock.New()
 }

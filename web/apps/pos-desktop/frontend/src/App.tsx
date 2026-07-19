@@ -28,14 +28,19 @@ import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
 import { TablePlan } from './components/TablePlan'
 import { useFiscalStatusPolling, type StatusResolution } from './hooks/useFiscalStatusPolling'
+import { useBranchFiscalPending } from './hooks/useBranchFiscalPending'
 import {
   checkIdsAwaitingFiscal,
   closeBlockReason as computeCloseBlockReason,
   collectableRemaining,
+  describeRemoteFailure,
   isFullyPaid as computeIsFullyPaid,
   parseStatus,
   receivedTotalForPrint,
+  remotePendingForCheck,
+  remoteSettledForCheck,
   settledTotal,
+  unreportedRemoteFailures,
   type TrackedPayment,
 } from './lib/fiscalStatus'
 import {
@@ -115,6 +120,10 @@ function App() {
   const [printReceivedAmount, setPrintReceivedAmount] = useState(0)
   const [printError, setPrintError] = useState('')
   const [printRetryCheckId, setPrintRetryCheckId] = useState<string | null>(null)
+
+  // Payment ids of branch-wide fiscal failures the cashier has acknowledged —
+  // see visibleRemoteFailures.
+  const [dismissedFailureIds, setDismissedFailureIds] = useState<ReadonlySet<string>>(new Set())
 
   const canOpenCheck = Boolean(session?.branch_id)
 
@@ -211,6 +220,35 @@ function App() {
 
   useFiscalStatusPolling(trackedPayments, handleStatusResolutions)
 
+  // --- Branch-wide fiscal visibility --------------------------------------
+  //
+  // useFiscalStatusPolling above only ever sees payments THIS station
+  // registered. That is a real blind spot in a multi-till branch: a colleague
+  // takes cash on adisyon #12 at the other register, and this station happily
+  // offers "Basılı tutup kapat" on it while the ÖKC is still cutting that
+  // receipt — the close then fails server-side (409 fiscal_pending), or worse
+  // the same money gets collected twice.
+  //
+  // The Go poller (fiscal_poller.go) pushes a branch-wide snapshot; everything
+  // below merges it with the local tracked list, DEDUPED BY PAYMENT ID (the
+  // snapshot contains this station's own payments too — see remotePendingOnly).
+  // Identifies WHOSE branch snapshots the state below belongs to. Both the user
+  // and the branch matter: a shift change (same station, different cashier) and
+  // a context switch (same cashier, different branch) must each invalidate the
+  // feed. Without this a logged-out session's failed-fiscal banner and its
+  // pending reservations would survive into the next cashier's session.
+  const sessionFiscalKey = `${session?.user_id ?? ''}|${session?.branch_id ?? ''}`
+
+  const branchFiscal = useBranchFiscalPending(sessionFiscalKey)
+
+  // Acknowledgements are scoped to the same key: a banner dismissed by the
+  // previous cashier must not stay dismissed for the next one, who has not seen
+  // it. Cleared here rather than only in handleLogout, which never runs on a
+  // branch switch (SelectKeycloakContext) or a restored-session change.
+  useEffect(() => {
+    setDismissedFailureIds(new Set())
+  }, [sessionFiscalKey])
+
   const selectedCheckId = selectedCheck?.id ?? null
 
   const trackedForSelected = useMemo(
@@ -218,13 +256,63 @@ function App() {
     [trackedPayments, selectedCheckId],
   )
 
-  const awaitingFiscalCheckIds = useMemo(() => checkIdsAwaitingFiscal(trackedPayments), [trackedPayments])
+  const remoteForSelected = useMemo(
+    () => remotePendingForCheck(branchFiscal.pending, selectedCheckId),
+    [branchFiscal.pending, selectedCheckId],
+  )
+
+  const awaitingFiscalCheckIds = useMemo(
+    () => checkIdsAwaitingFiscal(trackedPayments, branchFiscal.pending),
+    [trackedPayments, branchFiscal.pending],
+  )
+
+  // Failed fiscal registrations reported by the branch feed — including THIS
+  // station's own, when the badge is not already showing them as failed. For a
+  // cashier session (GetPayment 403s, so own payments sit at `unknown`) this
+  // banner is the ONLY channel that ever reports a receipt that was not cut.
+  // See unreportedRemoteFailures for the exact suppression rule.
+  const remoteFailures = useMemo(
+    () => unreportedRemoteFailures(branchFiscal.recentlySettled, trackedPayments),
+    [branchFiscal.recentlySettled, trackedPayments],
+  )
+
+  // A failure stays in the backend's `recently_settled` window for a while
+  // after the cashier has seen and handled it. Without an acknowledgement the
+  // banner would sit there for minutes, training the cashier to ignore the one
+  // place a real fiscal failure is reported. Dismissal is per payment id and
+  // deliberately NOT persisted — a fresh app session should re-surface a still
+  // recent failure rather than silently swallow it.
+  const visibleRemoteFailures = useMemo(
+    () => remoteFailures.filter((f) => !dismissedFailureIds.has(f.paymentId)),
+    [remoteFailures, dismissedFailureIds],
+  )
+
+  // Settled money from OTHER stations on this check. Fed into all three of
+  // settledPaidTotal / remaining / fullyPaid from the same source, on purpose:
+  // Receipt.tsx gates "Nakit al" on remaining > 0 and the close button on
+  // fullyPaid, so feeding those two from different settled sums would strand
+  // the cashier on a check a colleague already paid off (see isFullyPaid).
+  const remoteSettledForSelected = useMemo(
+    () => remoteSettledForCheck(branchFiscal.recentlySettled, selectedCheckId),
+    [branchFiscal.recentlySettled, selectedCheckId],
+  )
 
   const confirmedTotal = confirmedOrdersTotal(confirmedOrders)
-  const settledPaidTotal = settledTotal(serverCompleted, trackedForSelected)
-  const remaining = collectableRemaining(confirmedTotal, serverCompleted, trackedForSelected)
-  const fullyPaid = computeIsFullyPaid(confirmedTotal, serverCompleted, trackedForSelected)
-  const closeBlockReason = computeCloseBlockReason(trackedForSelected)
+  const settledPaidTotal = settledTotal(serverCompleted, trackedForSelected, remoteSettledForSelected)
+  const remaining = collectableRemaining(
+    confirmedTotal,
+    serverCompleted,
+    trackedForSelected,
+    remoteForSelected,
+    remoteSettledForSelected,
+  )
+  const fullyPaid = computeIsFullyPaid(
+    confirmedTotal,
+    serverCompleted,
+    trackedForSelected,
+    remoteSettledForSelected,
+  )
+  const closeBlockReason = computeCloseBlockReason(trackedForSelected, remoteForSelected)
 
   async function handleDevLogin(email: string) {
     try {
@@ -287,6 +375,7 @@ function App() {
     setPrintReceivedAmount(0)
     setPrintError('')
     setPrintRetryCheckId(null)
+    setDismissedFailureIds(new Set())
   }
 
   // refreshServerPayments re-syncs the set of COMPLETED payments the server has
@@ -566,6 +655,36 @@ function App() {
           </button>
         </div>
       )}
+
+      {/*
+        Mali kayıt hatası — fişi kesilemeyen bir ödeme (bu istasyonun kendi
+        ödemesi de olabilir, bkz. unreportedRemoteFailures). Metin hangi
+        istasyon olduğunu İDDİA ETMEZ: şube akışı bunu ayırt etmez, kasiyere
+        yanlış yere baktırmaktansa adisyonu söylemek daha yararlıdır.
+        Amber, kırmızı değil: bu app'te kırmızı yalnız void/iptal içindir
+        (bkz. style.css) ve buradaki ödeme iptal edilmiş değil, yeniden
+        alınması gereken bir ödemedir. Ham `failure_reason` cihaz çıktısıdır —
+        kasiyere Türkçe mesaj gösterilir, ham metin yalnız title olarak
+        taşınır (bkz. describeRemoteFailure).
+      */}
+      {visibleRemoteFailures.map((failure) => (
+        <div
+          key={failure.paymentId}
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink"
+          title={failure.failureReason ?? ''}
+        >
+          <span>Mali kayıt hatası: {describeRemoteFailure()}</span>
+          <button
+            type="button"
+            onClick={() =>
+              setDismissedFailureIds((prev) => new Set(prev).add(failure.paymentId))
+            }
+            className="min-h-8 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+          >
+            Anladım
+          </button>
+        </div>
+      ))}
 
       <div className="flex flex-1 overflow-hidden">
         <CheckRail

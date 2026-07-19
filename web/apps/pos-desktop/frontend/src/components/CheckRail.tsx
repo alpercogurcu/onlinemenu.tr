@@ -8,9 +8,11 @@ type CheckRailProps = {
   onSelect: (checkId: string) => void
   onOpenTakeaway: () => Promise<void>
   canOpenCheck: boolean
-  /** Checks with at least one payment awaiting its fiscal record. Only covers
-   * payments THIS session registered — a pending payment taken at another
-   * station is invisible here (see the report's "bilinen sınır" note). */
+  /** Checks with at least one payment awaiting its fiscal record — BRANCH-WIDE
+   * as of the fiscal:branch-pending feed: this station's own tracked payments
+   * unioned with every other station's, deduped by payment id (see
+   * fiscalStatus.ts's checkIdsAwaitingFiscal). Degrades to this station's own
+   * payments only when the session's role lacks payment.fiscal_status.read. */
   awaitingFiscalCheckIds: ReadonlySet<string>
 }
 

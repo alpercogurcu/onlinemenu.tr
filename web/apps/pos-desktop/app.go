@@ -95,6 +95,26 @@ type App struct {
 	kcAccessExpiry time.Time
 	kcMembershipID string
 
+	// emitEvent publishes a Wails event to the frontend — defaults (set in
+	// startup) to runtime.EventsEmit, injectable for the same reason openURL
+	// is: runtime.EventsEmit panics outside a real Wails lifecycle context,
+	// and app_test.go builds App literals directly. A nil emitEvent means
+	// "no frontend attached" (a test App), which is why
+	// syncBranchFiscalPoller treats it as a hard gate rather than emitting
+	// into the void.
+	emitEvent func(topic string, data any)
+
+	// fiscalMu guards the branch-fiscal poller's lifecycle fields below.
+	// Unlike the hardware poller — started exactly once from startup, on the
+	// single Wails startup goroutine — this poller is started and stopped
+	// from BOUND METHOD calls (Login / WhoAmI / SelectKeycloakContext /
+	// Logout), each of which Wails invokes on its own goroutine (see
+	// apiclient.Client's doc comment). Two of those racing would otherwise
+	// leak a poller or double-cancel one.
+	fiscalMu       sync.Mutex
+	fiscalPoller   *branchFiscalPoller
+	fiscalBranchID string
+
 	// enableDevLogin mirrors config.Config.EnableDevLogin (POS_ENABLE_DEV_LOGIN)
 	// — exposed to the frontend via DevLoginEnabled so the dev-login form
 	// can hide itself outside dev/staging, the same way admin's
@@ -139,6 +159,7 @@ func (a *App) startup(ctx context.Context) {
 	})
 	a.enableDevLogin = cfg.EnableDevLogin
 	a.openURL = func(url string) { runtime.BrowserOpenURL(a.ctx, url) }
+	a.emitEvent = func(topic string, data any) { runtime.EventsEmit(a.ctx, topic, data) }
 
 	a.receiptConfig = receipt.Config{
 		BusinessName: cfg.BusinessName,
@@ -157,16 +178,81 @@ func (a *App) DevLoginEnabled() bool {
 }
 
 // shutdown is called once by the Wails runtime when the app is closing. It
-// stops the hardware event loop and waits for it to fully exit — the
-// station must never leave a background device poller running past
-// process shutdown.
+// stops the hardware event loop AND the branch-fiscal poller and waits for
+// both to fully exit — the station must never leave a background device
+// poller running past process shutdown.
 func (a *App) shutdown(_ context.Context) {
+	a.stopBranchFiscalPoller()
+
 	if a.hardwareCancel != nil {
 		a.hardwareCancel()
 	}
 	if a.printer != nil {
 		a.printer.Wait()
 	}
+}
+
+// syncBranchFiscalPoller brings the branch-fiscal poller in line with the
+// session's CURRENT branch. Called after every authentication transition
+// (Login, WhoAmI, a completed context selection) and from Logout.
+//
+// Idempotent by design — the common case is "same branch, already running",
+// which must not restart anything:
+//
+//	no branch context (chain-wide staff session, or logged out) -> stopped
+//	branch unchanged                                            -> untouched
+//	branch changed                                              -> stop, then start fresh
+//
+// The branch is read from a.api.CurrentBranchID() (the CTX token's own claim)
+// rather than a caller-passed DTO field: it is the single source of truth,
+// and it already returns "" for exactly the "no branch to ask about" cases
+// this must not start for.
+func (a *App) syncBranchFiscalPoller() {
+	branchID := a.api.CurrentBranchID()
+
+	a.fiscalMu.Lock()
+	defer a.fiscalMu.Unlock()
+
+	if a.fiscalPoller != nil && a.fiscalBranchID == branchID {
+		return
+	}
+	if a.fiscalPoller != nil {
+		a.fiscalPoller.Stop()
+		a.fiscalPoller = nil
+		a.fiscalBranchID = ""
+	}
+	if branchID == "" {
+		return
+	}
+	// No frontend attached (a test App built as a literal — see emitEvent's
+	// doc comment): emitting would panic, and nothing would consume it.
+	if a.emitEvent == nil {
+		return
+	}
+
+	poller := &branchFiscalPoller{
+		branchID: branchID,
+		fetch:    a.api.ListBranchPendingFiscal,
+		emit:     func(dto BranchPendingFiscalDTO) { a.emitEvent(branchFiscalPendingEvent, dto) },
+		logWarn:  func(msg string) { runtime.LogWarning(a.ctx, msg) },
+	}
+	poller.Start(a.ctx)
+	a.fiscalPoller = poller
+	a.fiscalBranchID = branchID
+}
+
+// stopBranchFiscalPoller cancels the poller and waits for its goroutine to
+// exit. Safe to call when none is running.
+func (a *App) stopBranchFiscalPoller() {
+	a.fiscalMu.Lock()
+	defer a.fiscalMu.Unlock()
+
+	if a.fiscalPoller == nil {
+		return
+	}
+	a.fiscalPoller.Stop()
+	a.fiscalPoller = nil
+	a.fiscalBranchID = ""
 }
 
 // startHardware wires the printer's event loop to the frontend. Which
@@ -236,6 +322,7 @@ func (a *App) Login(email string) (SessionDTO, error) {
 	if err != nil {
 		return SessionDTO{}, err
 	}
+	a.syncBranchFiscalPoller()
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,
@@ -262,6 +349,7 @@ func (a *App) WhoAmI() (SessionDTO, error) {
 		}
 		return SessionDTO{}, err
 	}
+	a.syncBranchFiscalPoller()
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,
@@ -280,6 +368,12 @@ func (a *App) WhoAmI() (SessionDTO, error) {
 // not fatal: the local session is already cleared by the time
 // BrowserOpenURL is called.
 func (a *App) Logout() error {
+	// Stopped BEFORE the token is cleared, and synchronously: a poll tick
+	// racing the logout would otherwise fire an unauthenticated request and,
+	// worse, emit another branch snapshot into a frontend that has already
+	// returned to the login screen.
+	a.stopBranchFiscalPoller()
+
 	_, loadErr := keycloakauth.LoadSessionState(a.kcStore)
 	hadKeycloakSession := loadErr == nil
 
@@ -529,6 +623,11 @@ func (a *App) completeContextSelection(accessToken, membershipID string) (Sessio
 	if err != nil {
 		return SessionDTO{}, fmt.Errorf("whoami after context selection: %w", err)
 	}
+	// The CTX token (and therefore the branch) has just changed — restart the
+	// branch-fiscal poller against the newly selected branch. This is also
+	// the branch-SWITCH path: a cashier picking a different membership from
+	// the context picker must not keep receiving the old branch's snapshots.
+	a.syncBranchFiscalPoller()
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,

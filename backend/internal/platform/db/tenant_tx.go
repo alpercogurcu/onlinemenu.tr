@@ -40,14 +40,22 @@ func (p *Pool) WithTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(pgx
 	if err != nil {
 		return fmt.Errorf("db: begin tenant tx: %w", err)
 	}
+	// Deferred immediately after a successful BeginTx so that a panic (or
+	// runtime.Goexit, e.g. triggered by testify require.* inside fn)
+	// unwinding through this call still releases the underlying connection
+	// instead of leaking it as "idle in transaction" on the server. In the
+	// normal path, tx.Commit below already closes the tx server-side; pgx v5
+	// then returns pgx.ErrTxClosed from this Rollback call, which is a
+	// documented no-op and is intentionally discarded.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if _, err = tx.Exec(ctx, "SET LOCAL app.tenant_id = $1", tenantID.String()); err != nil {
-		_ = tx.Rollback(ctx)
 		return fmt.Errorf("db: set local tenant_id: %w", err)
 	}
 
 	if err = fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 
@@ -74,14 +82,16 @@ func (p *Pool) WithTenantReadTx(ctx context.Context, tenantID uuid.UUID, fn func
 	if err != nil {
 		return fmt.Errorf("db: begin tenant read tx: %w", err)
 	}
+	// See WithTenantTx for why Rollback is deferred right after BeginTx.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if _, err = tx.Exec(ctx, "SET LOCAL app.tenant_id = $1", tenantID.String()); err != nil {
-		_ = tx.Rollback(ctx)
 		return fmt.Errorf("db: set local tenant_id (read): %w", err)
 	}
 
 	if err = fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 
@@ -116,14 +126,16 @@ func (p *Pool) WithAllTenantsTx(ctx context.Context, fn func(pgx.Tx) error) erro
 	if err != nil {
 		return fmt.Errorf("db: begin all-tenants tx: %w", err)
 	}
+	// See WithTenantTx for why Rollback is deferred right after BeginTx.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if _, err = tx.Exec(ctx, "SET LOCAL app.tenant_scope = 'all_tenants'"); err != nil {
-		_ = tx.Rollback(ctx)
 		return fmt.Errorf("db: set local tenant_scope: %w", err)
 	}
 
 	if err = fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 
@@ -144,14 +156,16 @@ func (p *Pool) WithAllTenantsReadTx(ctx context.Context, fn func(pgx.Tx) error) 
 	if err != nil {
 		return fmt.Errorf("db: begin all-tenants read tx: %w", err)
 	}
+	// See WithTenantTx for why Rollback is deferred right after BeginTx.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if _, err = tx.Exec(ctx, "SET LOCAL app.tenant_scope = 'all_tenants'"); err != nil {
-		_ = tx.Rollback(ctx)
 		return fmt.Errorf("db: set local tenant_scope (read): %w", err)
 	}
 
 	if err = fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { parseBranchFiscalEvent, type BranchFiscalPendingEvent } from './branchFiscal'
+import {
+  parseBranchFiscalEvent,
+  toServerCompletedMap,
+  type BranchFiscalPendingEvent,
+} from './branchFiscal'
 
 // Only the pure wire -> domain step is covered here. The hook's resetKey
 // behaviour (state dropped to empty during render when session/branch changes)
@@ -109,5 +113,48 @@ describe('parseBranchFiscalEvent', () => {
       }),
     )
     expect(got.recentlySettled[0].failureReason).toBeUndefined()
+  })
+})
+
+describe('toServerCompletedMap', () => {
+  it('projects the settlement wire list into an id -> amount map', () => {
+    const got = toServerCompletedMap([
+      { payment_id: 'pay-1', amount_total: 12500 },
+      { payment_id: 'pay-2', amount_total: 4200 },
+    ])
+    expect(got).toEqual(
+      new Map([
+        ['pay-1', 12500],
+        ['pay-2', 4200],
+      ]),
+    )
+  })
+
+  // An empty settlement is the backend's answer for a check with nothing
+  // collected AND for a check in another branch (it refuses to confirm the id
+  // exists). Both must read as "no settled money", never as unknown.
+  it('returns an empty map for an empty, missing or null list', () => {
+    expect(toServerCompletedMap([])).toEqual(new Map())
+    expect(toServerCompletedMap(undefined)).toEqual(new Map())
+    expect(toServerCompletedMap(null)).toEqual(new Map())
+  })
+
+  // A NaN amount would propagate through settledTotal and blank the entire
+  // money column instead of failing visibly — the same rule the branch event
+  // parser applies.
+  it('collapses a missing or garbage amount to 0 rather than NaN', () => {
+    const got = toServerCompletedMap([
+      { payment_id: 'pay-1' } as never,
+      { payment_id: 'pay-2', amount_total: 'x' } as never,
+    ])
+    expect(got.get('pay-1')).toBe(0)
+    expect(got.get('pay-2')).toBe(0)
+  })
+
+  // The id is the dedupe key every consumer relies on (settledTotal,
+  // remoteCompletedOnly). An entry without one would become a phantom credit
+  // under an empty-string key that no other source could ever match.
+  it('drops an entry with no payment id', () => {
+    expect(toServerCompletedMap([{ payment_id: '', amount_total: 500 }])).toEqual(new Map())
   })
 })

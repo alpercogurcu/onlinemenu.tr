@@ -61,6 +61,39 @@ function toFiniteNumber(raw: unknown): number {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
 }
 
+/** Wire shape of a settled payment from the check-settlement binding
+ * (CheckSettledPaymentDTO in pos.go). Two fields only — see that DTO's doc
+ * comment for why it is not the richer PaymentDTO. */
+export type CheckSettledPaymentWire = {
+  payment_id: string
+  amount_total: number
+}
+
+/**
+ * Projects a settlement response into the `serverCompleted` map (id -> kuruş)
+ * that fiscalStatus.ts's arithmetic consumes.
+ *
+ * The id key is what makes the two sources of this map interchangeable: both
+ * ListCheckPayments (manager) and CheckSettlement (cashier) report the same
+ * payment ids, and every consumer — settledTotal, remoteCompletedOnly — dedups
+ * by id. So a payment that also arrives via the branch snapshot is credited
+ * exactly once regardless of which source filled this map.
+ *
+ * A missing/garbage amount collapses to 0 rather than NaN, for the same reason
+ * toFiniteNumber exists above: NaN would propagate silently through every
+ * downstream total instead of failing visibly.
+ */
+export function toServerCompletedMap(
+  completed: readonly CheckSettledPaymentWire[] | null | undefined,
+): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const item of completed ?? []) {
+    if (!item?.payment_id) continue
+    out.set(item.payment_id, toFiniteNumber(item.amount_total))
+  }
+  return out
+}
+
 export function parseBranchFiscalEvent(
   evt: BranchFiscalPendingEvent | null | undefined,
 ): BranchFiscalPending {

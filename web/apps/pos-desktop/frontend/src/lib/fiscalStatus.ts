@@ -152,12 +152,11 @@ export function settledTotal(
 /**
  * Remote payments that COMPLETED and are not already accounted for locally.
  *
- * This closes the cross-station double-collection window. A payment completed
- * at another till drops out of the branch `pending` list, releasing its
- * reservation — and for a cashier session nothing else ever credits it
- * (ListCheckPayments needs payment.payment.read, manager-only, and 403s
- * fail-open to an empty serverCompleted). Without this the money would snap
- * back into "kalan" and could be collected a second time.
+ * This is the FAST path for the cross-station case. A payment completed at
+ * another till drops out of the branch `pending` list, releasing its
+ * reservation; this credits it from the same snapshot in the very next poll,
+ * with no extra round trip. `serverCompleted` (see below) then confirms it
+ * durably.
  *
  * DEDUPE — skipped when the id appears in `tracked` OR in `serverCompleted`,
  * the same "local record wins" rule remotePendingOnly applies. A manager
@@ -168,13 +167,29 @@ export function settledTotal(
  * `failed`/`voided` are deliberately NOT credited: no receipt was cut and that
  * cash genuinely is collectable again.
  *
- * KNOWN LIMIT — the endpoint's `recently_settled` window is finite (~5 min).
- * A payment completed at another station longer ago than that appears in
- * neither this list nor (for a cashier) serverCompleted, so its amount is
- * still missing from the settled total. Properly closing that needs a
- * check-scoped "paid" read a cashier is allowed to make — a narrower
- * permission than payment.payment.read, tracked separately (see pos.go's
- * ListCheckPayments doc comment for why widening that action is not the fix).
+ * WINDOW LIMIT — CLOSED. The branch snapshot's `recently_settled` window is
+ * finite (~5 min), and this list used to be a cashier's ONLY credit for a
+ * payment completed elsewhere: once it aged out, the money vanished from every
+ * view the cashier had and snapped back into "kalan", inviting a second
+ * collection. `serverCompleted` is now filled for a cashier session too, from
+ * the windowless check-scoped GET /payments/checks/{id}/settlement
+ * (payment.fiscal_status.read — the narrower action pos.go's ListCheckPayments
+ * comment called for, rather than widening payment.payment.read). The credit
+ * therefore outlives the window, and no double-count arises: this function
+ * already skips any id present in serverCompleted.
+ *
+ * REMAINING ASSUMPTIONS, in the order they would bite:
+ *   - The session holds payment.fiscal_status.read. Without it BOTH sources
+ *     403 and serverCompleted stays empty, degrading to the pre-feature
+ *     behavior (this list alone, window and all). Fail-open by design — a
+ *     permission gap must never block a cashier.
+ *   - The settlement read is trigger-driven, not continuous: it fires on check
+ *     selection and whenever the branch snapshot reports movement on the
+ *     SELECTED check (see App.tsx's branchSignalForSelected). Money collected
+ *     on a check nobody has selected is therefore credited when it is next
+ *     selected — which is the only moment it can be collected against anyway.
+ *   - The backend reports `completed` only. A payment stuck `pending`
+ *     server-side is still reserved via the branch snapshot, not credited.
  */
 export function remoteCompletedOnly(
   settled: readonly RemoteSettledFiscal[],
@@ -219,6 +234,21 @@ export function remotePendingOnly(
  * collectable again either. Includes payments registered at ANOTHER station in
  * this branch (`remote`, already scoped to the check in question by the
  * caller) — that money is just as uncollectable as this station's own. */
+/*
+ * KNOWN TRANSIENT (errs safe, self-correcting) — now that serverCompleted is
+ * filled for a cashier session too, this station's OWN payment can briefly be
+ * counted in both directions as it completes: the settlement refetch (driven by
+ * the 3s branch signal) may credit it in settledTotal before the 2s GetPayment
+ * poller has flipped its tracked entry off `pending` here. For up to ~2s
+ * collectableRemaining then understates what is still owed.
+ *
+ * Deliberately NOT guarded by intersecting against serverCompleted: the error
+ * is in the safe direction (the cashier is offered LESS to collect, never more,
+ * so no double collection), isFullyPaid ignores reserved money entirely so the
+ * close gate stays correct throughout, and the next poll resolves it. Adding a
+ * serverCompleted parameter here would widen this function's signature for a
+ * two-second cosmetic drift.
+ */
 export function reservedTotal(
   tracked: readonly TrackedPayment[],
   remote: readonly RemotePendingFiscal[] = [],

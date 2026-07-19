@@ -394,6 +394,67 @@ func (a *App) ListCheckPayments(checkID string) ([]PaymentDTO, error) {
 	return out, nil
 }
 
+// CheckSettledPaymentDTO mirrors apiclient.CheckSettledPayment.
+//
+// Deliberately NOT PaymentDTO: that struct carries method/status/currency,
+// which this endpoint does not return and a cashier is not permitted to read.
+// Reusing it would ship three permanently-empty fields to the frontend and
+// invite someone to "fix" them by widening the backend projection — the exact
+// permission creep the endpoint's design guards against.
+type CheckSettledPaymentDTO struct {
+	PaymentID   string `json:"payment_id"`
+	AmountTotal int64  `json:"amount_total"`
+}
+
+// CheckSettlementDTO mirrors apiclient.CheckSettlement.
+//
+// PendingTotal is carried through even though the frontend does not read it:
+// the branch poller already delivers per-payment pending amounts for the
+// reservation arithmetic, which is strictly richer than this scalar. It is
+// exposed rather than dropped so the binding matches the endpoint's contract
+// 1:1 and a future cross-check needs no Go change.
+type CheckSettlementDTO struct {
+	CheckID      string                   `json:"check_id"`
+	AsOf         string                   `json:"as_of"`
+	Completed    []CheckSettledPaymentDTO `json:"completed"`
+	PendingTotal int64                    `json:"pending_total"`
+}
+
+// CheckSettlement returns the money already collected on one check.
+//
+// This is the CASHIER-readable counterpart to ListCheckPayments: same purpose
+// (what has this check already been paid?), different action —
+// "payment.fiscal_status.read" instead of the manager-only
+// "payment.payment.read". It exists because the permission gap documented on
+// ListCheckPayments above is a live double-charge risk, not just a display
+// gap: without a windowless check-scoped read, a cashier's client loses track
+// of a payment completed at another till once it ages out of the branch
+// snapshot's ~5-minute recently_settled window, and offers the same balance
+// for collection again.
+//
+// Completed is initialized empty, never nil — a nil slice marshals to null,
+// and a frontend that read null as "unknown" would fall back to the full
+// balance, which is the very failure this endpoint removes.
+func (a *App) CheckSettlement(checkID string) (CheckSettlementDTO, error) {
+	s, err := a.api.GetCheckSettlement(a.ctx, checkID)
+	if err != nil {
+		return CheckSettlementDTO{}, err
+	}
+	out := CheckSettlementDTO{
+		CheckID:      s.CheckID,
+		AsOf:         s.AsOf.Format(rfc3339Millis),
+		Completed:    make([]CheckSettledPaymentDTO, 0, len(s.Completed)),
+		PendingTotal: s.PendingTotal,
+	}
+	for _, item := range s.Completed {
+		out.Completed = append(out.Completed, CheckSettledPaymentDTO{
+			PaymentID:   item.PaymentID,
+			AmountTotal: item.AmountTotal,
+		})
+	}
+	return out, nil
+}
+
 // CloseCheck closes a check once it has been paid in full. See
 // apiclient.Client.CloseCheck's doc comment for the underpaid-check 409
 // response shape.

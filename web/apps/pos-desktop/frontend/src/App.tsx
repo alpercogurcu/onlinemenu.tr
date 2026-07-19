@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  CheckSettlement,
   CloseCheck,
   DevLoginEnabled,
   GetCheck,
@@ -29,6 +30,7 @@ import { LoginScreen } from './components/LoginScreen'
 import { TablePlan } from './components/TablePlan'
 import { useFiscalStatusPolling, type StatusResolution } from './hooks/useFiscalStatusPolling'
 import { useBranchFiscalPending } from './hooks/useBranchFiscalPending'
+import { toServerCompletedMap } from './lib/branchFiscal'
 import {
   checkIdsAwaitingFiscal,
   closeBlockReason as computeCloseBlockReason,
@@ -369,6 +371,7 @@ function App() {
     setPendingLines([])
     setOpenChecks([])
     setServerCompleted(EMPTY_SERVER_COMPLETED)
+    serverCompletedForCheck.current = null
     setTrackedPayments([])
     setZones([])
     setTablesError('')
@@ -378,48 +381,180 @@ function App() {
     setDismissedFailureIds(new Set())
   }
 
-  // refreshServerPayments re-syncs the set of COMPLETED payments the server has
-  // on record for a check — used both when a check is first selected and after
-  // a RegisterCashPayment call fails (see handleRegisterPayment): a failed call
-  // might still have landed server-side (network error after the write
-  // committed), so the remaining balance shown to the cashier must not silently
-  // drift from what the backend actually has.
+  // Which check serverCompleted currently belongs to. WRITTEN ONLY BY
+  // SELECTION (handleSelectCheck / handleLogout / handleCloseCheck) — never by
+  // a fetch.
+  //
+  // That ownership rule is the whole guard. An earlier version let
+  // refreshServerPayments arm this ref with its own checkId, which quietly
+  // degraded it to "last fetch to START wins": the payment-failure path in
+  // handleRegisterPayment calls refreshServerPayments(A) directly, so if the
+  // cashier moved to adisyon B while that call was in flight, it would re-arm
+  // the ref back to A and then write A's collected money onto B's screen. B
+  // would show less owed than it really is — a silent under-collection, the
+  // mirror image of the double-charge this whole feature exists to prevent.
+  //
+  // With the ref selection-owned, a fetch can only ever confirm "is my check
+  // still the selected one?" and drop its result otherwise.
+  const serverCompletedForCheck = useRef<string | null>(null)
+
+  // Monotonic issue counter + high-water mark of what has actually been
+  // applied. The check-id guard alone is not enough: two fetches for the SAME
+  // check (a selection seed racing a branch-signal refetch, or two branch
+  // signals in quick succession) can resolve out of order, and the older
+  // response would then overwrite the newer one with a staler settled set.
+  // Only a strictly newer sequence may write.
+  const settlementIssuedSeq = useRef(0)
+  const settlementAppliedSeq = useRef(0)
+
+  // refreshServerPayments re-syncs the money the server has already collected
+  // on a check. It runs when a check is selected, when the branch fiscal
+  // snapshot reports movement on it, and after a RegisterCashPayment call fails
+  // (see handleRegisterPayment): a failed call might still have landed
+  // server-side (network error after the write committed), so the remaining
+  // balance shown to the cashier must not silently drift from what the backend
+  // actually has.
+  //
+  // SOURCE SELECTION — the single place this rule lives. Two endpoints answer
+  // the same question under different permissions:
+  //
+  //   ListCheckPayments  — "payment.payment.read", shift_manager/manager only.
+  //     Richer (method, status, currency) and reused elsewhere, so it stays the
+  //     first choice for a session that can actually read it.
+  //   CheckSettlement    — "payment.fiscal_status.read", which a plain cashier
+  //     DOES hold. Returns only id + amount, which is precisely what
+  //     serverCompleted consumes, so it is functionally complete for this map.
+  //
+  // The rule is expressed through the permission RESULT, not by inspecting the
+  // session's role: try the rich read, and on any error (the cashier's 403
+  // included) fall back to the settlement read. No role string is hardcoded
+  // anywhere, so a future rego change that grants a cashier the richer action
+  // needs no client change.
+  //
+  // Why the fallback matters beyond tidiness: for a cashier session this map
+  // used to be permanently empty, which left a payment completed at another
+  // till credited ONLY while it sat in the branch snapshot's ~5-minute
+  // recently_settled window. After that the money snapped back into "kalan"
+  // and could be collected a second time. CheckSettlement is windowless and
+  // check-scoped, so the credit never expires.
   //
   // Keyed by payment id rather than summed: settledTotal() needs the ids to
   // avoid double-counting a payment that appears both here and in
   // trackedPayments (which it will, as soon as it completes).
   //
-  // IMPORTANT — permission gap: this needs "payment.payment.read", which a
-  // plain "cashier" session does not have (see pos.go's ListCheckPayments doc
-  // comment). Fail-open on ANY error (403 included) so a permission gap or
-  // transient failure never blocks the cashier's flow.
+  // Fail-open if BOTH reads fail — a transient outage must degrade to the
+  // pre-existing branch-snapshot behavior, never block the cashier's flow.
   const refreshServerPayments = useCallback(async (checkId: string) => {
+    const seq = ++settlementIssuedSeq.current
+
+    // Two independent conditions, both required. The id check drops a response
+    // for a check the cashier has already left (this function never arms the
+    // ref — see its declaration); the sequence check drops a response that
+    // resolved out of order behind a newer one for the same check.
+    const apply = (next: ReadonlyMap<string, number>) => {
+      if (serverCompletedForCheck.current !== checkId) return
+      if (seq <= settlementAppliedSeq.current) return
+      settlementAppliedSeq.current = seq
+      setServerCompleted(next)
+    }
+
     try {
       const payments = await ListCheckPayments(checkId)
-      setServerCompleted(new Map(payments.map((p) => [p.id, p.amount_total])))
+      apply(new Map(payments.map((p) => [p.id, p.amount_total])))
+      return
     } catch (err) {
-      console.warn('ListCheckPayments failed — remaining balance may be stale for this check', err)
+      console.warn('ListCheckPayments unavailable — falling back to check settlement', err)
+    }
+
+    try {
+      const settlement = await CheckSettlement(checkId)
+      apply(toServerCompletedMap(settlement.completed))
+    } catch (err) {
+      console.warn('CheckSettlement failed — remaining balance may be stale for this check', err)
     }
   }, [])
+
+  // WHEN to re-read the settled money — deliberately NOT a second poller.
+  //
+  // The Go branch poller (fiscal_poller.go) already runs a 3s/15s loop and
+  // pushes a snapshot on every tick. That snapshot is the trigger signal:
+  // whenever the set of payments it reports FOR THE SELECTED CHECK changes,
+  // something moved on this check's money and the server-side settled set is
+  // worth re-reading. Standing up an independent interval for the settlement
+  // endpoint would double the station's request load to observe the same
+  // transitions the existing poller already reports.
+  //
+  // The signal is narrowed to the selected check on purpose: keying on the raw
+  // snapshot would refetch every 3s (that IS a poller), and keying only on
+  // selectedCheckId would miss a colleague's payment completing while the
+  // cashier sits on the check. Both `pending` and `recentlySettled` feed it —
+  // a payment can complete fast enough that this station never observes it as
+  // pending, and only its arrival in `recentlySettled` marks the transition.
+  //
+  // Amounts are part of the signal, not just ids: a partial-to-full amount
+  // correction on the same payment id must also re-read.
+  const branchSignalForSelected = useMemo(() => {
+    if (!selectedCheckId) return ''
+    const parts: string[] = []
+    for (const p of remoteForSelected) parts.push(`p:${p.paymentId}:${p.amountTotal}`)
+    for (const s of remoteSettledForSelected) parts.push(`s:${s.paymentId}:${s.status}:${s.amountTotal}`)
+    return parts.sort().join('|')
+  }, [selectedCheckId, remoteForSelected, remoteSettledForSelected])
+
+  // Fires on selection (branchSignalForSelected changes with selectedCheckId)
+  // and on every subsequent movement in that check's branch-reported payments.
+  // handleSelectCheck ALSO seeds inline — see the comment there for why that is
+  // not redundant (a re-select of the already-selected check changes neither
+  // dependency, so this effect would not run at all).
+  useEffect(() => {
+    if (!selectedCheckId) return
+    void refreshServerPayments(selectedCheckId)
+  }, [selectedCheckId, branchSignalForSelected, refreshServerPayments])
 
   async function handleSelectCheck(checkId: string) {
     setReceiptError('')
     setPendingLines([])
-    setServerCompleted(EMPTY_SERVER_COMPLETED)
+
+    // The check is fetched BEFORE any settled-money state is touched. An
+    // earlier version wiped serverCompleted up front, which stranded the
+    // cashier when this call then failed: re-selecting the CURRENTLY selected
+    // check (CheckRail fires onSelect for it too) left selectedCheck pointing
+    // at that check with its collected money erased and nothing to restore it,
+    // so a partially-paid adisyon showed its full balance as collectable.
+    // Failing before the wipe makes an unsuccessful select a clean no-op —
+    // every piece of state stays coherent with the check still on screen.
+    let check: main.CheckDTO
+    let orders: main.OrderDTO[]
     try {
-      const [check, orders] = await Promise.all([GetCheck(checkId), ListCheckOrders(checkId)])
-      setSelectedCheck(check)
-      setConfirmedOrders(orders)
+      ;[check, orders] = await Promise.all([GetCheck(checkId), ListCheckOrders(checkId)])
     } catch (err) {
       setReceiptError(describeError(err))
       return
     }
 
-    // Seed from any completed payment already recorded against this check
-    // (e.g. the app restarted mid-split, or a manager reopens a check partially
-    // paid in an earlier session) — see refreshServerPayments' doc comment for
-    // the permission caveat. trackedPayments is NOT reset here: a payment this
-    // session registered against this check may still be mid-registration.
+    setSelectedCheck(check)
+    setConfirmedOrders(orders)
+    setServerCompleted(EMPTY_SERVER_COMPLETED)
+    // Hand ownership of serverCompleted to this check. Any fetch still in
+    // flight for the PREVIOUS one now fails its id guard and drops its result
+    // rather than landing on top of this reset (see serverCompletedForCheck).
+    serverCompletedForCheck.current = checkId
+
+    // Seed the settled money for this check (it may already be partially paid —
+    // the app restarted mid-split, or a colleague collected at another till).
+    //
+    // This call is NOT redundant with the branchSignalForSelected effect, and
+    // removing it reopens the double-collection hole this feature closes. On a
+    // re-select of the already-selected check neither selectedCheckId nor the
+    // branch signal changes, so the effect does not re-run — only this inline
+    // call restores what the wipe above just cleared.
+    //
+    // When the effect DOES also fire, both fetches are for the same check and
+    // the sequence guard in refreshServerPayments makes the newer one win
+    // regardless of which HTTP response arrives first.
+    //
+    // trackedPayments is NOT reset here — a payment this session registered
+    // against this check may still be mid-registration.
     await refreshServerPayments(checkId)
   }
 
@@ -517,8 +652,18 @@ function App() {
       // The call may still have landed server-side despite the client-side
       // error (e.g. a network failure after the write committed) — re-sync the
       // remaining balance from the server rather than risk the cashier retrying
-      // a payment that already went through (fail-open, so this is a no-op for
-      // a plain cashier session that can't read payments back at all).
+      // a payment that already went through.
+      //
+      // This is now MEANINGFUL for a cashier session, not the no-op it used to
+      // be: refreshServerPayments falls back to CheckSettlement, which a
+      // cashier is permitted to read, so the very session most at risk of
+      // re-collecting a committed payment is now the one this resync protects.
+      // It still fails open if both reads fail.
+      //
+      // Note this fetch does NOT arm serverCompletedForCheck (selection owns
+      // that ref): if the cashier has moved to another check by the time it
+      // resolves, the result is dropped rather than written onto the new
+      // check's screen.
       await refreshServerPayments(checkId)
       throw err
     }
@@ -575,6 +720,7 @@ function App() {
       setConfirmedOrders([])
       setPendingLines([])
       setServerCompleted(EMPTY_SERVER_COMPLETED)
+      serverCompletedForCheck.current = null
       setTrackedPayments((prev) => prev.filter((p) => p.checkId !== checkId))
       setPrintReceivedAmount(receivedAmount)
       refreshOpenChecks()

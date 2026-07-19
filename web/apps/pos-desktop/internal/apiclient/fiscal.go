@@ -84,3 +84,51 @@ func (c *Client) ListBranchPendingFiscal(ctx context.Context, branchID string) (
 	}
 	return out, nil
 }
+
+// CheckSettledPayment is one collected payment on a check: id and amount in
+// kuruş, nothing else. The narrowness is the backend's deliberate design (see
+// payment/http/check_settlement_handler.go) — method, timestamp and fiscal
+// receipt reference belong to payment.payment.read. Do not widen this struct
+// to "match" Payment; the whole point is that a cashier may read it.
+type CheckSettledPayment struct {
+	PaymentID   string `json:"payment_id"`
+	AmountTotal int64  `json:"amount_total"`
+}
+
+// CheckSettlement mirrors the endpoint's response envelope. Completed always
+// arrives as [] (never null) per the backend's contract, so an empty slice
+// genuinely means "nothing collected yet" rather than "unreadable".
+type CheckSettlement struct {
+	CheckID      string                `json:"check_id"`
+	AsOf         time.Time             `json:"as_of"`
+	Completed    []CheckSettledPayment `json:"completed"`
+	PendingTotal int64                 `json:"pending_total"`
+}
+
+// GetCheckSettlement calls GET /api/v1/payments/checks/{checkID}/settlement —
+// the money already collected on ONE check, gated on
+// "payment.fiscal_status.read" (a cashier holds it) rather than
+// "payment.payment.read" (manager-only, see ListCheckPayments).
+//
+// This is what closes the double-charge window ListBranchPendingFiscal could
+// only narrow. A payment completed at another till leaves the branch pending
+// list and then falls out of `recently_settled` after ~5 minutes; for a
+// cashier session nothing else ever credited it, so the check's balance
+// snapped back to collectable and the same money could be taken twice. This
+// read is windowless and check-scoped, so the credit never expires.
+//
+// A check belonging to another branch returns an EMPTY settlement, not 403 —
+// the backend refuses to confirm the id exists. Callers must therefore not
+// read "empty" as "definitely nothing paid" for an arbitrary id; it is only
+// meaningful for a check this station legitimately has open.
+func (c *Client) GetCheckSettlement(ctx context.Context, checkID string) (CheckSettlement, error) {
+	if checkID == "" {
+		return CheckSettlement{}, fmt.Errorf("apiclient: get check settlement: check_id is required")
+	}
+	var out CheckSettlement
+	path := "/api/v1/payments/checks/" + url.PathEscape(checkID) + "/settlement"
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return CheckSettlement{}, fmt.Errorf("apiclient: get check settlement: %w", err)
+	}
+	return out, nil
+}

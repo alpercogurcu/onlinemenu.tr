@@ -19,6 +19,12 @@ import (
 // maxWebhookBody caps the request body; real Token payloads are a few KB.
 const maxWebhookBody = 1 << 20
 
+// WebhookPathPrefix is the mount point for the TokenX webhook route, exported
+// so the HTTP server setup can recognize the route by prefix (e.g. to exclude
+// it from otelhttp instrumentation, which would otherwise record the raw
+// request path — secret segment included — as a span attribute).
+const WebhookPathPrefix = "/webhooks/fiscal/tokenx/"
+
 // TokenXWebhookHandler ingests Token X Connect Cloud notifications.
 //
 // Token documents no webhook signature (ADR-FISCAL-002 open question #4), so
@@ -44,7 +50,7 @@ func (h *TokenXWebhookHandler) RegisterRoutes(r *chi.Mux) {
 		h.logger.Warn("payment: tokenx webhook secret not configured — webhook endpoint disabled")
 		return
 	}
-	r.Post("/webhooks/fiscal/tokenx/{secret}", h.handle)
+	r.Post(WebhookPathPrefix+"{secret}", h.handle)
 }
 
 func (h *TokenXWebhookHandler) handle(w http.ResponseWriter, r *http.Request) {

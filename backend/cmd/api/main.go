@@ -27,6 +27,7 @@ import (
 	"onlinemenu.tr/internal/modules/inventory"
 	"onlinemenu.tr/internal/modules/payment"
 	"onlinemenu.tr/internal/modules/payment/fiscal/tokenx"
+	paymenthttp "onlinemenu.tr/internal/modules/payment/http"
 	"onlinemenu.tr/internal/modules/pos"
 	posws "onlinemenu.tr/internal/modules/pos/ws"
 	"onlinemenu.tr/internal/modules/tenant"
@@ -296,10 +297,29 @@ func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.Handle
 	}
 }
 
+// webhookTracingFilter reports whether otelhttp should create a span for r.
+// otelhttp records the raw, unrouted request path as a span attribute before
+// chi even sees it, and the TokenX webhook's authenticity secret lives in
+// that path (see payment/http.WebhookPathPrefix — the vendor supports no
+// webhook signature, so the unguessable path segment is the only credential).
+// Excluding the route from tracing is the only way to keep the secret out of
+// every exported span.
+func webhookTracingFilter(r *http.Request) bool {
+	return !strings.HasPrefix(r.URL.Path, paymenthttp.WebhookPathPrefix)
+}
+
+// tracedHandler wraps router with the otelhttp instrumentation used by the
+// production server, excluding routes that must not have their path recorded
+// as a span attribute. Extra opts are appended for tests (e.g. a fixed
+// TracerProvider so spans can be inspected without the global one).
+func tracedHandler(router http.Handler, opts ...otelhttp.Option) http.Handler {
+	return otelhttp.NewHandler(router, "api", append([]otelhttp.Option{otelhttp.WithFilter(webhookTracingFilter)}, opts...)...)
+}
+
 func registerHTTPServer(lc fx.Lifecycle, cfg httpConfig, router *chi.Mux, logger *zap.Logger) {
 	srv := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      otelhttp.NewHandler(router, "api"),
+		Handler:      tracedHandler(router),
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 		IdleTimeout:  cfg.IdleTimeout,

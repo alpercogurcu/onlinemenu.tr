@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
@@ -14,6 +19,7 @@ import (
 	"onlinemenu.tr/internal/modules/identity"
 	"onlinemenu.tr/internal/modules/inventory"
 	"onlinemenu.tr/internal/modules/payment"
+	paymenthttp "onlinemenu.tr/internal/modules/payment/http"
 	"onlinemenu.tr/internal/modules/pos"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
@@ -99,6 +105,51 @@ func TestRouterMiddleware(t *testing.T) {
 		router.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
+}
+
+// TestTracedHandlerDoesNotLeakWebhookSecretIntoSpans proves the otelhttp
+// wiring no longer records the TokenX webhook's path-embedded secret. Before
+// the fix, otelhttp.NewHandler(router, "api") had no filter, so the literal
+// request path — including the secret — was captured as the http.target /
+// url.path span attribute for every webhook delivery.
+func TestTracedHandlerDoesNotLeakWebhookSecretIntoSpans(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { require.NoError(t, tp.Shutdown(context.Background())) })
+
+	const secret = "s3cr3t-must-not-leak-into-any-span"
+
+	router := chi.NewRouter()
+	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.Post(paymenthttp.WebhookPathPrefix+"{secret}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := tracedHandler(router, otelhttp.WithTracerProvider(tp))
+
+	// A traced, non-secret route must still produce a span...
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// ...but the webhook route, whose path carries the secret, must not be
+	// traced at all: that is the only way to guarantee the secret never
+	// reaches a span attribute, span name, or (downstream) a log line.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, paymenthttp.WebhookPathPrefix+secret, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.NoError(t, tp.ForceFlush(context.Background()))
+	spans := exporter.GetSpans()
+
+	require.Len(t, spans, 1, "only the non-webhook route should produce a span")
+	for _, span := range spans {
+		assert.NotContains(t, span.Name, secret, "span name must not carry the webhook secret")
+		for _, attr := range span.Attributes {
+			assert.NotContains(t, attr.Value.Emit(), secret,
+				"span attribute %s must not carry the webhook secret", attr.Key)
+		}
+	}
 }
 
 // Silence fxtest logger to keep test output clean.

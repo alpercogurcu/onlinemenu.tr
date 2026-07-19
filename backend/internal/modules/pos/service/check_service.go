@@ -21,6 +21,23 @@ import (
 // ErrInsufficientPayment is returned when the total paid is less than the check total.
 var ErrInsufficientPayment = errors.New("pos/service/check: payment insufficient to close check")
 
+// ErrFiscalPending is returned when the check is not closeable *yet* only
+// because one or more of its payments is still awaiting a fiscal result: the
+// collected money (completed + pending) does cover the check total. It is a
+// transient condition the cashier should retry, unlike ErrInsufficientPayment
+// which requires collecting more money.
+//
+// "Transient" is not guaranteed, though: if a fiscal result never arrives, the
+// payment stays pending and this error becomes permanent, wedging the check
+// open. The reconciler only warns by default — Reconciler.AutoExpire, which
+// would fail such a payment and unwedge the check, is deliberately off until an
+// adapter can ask the vendor whether the receipt actually printed
+// (ADR-FISCAL-002). Note that PaymentService.VoidSale is NOT the escape hatch:
+// it refuses any submission that is not already 'completed', precisely to avoid
+// voiding a sale the device may still be printing. So a genuinely stranded
+// payment needs operator intervention, not a POS-side retry.
+var ErrFiscalPending = errors.New("pos/service/check: fiscal registration pending for check")
+
 // CheckService manages dine-in check (adisyon) lifecycle.
 type CheckService struct {
 	db         *db.Pool
@@ -251,6 +268,13 @@ func (s *CheckService) Close(ctx context.Context, tenantID uuid.UUID, principal 
 	if err != nil {
 		return domain.Check{}, fmt.Errorf("pos/service/check: close: read payment total: %w", err)
 	}
+	// Read alongside `paid` rather than lazily inside the write transaction:
+	// calling SaleReader (which opens its own transaction on another pooled
+	// connection) while holding the check row lock would risk pool starvation.
+	pending, err := s.saleReader.PendingTotalForCheck(ctx, tenantID, checkID)
+	if err != nil {
+		return domain.Check{}, fmt.Errorf("pos/service/check: close: read pending payment total: %w", err)
+	}
 
 	var closed domain.Check
 	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -269,8 +293,8 @@ func (s *CheckService) Close(ctx context.Context, tenantID uuid.UUID, principal 
 		if err != nil {
 			return err
 		}
-		if paid < total {
-			return ErrInsufficientPayment
+		if err := paymentCoversTotal(paid, pending, total); err != nil {
+			return err
 		}
 
 		closed, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusClosed, domain.CheckStatusOpen, &closedBy)
@@ -290,6 +314,23 @@ func (s *CheckService) Close(ctx context.Context, tenantID uuid.UUID, principal 
 		return domain.Check{}, wrapErr(err, "pos/service/check: close: %w")
 	}
 	return closed, nil
+}
+
+// paymentCoversTotal decides whether a check may close given the amounts
+// already fiscally confirmed (paid), still awaiting a fiscal result (pending)
+// and owed (total), all in kuruş.
+//
+// A check never closes on pending money — the receipt may still be rejected by
+// the device — but the caller gets a distinguishable error so the cashier is
+// told "wait" instead of the misleading "collect more money".
+func paymentCoversTotal(paid, pending, total int64) error {
+	if paid >= total {
+		return nil
+	}
+	if paid+pending >= total {
+		return ErrFiscalPending
+	}
+	return ErrInsufficientPayment
 }
 
 // Cancel cancels an open check. Like Close, the row lock (GetForUpdate) is

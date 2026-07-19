@@ -192,6 +192,10 @@ func (zeroSaleReader) TotalPaidForCheck(_ context.Context, _, _ uuid.UUID) (int6
 	return 0, nil
 }
 
+func (zeroSaleReader) PendingTotalForCheck(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 var _ paymentpub.SaleReader = zeroSaleReader{}
 
 func newCheckService() *service.CheckService {

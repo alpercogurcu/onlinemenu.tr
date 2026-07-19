@@ -138,3 +138,7 @@ func newSaleReader(svc *service.PaymentService) *saleReaderAdapter {
 func (a *saleReaderAdapter) TotalPaidForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
 	return a.svc.TotalPaidForCheck(ctx, tenantID, checkID)
 }
+
+func (a *saleReaderAdapter) PendingTotalForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
+	return a.svc.PendingTotalForCheck(ctx, tenantID, checkID)
+}

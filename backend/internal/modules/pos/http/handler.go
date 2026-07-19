@@ -825,19 +825,27 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		return
 	}
 	if errors.Is(err, pub.ErrInvalidTransition) {
-		http.Error(w, "invalid status transition", http.StatusConflict)
+		respondError(w, http.StatusConflict, codeInvalidTransition, "invalid status transition")
 		return
 	}
 	if errors.Is(err, pub.ErrBranchForbidden) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Both payment-related close failures are 409, so the status code alone
+	// cannot tell them apart: they carry a machine-readable code in the body
+	// that the POS client turns into either "collect more money" or "wait for
+	// the fiscal device".
+	if errors.Is(err, service.ErrFiscalPending) {
+		respondError(w, http.StatusConflict, codeFiscalPending, "fiscal registration pending for this check")
+		return
+	}
 	if errors.Is(err, service.ErrInsufficientPayment) {
-		http.Error(w, "payment insufficient to close check", http.StatusConflict)
+		respondError(w, http.StatusConflict, codeInsufficientPayment, "payment insufficient to close check")
 		return
 	}
 	if errors.Is(err, pub.ErrTableOccupied) {
-		http.Error(w, "table is already occupied", http.StatusConflict)
+		respondError(w, http.StatusConflict, codeTableOccupied, "table is already occupied")
 		return
 	}
 	if errors.Is(err, pub.ErrTableBranchMismatch) {
@@ -850,6 +858,28 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	}
 	h.logger.Error("pos handler error", zap.Error(err))
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+// Machine-readable error codes returned in the JSON error body. Stable
+// identifiers: POS clients branch on these, not on the human-readable message.
+//
+// Every 409 this handler emits carries one, so a client can parse a conflict
+// body unconditionally: 409 alone is ambiguous here (a check can conflict
+// because it is already closed, underpaid, or awaiting a fiscal result).
+const (
+	codeFiscalPending       = "fiscal_pending"
+	codeInsufficientPayment = "insufficient_payment"
+	codeInvalidTransition   = "invalid_transition"
+	codeTableOccupied       = "table_occupied"
+)
+
+type errorResponse struct {
+	Error string `json:"error"`
+	Code  string `json:"code"`
+}
+
+func respondError(w http.ResponseWriter, status int, code, msg string) {
+	respondJSON(w, status, errorResponse{Error: msg, Code: code})
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {

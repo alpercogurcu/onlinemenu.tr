@@ -370,6 +370,96 @@ func TestPaymentRepo_TotalPaidForCheck(t *testing.T) {
 	assert.Equal(t, int64(15000), total)
 }
 
+// TestPaymentRepo_PendingTotalForCheck verifies the complement of
+// TotalPaidForCheck: only payments still awaiting a fiscal result count, and a
+// payment that reached a terminal state (completed/failed) drops out of the
+// pending sum entirely — the two sums never double-count the same payment.
+func TestPaymentRepo_PendingTotalForCheck(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewPaymentRepo()
+	checkID := uuid.New()
+
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		create := func(key string, amount int64) (domain.Payment, error) {
+			return r.Create(ctx, tx, domain.Payment{
+				TenantID:       tenantA,
+				BranchID:       branchA,
+				CheckID:        &checkID,
+				IdempotencyKey: key,
+				Method:         domain.PaymentMethodCash,
+				AmountTotal:    amount,
+				Currency:       "TRY",
+			})
+		}
+
+		// Two payments left pending: these are the ones that must be summed.
+		if _, err := create("pending-total-key-0", 4000); err != nil {
+			return err
+		}
+		if _, err := create("pending-total-key-1", 2500); err != nil {
+			return err
+		}
+
+		completed, err := create("pending-total-key-2", 9000)
+		if err != nil {
+			return err
+		}
+		receiptID, err := r.InsertFiscalReceipt(ctx, tx, domain.FiscalReceipt{
+			TenantID:      tenantA,
+			PaymentID:     completed.ID,
+			DeviceType:    "mock",
+			ReceiptNumber: "MOCK-PENDING-TOTAL",
+			ReceiptData:   map[string]any{},
+		})
+		if err != nil {
+			return err
+		}
+		if err := r.Complete(ctx, tx, completed.ID, receiptID); err != nil {
+			return err
+		}
+
+		failed, err := create("pending-total-key-3", 7000)
+		if err != nil {
+			return err
+		}
+		return r.Fail(ctx, tx, failed.ID)
+	})
+	require.NoError(t, err)
+
+	var pending, paid int64
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		pending, err = r.PendingTotalForCheck(ctx, tx, tenantA, checkID)
+		if err != nil {
+			return err
+		}
+		paid, err = r.TotalPaidForCheck(ctx, tx, tenantA, checkID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(6500), pending)
+	assert.Equal(t, int64(9000), paid)
+}
+
+// TestPaymentRepo_PendingTotalForCheck_NoPayments verifies the empty case
+// returns 0 rather than a NULL scan error — POS's Close path treats the value
+// as a plain number with no "unknown" state.
+func TestPaymentRepo_PendingTotalForCheck_NoPayments(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewPaymentRepo()
+
+	var pending int64
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		pending, err = r.PendingTotalForCheck(ctx, tx, tenantA, uuid.New())
+		return err
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), pending)
+}
+
 // TestPaymentRepo_ListByCheck verifies the double-payment-guard read path:
 // only completed payments for the given check are returned, pending ones
 // (e.g. a payment created but not yet fiscally completed) are excluded,

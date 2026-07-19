@@ -454,3 +454,18 @@ func (s *PaymentService) TotalPaidForCheck(ctx context.Context, tenantID, checkI
 	}
 	return total, nil
 }
+
+// PendingTotalForCheck returns the sum of payments for a check still awaiting a
+// fiscal result (see repo.PendingTotalForCheck for the status rationale).
+func (s *PaymentService) PendingTotalForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
+	var total int64
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		total, err = s.paymentRepo.PendingTotalForCheck(ctx, tx, tenantID, checkID)
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("payment/service: pending total for check: %w", err)
+	}
+	return total, nil
+}

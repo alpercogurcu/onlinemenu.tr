@@ -223,6 +223,29 @@ func (r *PaymentRepo) TotalPaidForCheck(ctx context.Context, tx pgx.Tx, tenantID
 	return total, nil
 }
 
+// PendingTotalForCheck returns the sum of payments for a check whose fiscal
+// registration has not reached a terminal state yet.
+//
+// payments.status is the authoritative lifecycle here, not fiscal_submissions:
+// RegisterSale writes the payment row and its submission row in one
+// transaction, and every terminal fiscal outcome moves the payment out of
+// 'pending' (OnFiscalResult -> Complete/Fail/Void). A join against
+// fiscal_submissions could therefore only ever disagree when the worker left a
+// payment stranded — a bug to fix at its source rather than to mask in a read
+// that other modules depend on.
+func (r *PaymentRepo) PendingTotalForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
+	var total int64
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(amount_total), 0)
+		FROM payments
+		WHERE tenant_id = $1 AND check_id = $2 AND status = 'pending'
+	`, tenantID, checkID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("payment/repo: pending total for check: %w", err)
+	}
+	return total, nil
+}
+
 // InsertOutbox records a payment domain event within the caller's transaction.
 func InsertOutbox(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, aggregateType, aggregateID, eventType string, payload any) error {
 	data, err := json.Marshal(payload)

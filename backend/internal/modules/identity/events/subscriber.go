@@ -68,7 +68,7 @@ func (s *Subscriber) handleTenantCreated(ctx context.Context, msg jetstream.Msg)
 		return fmt.Errorf("identity/events: parse tenant_id %q: %w", p.TenantID, err)
 	}
 
-	copied, err := s.seedTenantRoles(ctx, tenantID)
+	copied, err := s.SeedTenantRoles(ctx, tenantID)
 	if err != nil {
 		return err
 	}
@@ -85,14 +85,17 @@ func (s *Subscriber) handleTenantCreated(ctx context.Context, msg jetstream.Msg)
 	return nil
 }
 
-// seedTenantRoles copies system role rows AND their permissions/field policies into
+// SeedTenantRoles copies system role rows AND their permissions/field policies into
 // the new tenant in a single transaction. ON CONFLICT DO NOTHING makes the operation
 // safe under JetStream redelivery (ADR-DATA-002).
-func (s *Subscriber) seedTenantRoles(ctx context.Context, tenantID uuid.UUID) (int, error) {
+//
+// branch_scoped is copied from the template: the clone loses system_key, so the
+// flag on the row is the only surviving branch-scope signal (ADR-SEC-005).
+func (s *Subscriber) SeedTenantRoles(ctx context.Context, tenantID uuid.UUID) (int, error) {
 	// Clone role rows.
 	const qRoles = `
-		INSERT INTO roles (tenant_id, branch_id, name, system_key, is_system)
-		SELECT $1, NULL, name, NULL, FALSE
+		INSERT INTO roles (tenant_id, branch_id, name, system_key, is_system, branch_scoped)
+		SELECT $1, NULL, name, NULL, FALSE, branch_scoped
 		FROM roles
 		WHERE tenant_id IS NULL AND system_key = ANY($2)
 		ON CONFLICT (tenant_id, branch_id, name) DO NOTHING

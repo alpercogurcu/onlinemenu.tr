@@ -5,22 +5,31 @@ kalıcı kayıt burada tutulur; bir madde tamamlanınca bu dosyadan silinir.
 
 ## Yüksek öncelik
 
-- **Kasiyer için check-scoped "ödenen" okuması.** `recently_settled` 5 dakikalık pencere
-  sonrasında kasiyer oturumunda adisyon bakiyesi tam tutara geri sıçrar → çifte tahsilat
-  penceresi (POS istemcisi 5 dk boyunca koruyor, sonrası açık). Kalıcı çözüm:
-  `payment.payment.read`'i genişletmeden, kasiyere açık dar bir check-scoped ödenen-toplam
-  okuması. (Bkz. `web/apps/pos-desktop/frontend/src/lib/fiscalStatus.ts` "KNOWN LIMIT" yorumu.)
-- **Stranded pending kurtarma runbook'u/UX'i.** `AutoExpire` bilinçli kapalı (ADR-FISCAL-002)
-  ve `VoidSale` pending submission'ı reddediyor → webhook hiç gelmezse adisyon kalıcı
-  `fiscal_pending`'de kilitlenir; tek çıkış operatör müdahalesi. Gerçek cihaz testinden önce
-  kurtarma prosedürü (ve kasiyer arayüzünde eskalasyon yolu) kararlaştırılmalı.
-- **Şube-bazlı roller için membership kısıtı.** `memberships.branch_id` NULL'lanabiliyor ve
-  cashier gibi şube-bazlı sistem rollerini non-null şubeye bağlayan kısıt yok; payment
-  `requireBranch` sertleştirildi ama kalıcı çözüm kararı açık: DB CHECK (şube-bazlı roller ⇒
-  `branch_id NOT NULL`) veya paylaşılan `auth.Principal.HasBranchAccess` daraltması.
-  Deploy öncesi veri kontrolü: manager olmayan NULL-branch membership var mı?
+- **Kasiyer için check-scoped "ödenen" okuması.** Çözüldü — `GET /api/v1/payments/checks/{id}/settlement`
+  (dar DTO, `payment.fiscal_status.read`, şube filtreli) + POS istemcisinde kasiyer oturumunun
+  `serverCompleted` haritasının bu uçtan dolması. 5 dk pencere sınırı tamamen kalktı.
+  **Açık iş:** CI'da `pnpm typecheck` koşmuyor (elle yazılan wailsjs binding sapmaları görünmez —
+  `wails generate module` adımı da düşünülmeli).
+- **Stranded pending kurtarma.** Backend tarafı çözüldü — bkz.
+  [runbook](runbook-fiscal-stranded.md). Manager-only manuel expire ucu eklendi
+  (`POST /api/v1/payments/fiscal/submissions/{id}/expire`, `payment.fiscal_terminal.manage`);
+  sonuç reconciler'ın expire zinciriyle aynı (`OnFiscalResult` → ödeme `failed`), denetim izi
+  `result_payload` + log. **Açık iş:** kasiyer arayüzünde eskalasyon yolu (POS'ta "yöneticiye
+  bildir" akışı) ve reconciler overdue uyarısına alarm bağlanması.
+- **Şube-bazlı roller için membership kısıtı.** Çözüldü — bkz.
+  [ADR-SEC-005](adr/SEC-005-branch-scoped-membership.md) ve identity migration
+  `000012_memberships_branch_scoped_guard`. `roles.branch_scoped` bayrağı + memberships
+  trigger'ı zincir-geneli yetki sızıntısını DB seviyesinde kapatıyor. **Açık iş:** ADR'deki
+  deploy-öncesi (duplicate membership, klon fingerprint) ve deploy-sonrası (ihlal denetimi)
+  sorguları prod'da çalıştırılmalı; `warehouse` rolünün ADR-DATA-005 ile çelişkisi kararı bekliyor.
 
 ## Orta öncelik
+
+- **`memberships.tenant_id` ↔ `roles.tenant_id` eşitliğini zorlayan kısıt yok.** SEC-005 trigger'ının
+  RLS fail-closed reddi bunu kısmen kapatıyor (görünmeyen rol → 23514) ama asıl bütünlük kuralı DB'de
+  ifade edilmiş değil; ayrı ele alınmalı.
+- **Custom rol API'sinde `branch_scoped` taşınmıyor.** Tenant'ın oluşturduğu custom roller daima
+  `branch_scoped=FALSE` doğuyor; rol oluşturma/güncelleme yüzeyine alan eklenmeli (bkz. SEC-005 "açık işler").
 
 - **`FiscalResult.CompletedAt` invaryantını sözleşmeye bağla.** "CompletedAt = sunucu saati"
   şu an dokümantasyonla korunuyor; `OnFiscalResult` girişinde damgalamak (veya adapter

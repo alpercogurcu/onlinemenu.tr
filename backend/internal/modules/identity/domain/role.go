@@ -25,7 +25,16 @@ type Role struct {
 	Name      string
 	SystemKey string // non-empty only for system roles: "cashier", "manager", …
 	IsSystem  bool
-	CreatedAt time.Time
+	// BranchScoped marks roles that may only be granted at a concrete branch.
+	// Unlike Scope(), this survives tenant cloning (the clone copies the flag),
+	// which is why it — not Scope() — is the authoritative check.
+	BranchScoped bool
+	CreatedAt    time.Time
+}
+
+// RequiresBranch reports whether a membership granting this role must name a branch.
+func (r Role) RequiresBranch() bool {
+	return r.BranchScoped || r.Scope() == RoleScopeBranch
 }
 
 // Scope returns the classification of this role based on its tenant/branch context.

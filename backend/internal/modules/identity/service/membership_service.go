@@ -116,7 +116,9 @@ func (s *MembershipService) Create(ctx context.Context, tenantID, personID uuid.
 		return domain.Membership{}, wrapNotFound(err, "identity/service/membership: create — get role: %w")
 	}
 
-	if role.Scope() == domain.RoleScopeBranch && branchID == nil {
+	// Early, clean 400. The memberships_branch_scope_guard trigger (identity
+	// migration 000012) is the last line of defence; this is the UX path.
+	if role.RequiresBranch() && branchID == nil {
 		return domain.Membership{}, pub.ErrInvalid
 	}
 

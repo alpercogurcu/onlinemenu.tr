@@ -26,7 +26,7 @@ func NewRoleRepo() *RoleRepo {
 // returned when tenantID is uuid.Nil or when the role's tenant_id matches.
 func (r *RoleRepo) GetByID(ctx context.Context, tx pgx.Tx, tenantID, roleID uuid.UUID) (domain.Role, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, created_at
+		SELECT id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, branch_scoped, created_at
 		FROM roles
 		WHERE id = $1
 		  AND (tenant_id IS NULL OR tenant_id = $2)`
@@ -45,7 +45,7 @@ func (r *RoleRepo) GetByID(ctx context.Context, tx pgx.Tx, tenantID, roleID uuid
 // ListForTenant returns all system roles plus the tenant's custom chain-wide roles.
 func (r *RoleRepo) ListForTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) ([]domain.Role, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, created_at
+		SELECT id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, branch_scoped, created_at
 		FROM roles
 		WHERE tenant_id IS NULL OR (tenant_id = $1 AND branch_id IS NULL)
 		ORDER BY is_system DESC, name`
@@ -61,7 +61,7 @@ func (r *RoleRepo) ListForTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.U
 // ListForBranch returns all system roles, the tenant's chain-wide roles, and branch-specific roles.
 func (r *RoleRepo) ListForBranch(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID) ([]domain.Role, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, created_at
+		SELECT id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, branch_scoped, created_at
 		FROM roles
 		WHERE tenant_id IS NULL
 		   OR (tenant_id = $1 AND branch_id IS NULL)
@@ -79,11 +79,11 @@ func (r *RoleRepo) ListForBranch(ctx context.Context, tx pgx.Tx, tenantID, branc
 // Create inserts a new custom role and returns the persisted record.
 func (r *RoleRepo) Create(ctx context.Context, tx pgx.Tx, role domain.Role) (domain.Role, error) {
 	const q = `
-		INSERT INTO roles (tenant_id, branch_id, name, system_key, is_system)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5)
-		RETURNING id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, created_at`
+		INSERT INTO roles (tenant_id, branch_id, name, system_key, is_system, branch_scoped)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6)
+		RETURNING id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, branch_scoped, created_at`
 
-	row := tx.QueryRow(ctx, q, role.TenantID, role.BranchID, role.Name, role.SystemKey, role.IsSystem)
+	row := tx.QueryRow(ctx, q, role.TenantID, role.BranchID, role.Name, role.SystemKey, role.IsSystem, role.RequiresBranch())
 	created, err := scanRole(row)
 	if err != nil {
 		return domain.Role{}, fmt.Errorf("identity/repo/role: create: %w", err)
@@ -125,7 +125,7 @@ func scanRole(row pgx.Row) (domain.Role, error) {
 	)
 	err := row.Scan(
 		&role.ID, &role.TenantID, &role.BranchID,
-		&role.Name, &role.SystemKey, &role.IsSystem,
+		&role.Name, &role.SystemKey, &role.IsSystem, &role.BranchScoped,
 		&createdAt,
 	)
 	if err != nil {
@@ -144,7 +144,7 @@ func collectRoles(rows pgx.Rows) ([]domain.Role, error) {
 		)
 		if err := rows.Scan(
 			&role.ID, &role.TenantID, &role.BranchID,
-			&role.Name, &role.SystemKey, &role.IsSystem,
+			&role.Name, &role.SystemKey, &role.IsSystem, &role.BranchScoped,
 			&createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("identity/repo/role: scan: %w", err)

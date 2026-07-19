@@ -641,10 +641,15 @@ func TestMembershipRepo_ListContextsForPerson_CrossTenant(t *testing.T) {
 	})
 
 	// tenantB: chain-wide membership (no branch fixture seeded for tenantB).
+	// The role must be a chain-wide one: since identity migration 000012
+	// (ADR-SEC-005) a branch-scoped role such as cashier can no longer be granted
+	// with branch_id = NULL. "manager" is the chain-wide system role; the test's
+	// subject is the cross-tenant read, not the role itself.
+	managerRoleID := systemRoleID(t, "manager")
 	withTx(ctx, t, tenantB, func(tx pgx.Tx) {
 		_, err := mr.Create(ctx, tx, domain.Membership{
 			PersonID: person.ID, TenantID: tenantB, BranchID: nil,
-			RoleID: cashierRoleID, Status: domain.MembershipActive,
+			RoleID: managerRoleID, Status: domain.MembershipActive,
 		})
 		require.NoError(t, err)
 	})

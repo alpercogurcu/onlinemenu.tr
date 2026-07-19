@@ -264,6 +264,7 @@ func (s *PaymentService) OnFiscalResult(ctx context.Context, res domain.FiscalRe
 			return fmt.Errorf("payment/service: mark submission result: %w", err)
 		}
 		if !transitioned {
+			s.warnIfLostAfterExpire(ctx, tx, res)
 			s.logger.Debug("payment: duplicate fiscal result ignored",
 				zap.Stringer("submission_id", res.SubmissionID),
 				zap.String("status", string(res.Status)),

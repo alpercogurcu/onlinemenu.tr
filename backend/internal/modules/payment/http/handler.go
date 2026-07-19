@@ -67,6 +67,11 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		// Static segment: chi resolves it ahead of the /{id} wildcard below.
 		r.With(hwc.h.permit("payment.fiscal_status.read")).Get("/fiscal-pending", hwc.h.fiscalPending)
 		r.With(hwc.h.permit("payment.fiscal_status.read")).Get("/checks/{checkID}/settlement", hwc.h.checkSettlement)
+		// Manager-only recovery action; it lives here rather than on
+		// FiscalHandler (/api/v1/fiscal) because it needs PaymentService — the
+		// fiscal result sink — which the terminal-CRUD handler does not hold.
+		r.With(hwc.h.permit("payment.fiscal_terminal.manage")).
+			Post("/fiscal/submissions/{id}/expire", hwc.h.expireSubmission)
 		r.With(hwc.h.permit("payment.payment.read")).Get("/{id}", hwc.h.getPayment)
 	})
 }

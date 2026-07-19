@@ -65,6 +65,14 @@ default scope = "own"
 # ve eylemler"). Manager is the only system role authorized for back-office modules
 # (tenant configuration, identity role/membership management, party/CRM, hr-core,
 # billing) in Faz 1 — those modules have no seeded permission rows for other roles.
+#
+# payment.fiscal_terminal.manage rides on this wildcard and covers the fiscal
+# submission expire endpoint (POST /api/v1/payments/fiscal/submissions/{id}/expire)
+# in addition to device pairing and section sync: declaring that an ÖKC never
+# registered a sale is the same back-office judgement as configuring that device,
+# and it fails the payment — which reopens the check's balance for re-collection
+# and must therefore never be a counter-staff action.
+# See docs/runbook-fiscal-stranded.md.
 allow if {
 	has_role("manager")
 }

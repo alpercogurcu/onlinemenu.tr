@@ -36,6 +36,7 @@ var Module = fx.Module("payment",
 	fx.Provide(
 		repo.NewPaymentRepo,
 		repo.NewFiscalSubmissionRepo,
+		repo.NewFiscalStatusRepo,
 		repo.NewFiscalTerminalDirectory,
 		repo.NewFiscalSectionDirectory,
 		repo.NewFiscalAdminRepo,

@@ -208,6 +208,7 @@ func newPaymentService() *service.PaymentService {
 		DB:             sharedPool,
 		PaymentRepo:    repo.NewPaymentRepo(),
 		SubmissionRepo: repo.NewFiscalSubmissionRepo(),
+		StatusRepo:     repo.NewFiscalStatusRepo(),
 		Fiscal:         domain.MockFiscalAdapter{},
 		Logger:         zap.NewNop(),
 	})
@@ -234,10 +235,44 @@ func drainFiscal(t *testing.T, svc *service.PaymentService) {
 		n, err := w.RunOnce(context.Background())
 		require.NoError(t, err)
 		if n == 0 {
+			// RunOnce returning 0 means "nothing claimable", which covers both
+			// "all settled" and "rows stranded in a state the worker cannot
+			// claim" (still pending but backing off, or claimed by a crashed
+			// run). Those look identical here, so assert the drain actually
+			// emptied the queue rather than trusting the zero.
+			assertNoClaimableSubmissions(t)
 			return
 		}
 	}
 	t.Fatal("submission worker did not drain within 10 cycles")
+}
+
+// assertNoClaimableSubmissions fails with the surviving count so a test that
+// silently stopped settling reports "3 stranded" instead of passing on a queue
+// it never actually drained.
+//
+// Eligibility mirrors ClaimPending's predicate rather than asking "is anything
+// pending": the package shares one database, and sibling tests deliberately
+// park rows the worker cannot claim (backing off via next_retry_at, or held by
+// a simulated crashed claim). Those are fixtures, not stranded work. A row the
+// worker WOULD claim surviving a run that reported "no work" is the real
+// contradiction, and the only one worth failing on.
+func assertNoClaimableSubmissions(t *testing.T) {
+	t.Helper()
+	var stranded int
+	err := sharedPool.WithTenantReadTx(context.Background(), tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `
+			SELECT count(*)
+			FROM fiscal_submissions
+			WHERE status = 'pending'
+			  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+			  AND claimed_at IS NULL
+		`).Scan(&stranded)
+	})
+	require.NoError(t, err)
+	if stranded > 0 {
+		t.Fatalf("submission worker reported no work but %d claimable submission(s) are still pending", stranded)
+	}
 }
 
 func fetchPayment(t *testing.T, svc *service.PaymentService, id uuid.UUID) domain.Payment {

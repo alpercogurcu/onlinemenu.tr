@@ -59,6 +59,7 @@ func TestParseWebhookStatuses(t *testing.T) {
 			t.Parallel()
 			payload := completedPayload(tc.status, "")
 
+			parseStart := time.Now().UTC()
 			res, err := ParseWebhook(payload)
 			require.NoError(t, err)
 
@@ -70,7 +71,13 @@ func TestParseWebhookStatuses(t *testing.T) {
 			assert.Equal(t, "1234", res.ReceiptNo, "receiptNo int must be stringified")
 			assert.Equal(t, "56", res.ZNo, "zNo int must be stringified")
 			assert.Equal(t, "e6f1c1de-0000-4000-8000-abcdefabcdef", res.VendorRef)
-			assert.Equal(t, time.Date(2026, 7, 10, 15, 4, 5, 0, time.UTC), res.CompletedAt)
+			// Two clocks, kept apart on purpose: operationDate is the device's
+			// own time and lands in DeviceOperationAt (the receipt's legal
+			// stamp), while CompletedAt records when THIS server learned the
+			// outcome and drives the fiscal status poll's recency window.
+			assert.Equal(t, time.Date(2026, 7, 10, 15, 4, 5, 0, time.UTC), res.DeviceOperationAt)
+			assert.False(t, res.CompletedAt.Before(parseStart), "CompletedAt must be the server clock, not the device's")
+			assert.False(t, res.CompletedAt.After(time.Now().UTC().Add(time.Minute)))
 			assert.JSONEq(t, string(payload), string(res.Raw), "raw payload must be preserved for audit")
 
 			require.Len(t, res.Payments, 1)
@@ -232,7 +239,12 @@ func TestWebhookOperation(t *testing.T) {
 	}
 }
 
-func TestParseOperationDateFallsBackToNow(t *testing.T) {
+// TestParseOperationDateUnparseableLeavesDeviceTimeZero: an unrecognised
+// operationDate must not be papered over with time.Now(), which would be this
+// server's clock masquerading as the device's. The zero value lets the caller
+// see the gap (the webhook handler warns, the payment service falls back to
+// CompletedAt for issued_at) instead of persisting a fabricated device time.
+func TestParseOperationDateUnparseableLeavesDeviceTimeZero(t *testing.T) {
 	t.Parallel()
 	payload := fmt.Appendf(nil, `{"operation":"BASKET_COMPLETED","operationDate":"garbage",
 		"data":{"basketID":%q,"status":0,"receiptNo":9,"zNo":1}}`, testBasketID)
@@ -241,9 +253,24 @@ func TestParseOperationDateFallsBackToNow(t *testing.T) {
 	res, err := ParseWebhook(payload)
 	require.NoError(t, err)
 
+	assert.True(t, res.DeviceOperationAt.IsZero(), "an unparseable device time must stay zero, not become now()")
 	// An unparseable timestamp must not discard a legally registered receipt.
-	assert.False(t, res.CompletedAt.Before(before))
+	assert.False(t, res.CompletedAt.Before(before), "the server still records when it learned the outcome")
 	assert.Equal(t, "9", res.ReceiptNo)
+}
+
+// TestParseOperationDateMissingLeavesDeviceTimeZero covers the absent-field
+// case separately from the malformed one: both must behave identically.
+func TestParseOperationDateMissingLeavesDeviceTimeZero(t *testing.T) {
+	t.Parallel()
+	payload := fmt.Appendf(nil, `{"operation":"BASKET_COMPLETED",
+		"data":{"basketID":%q,"status":0,"receiptNo":9,"zNo":1}}`, testBasketID)
+
+	res, err := ParseWebhook(payload)
+	require.NoError(t, err)
+
+	assert.True(t, res.DeviceOperationAt.IsZero())
+	assert.False(t, res.CompletedAt.IsZero())
 }
 
 func TestParseWebhookRawIsIndependentOfInput(t *testing.T) {

@@ -24,6 +24,7 @@ type PaymentService struct {
 	db             *db.Pool
 	paymentRepo    *repo.PaymentRepo
 	submissionRepo *repo.FiscalSubmissionRepo
+	statusRepo     *repo.FiscalStatusRepo
 	fiscal         domain.FiscalDeviceAdapter
 	adapterType    string
 	logger         *zap.Logger
@@ -36,6 +37,7 @@ type Params struct {
 	DB             *db.Pool
 	PaymentRepo    *repo.PaymentRepo
 	SubmissionRepo *repo.FiscalSubmissionRepo
+	StatusRepo     *repo.FiscalStatusRepo
 	Fiscal         domain.FiscalDeviceAdapter
 	Logger         *zap.Logger
 }
@@ -45,6 +47,7 @@ func NewPaymentService(p Params) *PaymentService {
 		db:             p.DB,
 		paymentRepo:    p.PaymentRepo,
 		submissionRepo: p.SubmissionRepo,
+		statusRepo:     p.StatusRepo,
 		fiscal:         p.Fiscal,
 		adapterType:    adapterTypeOf(p.Fiscal),
 		logger:         p.Logger,
@@ -151,6 +154,10 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 			AdapterType:    s.adapterType,
 			TerminalSerial: req.TerminalSerial,
 			SalePayload:    salePayload,
+			// API host clock: the fiscal status poll subtracts this from its own
+			// time.Now() to report age_seconds, so both readings must come from
+			// the same clock rather than mixing in the database host's now().
+			CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			return fmt.Errorf("payment/service: enqueue fiscal submission: %w", err)
 		}
@@ -272,7 +279,14 @@ func (s *PaymentService) OnFiscalResult(ctx context.Context, res domain.FiscalRe
 }
 
 func (s *PaymentService) applyCompleted(ctx context.Context, tx pgx.Tx, res domain.FiscalResult) error {
-	issuedAt := res.CompletedAt
+	// The receipt's legal timestamp is the device's own operation time when the
+	// driver reports one; CompletedAt (when this server learned the outcome) is
+	// only the fallback for drivers that report none, such as the synchronous
+	// mock.
+	issuedAt := res.DeviceOperationAt
+	if issuedAt.IsZero() {
+		issuedAt = res.CompletedAt
+	}
 	if issuedAt.IsZero() {
 		issuedAt = time.Now().UTC()
 	}

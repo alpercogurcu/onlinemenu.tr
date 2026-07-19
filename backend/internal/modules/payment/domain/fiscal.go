@@ -131,7 +131,21 @@ type FiscalResult struct {
 	FailureReason string
 	Payments      []FiscalConfirmedPayment
 	Raw           json.RawMessage // vendor payload, persisted for audit
-	CompletedAt   time.Time
+
+	// CompletedAt is when THIS server learned the outcome, not when the device
+	// printed it. It drives fiscal_submissions.completed_at, which the fiscal
+	// status poll filters its recency window on, so it must come from the
+	// server's clock: an ÖKC whose clock is hours off would otherwise push its
+	// result outside the window (invisible to the cashier) or far into the
+	// future.
+	CompletedAt time.Time
+
+	// DeviceOperationAt is the vendor/device-reported moment of the sale
+	// (Token: operationDate). It carries the legal meaning and is persisted as
+	// fiscal_receipts.issued_at — deliberately separate from CompletedAt, which
+	// answers a different question ("when did we find out"). Zero when the
+	// driver reports no device time; callers fall back to CompletedAt.
+	DeviceOperationAt time.Time
 }
 
 // FiscalCapabilities declares optional vendor features. POS core flows must

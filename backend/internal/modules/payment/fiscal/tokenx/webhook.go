@@ -125,14 +125,21 @@ func ParseWebhook(payload []byte) (domain.FiscalResult, error) {
 		return domain.FiscalResult{}, err
 	}
 
+	// Two different clocks, deliberately kept apart. CompletedAt answers "when
+	// did we learn the outcome" and drives the fiscal status poll's recency
+	// window, so it must be OUR clock — a device whose clock is hours off would
+	// otherwise land outside the window and stay invisible to the cashier.
+	// operationDate keeps its legal meaning as DeviceOperationAt, persisted as
+	// fiscal_receipts.issued_at, and survives verbatim in Raw either way.
 	res := domain.FiscalResult{
-		SubmissionID: submissionID,
-		Status:       status,
-		DeviceType:   DeviceType,
-		VendorRef:    data.UUID,
-		Payments:     confirmedPayments(data.PaymentItems),
-		Raw:          json.RawMessage(payload),
-		CompletedAt:  parseOperationDate(env.OperationDate),
+		SubmissionID:      submissionID,
+		Status:            status,
+		DeviceType:        DeviceType,
+		VendorRef:         data.UUID,
+		Payments:          confirmedPayments(data.PaymentItems),
+		Raw:               json.RawMessage(payload),
+		CompletedAt:       time.Now().UTC(),
+		DeviceOperationAt: parseOperationDate(env.OperationDate),
 	}
 	// receiptNo/zNo are zero on a failed registration; emitting "0" would look
 	// like a real receipt number, so they stay empty unless the sale completed.
@@ -208,15 +215,21 @@ func confirmedPayments(items []webhookPaymentItem) []domain.FiscalConfirmedPayme
 	return out
 }
 
-// parseOperationDate falls back to "now" for an absent or unparseable date.
-// The legal fields (receiptNo, zNo, UUID) and the raw payload are preserved
-// either way, so rejecting the whole registration over a timestamp format
-// would lose far more than it protects.
+// parseOperationDate returns the zero time for an absent or unparseable date
+// rather than substituting "now". A silent now() fallback used to manufacture a
+// device timestamp that was really this server's clock, indistinguishable from
+// a genuine one downstream. The zero value is honest: callers decide what to
+// do (the payment service falls back to the server's CompletedAt for
+// fiscal_receipts.issued_at, and the webhook handler warns).
+//
+// Rejecting the whole registration over a timestamp format would lose far
+// more than it protects: the legal fields (receiptNo, zNo, UUID) and the raw
+// payload are preserved either way.
 func parseOperationDate(s string) time.Time {
 	for _, layout := range operationDateLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.UTC()
 		}
 	}
-	return time.Now().UTC()
+	return time.Time{}
 }

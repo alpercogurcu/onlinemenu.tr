@@ -84,6 +84,9 @@ func (h *TokenXWebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 				zap.String("operation", op),
 				zap.Stringer("submission_id", evt.SubmissionID),
 				zap.String("terminal_id", evt.TerminalID),
+				// Zero when operationDate was absent or unparseable; the event is
+				// presence-only, so it is logged rather than rejected.
+				zap.Time("occurred_at", evt.OccurredAt),
 			)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -101,6 +104,17 @@ func (h *TokenXWebhookHandler) handleCompleted(w http.ResponseWriter, r *http.Re
 		h.logger.Warn("payment: invalid tokenx completion webhook", zap.Error(err))
 		http.Error(w, "bad payload", http.StatusBadRequest)
 		return
+	}
+
+	// A zero device time means operationDate was absent or in a format we do
+	// not recognise. The registration still proceeds — the legal fields and the
+	// raw payload are intact — but the receipt's issued_at silently falls back
+	// to this server's clock, which is worth knowing about before a vendor
+	// format change quietly rewrites every receipt timestamp.
+	if res.DeviceOperationAt.IsZero() {
+		h.logger.Warn("payment: tokenx webhook carries no usable operationDate, receipt will be stamped with server time",
+			zap.Stringer("submission_id", res.SubmissionID),
+		)
 	}
 
 	// The webhook carries only the basketID; recover the owning tenant and

@@ -239,6 +239,18 @@ allow if {
 	has_role("shift_manager")
 }
 
+# -- Payment: fiscal registration status polling. A branch runs several POS
+# stations; a sale started on one station holds a pending fiscal submission
+# the other stations cannot see, so they must poll for it before closing a
+# check. That is a narrow, branch-scoped read (payment id, amount, age,
+# terminal outcome) — deliberately NOT payment.payment.read, which exposes the
+# full payment history and stays a reconciliation permission. Cashier needs it
+# because the cashier is the one holding the check open at the counter.
+allow if {
+	input.action == "payment.fiscal_status.read"
+	any_role({"cashier", "shift_manager"})
+}
+
 # -- Scope resolution for non-manager allows above: branch-scoped, since cashier/
 # shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {

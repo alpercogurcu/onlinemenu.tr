@@ -33,6 +33,17 @@ type FiscalSubmission struct {
 	// SubmittedAt is populated only by ListStaleSubmitted; the claim path leaves
 	// it nil because a pending row has not been submitted yet.
 	SubmittedAt *time.Time
+	// CreatedAt is the API host's clock at registration. It is written
+	// explicitly so age_seconds in the fiscal status poll is a difference
+	// between two readings of the SAME clock; leaving it to the column DEFAULT
+	// would mix the database host's now() into that subtraction and can report
+	// a negative or inflated age when the hosts drift.
+	//
+	// Zero falls back to the DEFAULT now(), so callers that do not care (tests,
+	// backfills) are unaffected. Rows written before this change also carry DB
+	// time; their ages stay correct to within host drift, which is the same
+	// accuracy they had before.
+	CreatedAt time.Time
 }
 
 // FiscalSubmissionRepo persists fiscal submissions (ADR-FISCAL-002).
@@ -45,12 +56,18 @@ func NewFiscalSubmissionRepo() *FiscalSubmissionRepo { return &FiscalSubmissionR
 func (r *FiscalSubmissionRepo) Insert(ctx context.Context, tx pgx.Tx, sub FiscalSubmission) error {
 	// Pass JSONB as string: under QueryExecModeSimpleProtocol a []byte would be
 	// sent as hex-bytea, not valid JSON (same rationale as InsertFiscalReceipt).
+	var createdAt *time.Time
+	if !sub.CreatedAt.IsZero() {
+		utc := sub.CreatedAt.UTC()
+		createdAt = &utc
+	}
+
 	_, err := tx.Exec(ctx, `
 		INSERT INTO fiscal_submissions
-			(id, tenant_id, branch_id, payment_id, adapter_type, terminal_serial, status, sale_payload)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			(id, tenant_id, branch_id, payment_id, adapter_type, terminal_serial, status, sale_payload, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8, COALESCE($9, now()))
 	`, sub.ID, sub.TenantID, sub.BranchID, sub.PaymentID, sub.AdapterType,
-		nullableText(sub.TerminalSerial), string(domain.FiscalSubmissionPending), string(sub.SalePayload))
+		nullableText(sub.TerminalSerial), string(domain.FiscalSubmissionPending), string(sub.SalePayload), createdAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrActiveSubmissionExists

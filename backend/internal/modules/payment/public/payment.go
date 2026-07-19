@@ -12,6 +12,10 @@ import (
 // ErrNotFound is returned when a payment record does not exist.
 var ErrNotFound = errors.New("payment: not found")
 
+// ErrBranchForbidden is returned when a principal acts on a branch its context
+// does not cover (ADR-AUTH-001 layer 3). Callers map it to HTTP 403.
+var ErrBranchForbidden = errors.New("payment: branch forbidden")
+
 // SaleReader is consumed by POS (and any other module that needs to verify
 // payment totals for a check).  Dependency direction: pos → payment.public.
 type SaleReader interface {

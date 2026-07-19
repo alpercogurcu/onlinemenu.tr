@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -244,6 +245,31 @@ func (a *saleReaderAdapter) PendingTotalForCheck(ctx context.Context, tenantID, 
 
 var _ paymentpub.SaleReader = (*saleReaderAdapter)(nil)
 
+// drainFiscal runs the submission worker until it has nothing left to claim.
+// RegisterSale only enqueues the fiscal submission (ADR-FISCAL-002), so the
+// spine must drive the worker explicitly to reach a settled payment. RunOnce
+// is used instead of Run because TestMain asserts goleak: the polling Run
+// would strand a goroutine past the test.
+func drainFiscal(t *testing.T, paySvc *paymentsvc.PaymentService) {
+	t.Helper()
+	w := paymentsvc.NewSubmissionWorker(paymentsvc.SubmissionWorkerParams{
+		DB:             sharedPool,
+		SubmissionRepo: paymentrepo.NewFiscalSubmissionRepo(),
+		Adapter:        paymentdomain.MockFiscalAdapter{},
+		Sink:           paySvc,
+		Logger:         zap.NewNop(),
+		Config:         paymentsvc.SubmissionWorkerConfig{StaleClaimAfter: time.Minute},
+	})
+	for range 10 {
+		n, err := w.RunOnce(context.Background())
+		require.NoError(t, err)
+		if n == 0 {
+			return
+		}
+	}
+	t.Fatal("submission worker did not drain within 10 cycles")
+}
+
 // ---------------------------------------------------------------------------
 // Spine test: open check → place order → register payment → close check
 // ---------------------------------------------------------------------------
@@ -303,15 +329,23 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 		Currency:       "TRY",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, paymentdomain.PaymentStatusCompleted, payment.Status)
-	assert.NotNil(t, payment.FiscalReceiptID)
+	assert.Equal(t, paymentdomain.PaymentStatusPending, payment.Status, "RegisterSale only enqueues the fiscal submission (ADR-FISCAL-002)")
+	assert.Nil(t, payment.FiscalReceiptID)
 
-	// 4. Verify TotalPaidForCheck reflects the completed payment.
+	// 4. Drive the submission worker; only then does the payment settle.
+	drainFiscal(t, paySvc)
+
+	settled, err := paySvc.GetByID(ctx, tenantID, payment.ID)
+	require.NoError(t, err)
+	assert.Equal(t, paymentdomain.PaymentStatusCompleted, settled.Status)
+	assert.NotNil(t, settled.FiscalReceiptID)
+
+	// 5. Verify TotalPaidForCheck reflects the completed payment.
 	total, err := paySvc.TotalPaidForCheck(ctx, tenantID, check.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2000), total)
 
-	// 5. Close the check — payment total covers the order total, should succeed.
+	// 6. Close the check — payment total covers the order total, should succeed.
 	closed, err := checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
 	require.NoError(t, err)
 	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
@@ -360,6 +394,10 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Deliberately not drained: 1000 < 3000 is a genuine shortfall whether or
+	// not the payment settles, so the shortfall must surface without the
+	// worker. The submission left pending here is inert for later tests.
+	//
 	// Close must fail with ErrInsufficientPayment.
 	_, err = checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
 	require.ErrorIs(t, err, possvc.ErrInsufficientPayment)
@@ -432,10 +470,65 @@ func TestPOSSpine_ClosePaysOnlyForActiveOrders(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	drainFiscal(t, paySvc)
+
 	// Close must succeed: the rejected order's 3000 kuruş must not be part
 	// of the check total gating this close.
 	closed, err := checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
 	require.NoError(t, err, "close must succeed once the only active order is paid in full, regardless of the rejected order")
+	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
+}
+
+// TestPOSSpine_CloseBlockedWhileFiscalPending pins the distinction introduced
+// with ADR-FISCAL-002: a check fully covered by a payment still awaiting fiscal
+// registration is transiently un-closeable (ErrFiscalPending), not underpaid
+// (ErrInsufficientPayment). The same Close succeeds once the worker settles it.
+func TestPOSSpine_CloseBlockedWhileFiscalPending(t *testing.T) {
+	ctx := context.Background()
+	checkSvc, orderSvc, paySvc := buildServices()
+
+	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
+		BranchID:   branchID,
+		TableLabel: "T5",
+		OpenedBy:   staffID,
+	})
+	require.NoError(t, err)
+
+	_, err = orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
+		BranchID:     branchID,
+		CheckID:      &check.ID,
+		OrderChannel: posdomain.OrderChannelDineIn,
+		Items: []posdomain.OrderItem{
+			{
+				ProductID:       prodID,
+				ProductName:     "İskender",
+				Quantity:        1,
+				UnitPriceAmount: 2500,
+				TaxRateBPS:      800,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = paySvc.RegisterSale(ctx, paymentsvc.RegisterSaleRequest{
+		TenantID:       tenantID,
+		BranchID:       branchID,
+		CheckID:        &check.ID,
+		IdempotencyKey: "spine-fiscal-pending-pay-001",
+		Method:         paymentdomain.PaymentMethodCash,
+		AmountTotal:    2500,
+		Currency:       "TRY",
+	})
+	require.NoError(t, err)
+
+	_, err = checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
+	require.ErrorIs(t, err, possvc.ErrFiscalPending, "fully covered but unsettled payment must read as pending, not underpaid")
+	require.NotErrorIs(t, err, possvc.ErrInsufficientPayment)
+
+	drainFiscal(t, paySvc)
+
+	closed, err := checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
+	require.NoError(t, err)
 	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
 }
 
@@ -469,7 +562,10 @@ func TestPOSSpine_IdempotentPayment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, second.ID, "idempotent: same payment ID on retry")
 
-	// Total should still be 5000 (not doubled).
+	drainFiscal(t, paySvc)
+
+	// Total should still be 5000 (not doubled): the retry must not have
+	// enqueued a second fiscal submission.
 	total, err := paySvc.TotalPaidForCheck(ctx, tenantID, check.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5000), total)

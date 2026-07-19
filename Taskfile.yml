@@ -88,6 +88,12 @@ tasks:
       - go vet ./...
       - go test -race -cover ./...
 
+  pos:test:web:
+    desc: "POS desktop frontend testleri (vitest — lib/fiscalStatus para aritmetiği)"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/pos-desktop test:run
+
   pos:generate:
     desc: "POS desktop Wails binding'lerini üret (frontend/wailsjs, commit edilmez)"
     dir: web/apps/pos-desktop

@@ -223,3 +223,7 @@ jobs:
       - name: Test
         working-directory: web
         run: pnpm --filter @onlinemenu/admin test:run
+
+      - name: Test (pos-desktop)
+        working-directory: web
+        run: pnpm --filter @onlinemenu/pos-desktop test:run

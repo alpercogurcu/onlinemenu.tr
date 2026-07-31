@@ -4,6 +4,7 @@
 - **Tarih:** 2026-07-19
 - **İlgili:** ADR-SEC-001 (RLS), ADR-SEC-002 (FORCE RLS), ADR-AUTH-001 (4 katmanlı authorization), ADR-DATA-005
 - **Migration:** `backend/migrations/identity/000012_memberships_branch_scoped_guard.{up,down}.sql`
+  ve `000013_memberships_role_tenant_guard.{up,down}.sql` (bkz. [000013 eki](#000013-eki--rol-tenant-bütünlüğü))
 
 ---
 
@@ -85,6 +86,97 @@ UNIQUE NULLS NOT DISTINCT (person_id, tenant_id, branch_id, role_id)
 Varsayılan `UNIQUE` semantiğinde `NULL != NULL` olduğu için aynı kişi aynı
 zincir-geneli rolü **sınırsız kez** alabiliyordu. `roles` tablosu zaten
 `NULLS NOT DISTINCT` kullanıyor (000002); tutarlılık sağlandı.
+
+---
+
+## 000013 eki — rol/tenant bütünlüğü
+
+> Eklenme tarihi: 2026-07-31 · Migration: `000013_memberships_role_tenant_guard`
+
+000012 yazıldığında bir kural **hiçbir yerde ifade edilmemiş** durumdaydı:
+*"bir membership'in rolü, o membership'in tenant'ına ait olmalıdır."*
+
+000012 bunu kazara kısmen kapatıyordu: rol satırını çağıranın RLS'i altında
+okuduğu için başka tenant'ın rolü görünmez, "bulunamadı" dalına düşer ve INSERT
+reddedilir. Ancak bu kapağın **bir deliği ve bir örtük bağımlılığı** vardı.
+
+### Delik — `branch_id IS NOT NULL` dalı rolü hiç okumuyordu
+
+000012'nin guard'ı `NEW.branch_id IS NOT NULL` durumunda **erken dönüyordu**;
+o dalda `roles` satırına hiç bakılmıyordu. `memberships.role_id` üzerindeki FK
+ise sistem tarafından doğrulanır ve **RLS'i baypas eder**. Sonuç: somut şubeli
+bir membership, başka tenant'ın rolüne işaret etse bile DB katmanında kabul
+ediliyordu.
+
+Tek engel Go tarafındaydı — `MembershipService.Create`, rolü `RoleRepo.GetByID`
+ile tenant filtreli çekiyor. Yani kural bir servis metodunun içinde yaşıyordu;
+doğrudan SQL veya ileride eklenecek başka bir kod yolu onu atlardı. Bu tam olarak
+`docs/lessons-from-b2b.md`'nin "varsayılan yol güvensizse N'inci call site'ta
+unutulur" dersi.
+
+### Örtük bağımlılık — "görünmez ⇒ reddedilir" bu kuralın özelliği değil
+
+"Cross-tenant rol RLS'te görünmez, dolayısıyla reddedilir" çıkarımı `roles`
+tablosunun **policy setinin** bir özelliği; bu kuralın kendisinin değil.
+identity/000009 zaten `roles_all_scope_read` politikasını eklemişti
+(`app.tenant_scope = 'all_tenants'` olan oturum her tenant'ın rolünü görür).
+Rol görünürlüğünde ileride yapılacak herhangi bir genişletme, garantiyi
+**sessizce** aşındırırdı.
+
+### Düzeltme
+
+Rol satırı **koşulsuz** okunur (`branch_id` erken dönüşünden önce) ve tenant
+ilişkisi açık bir yüklemle iddia edilir:
+
+```sql
+roles.tenant_id IS NULL                      -- sistem şablonu, her tenant alabilir
+OR roles.tenant_id = memberships.tenant_id   -- tenant'ın kendi rolü
+```
+
+İhlalde `ERRCODE = '23514'`. Bu kontrol `app_runtime` altında normalde
+erişilemezdir (tenant'ı uymayan rol zaten RLS'te görünmez ve bir üstteki
+"bulunamadı" dalında reddedilir) — ama kuralı policy setinden **bağımsız** kılar:
+platform-scope oturumlar (`app.tenant_scope = 'all_tenants'`) ve `app_migrator`
+için de geçerlidir, ki ikisi de `roles` üzerinde RLS ile kısıtlı değildir.
+
+### Neden trigger, neden bildirimsel bir kısıt değil
+
+| Aday | Neden olmuyor |
+|---|---|
+| Bileşik FK `(role_id, tenant_id) → roles (id, tenant_id)` | `MATCH SIMPLE` yalnızca **referans eden** bir kolon NULL olduğunda kontrolü atlar. Burada referans eden iki kolon da NOT NULL; NULL olan **referans edilen** `roles.tenant_id` (sistem şablonları). Sonuç: sistem rolüne dayanan **her** membership reddedilirdi. |
+| Generated column | Başka tabloyu okuyamaz. |
+| `CHECK` kısıtı | Subquery içeremez. |
+
+Bu yüzden kural yalnızca 000012'nin trigger'ında yaşayabilir; 000013 ikinci bir
+trigger eklemek yerine **mevcut fonksiyonu `CREATE OR REPLACE` ile genişletir**.
+Trigger tanımı (`BEFORE INSERT OR UPDATE OF role_id, branch_id`) değişmez —
+`CREATE OR REPLACE FUNCTION` mevcut bağlamayı korur.
+
+### `tenant_id` neden `UPDATE OF` listesinde yok
+
+Bir membership satırını tenant'lar arasında taşımak `app_runtime` için zaten
+imkânsız: `memberships_write` politikası (000003) tenant yüklemini hem `USING`
+hem `WITH CHECK` tarafında taşır — eski satır görünmez, yeni satır reddedilir.
+`tenant_id`'yi listeye eklemek, erişilebilir bir kazanç olmadan her iki yönde
+`DROP`/`CREATE TRIGGER` çifti gerektirirdi.
+
+### Deploy sonrası denetim — 000013 için
+
+Trigger'dan önce yazılmış cross-tenant rol bağlantılarını yakalar
+("Deploy öncesi denetim" bölümündeki 3 numaralı sorgunun kardeşi):
+
+```sql
+SELECT m.id, m.tenant_id AS membership_tenant, r.tenant_id AS role_tenant,
+       m.person_id, r.name AS role_name
+FROM memberships m
+JOIN roles r ON r.id = m.role_id
+WHERE r.tenant_id IS NOT NULL
+  AND r.tenant_id <> m.tenant_id;
+```
+
+Çıkan her satır, bir tenant'ın üyesine **başka bir tenant'ın rolünün** verilmiş
+hâlidir. Bu sorgu `app_migrator` ile koşulmalıdır; `app_runtime` altında ihlal
+satırları zaten görünmez.
 
 ---
 

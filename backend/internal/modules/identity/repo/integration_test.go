@@ -103,6 +103,11 @@ func migrationsBase() string {
 	return filepath.Join(base, "migrations")
 }
 
+// sharedMigratorDSN is captured by runMigrations so individual tests can drive
+// golang-migrate themselves (see TestMigration000013_DownUpIsSymmetric).
+// app_runtime, which sharedPool uses, cannot CREATE FUNCTION.
+var sharedMigratorDSN string
+
 func runMigrations(superDSN string) error {
 	cfg, err := pgxpool.ParseConfig(superDSN)
 	if err != nil {
@@ -113,6 +118,7 @@ func runMigrations(superDSN string) error {
 		cfg.ConnConfig.Host+fmt.Sprintf(":%d", cfg.ConnConfig.Port),
 		cfg.ConnConfig.Database,
 	)
+	sharedMigratorDSN = migratorDSN
 
 	for _, mod := range []string{"tenant", "identity"} {
 		absPath := filepath.Join(migrationsBase(), mod)

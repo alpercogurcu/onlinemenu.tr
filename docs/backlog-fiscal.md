@@ -17,19 +17,16 @@ kalıcı kayıt burada tutulur; bir madde tamamlanınca bu dosyadan silinir.
   `result_payload` + log. **Açık iş:** kasiyer arayüzünde eskalasyon yolu (POS'ta "yöneticiye
   bildir" akışı) ve reconciler overdue uyarısına alarm bağlanması.
 - **Şube-bazlı roller için membership kısıtı.** Çözüldü — bkz.
-  [ADR-SEC-005](adr/SEC-005-branch-scoped-membership.md) ve identity migration
-  `000012_memberships_branch_scoped_guard`. `roles.branch_scoped` bayrağı + memberships
-  trigger'ı zincir-geneli yetki sızıntısını DB seviyesinde kapatıyor. **Açık iş:** ADR'deki
-  deploy-öncesi (duplicate membership, klon fingerprint) ve deploy-sonrası (ihlal denetimi)
-  sorguları prod'da çalıştırılmalı; `warehouse` rolünün ADR-DATA-005 ile çelişkisi kararı bekliyor.
+  [ADR-SEC-005](adr/SEC-005-branch-scoped-membership.md) ve identity migration'ları
+  `000012_memberships_branch_scoped_guard` + `000013_memberships_role_tenant_guard`.
+  `roles.branch_scoped` bayrağı + memberships trigger'ı zincir-geneli yetki sızıntısını,
+  000013 ise rol/tenant bütünlüğünü DB seviyesinde kapatıyor. Custom rol API'si bayrağı
+  taşıyor ve FALSE→TRUE geçişini çakışan membership varsa 409 ile reddediyor.
+  **Açık iş:** ADR'deki deploy-öncesi (duplicate membership, klon fingerprint) ve
+  deploy-sonrası (ihlal denetimi + 000013 cross-tenant rol sorgusu) sorguları prod'da
+  çalıştırılmalı; `warehouse` rolünün ADR-DATA-005 ile çelişkisi kararı bekliyor.
 
 ## Orta öncelik
-
-- **`memberships.tenant_id` ↔ `roles.tenant_id` eşitliğini zorlayan kısıt yok.** SEC-005 trigger'ının
-  RLS fail-closed reddi bunu kısmen kapatıyor (görünmeyen rol → 23514) ama asıl bütünlük kuralı DB'de
-  ifade edilmiş değil; ayrı ele alınmalı.
-- **Custom rol API'sinde `branch_scoped` taşınmıyor.** Tenant'ın oluşturduğu custom roller daima
-  `branch_scoped=FALSE` doğuyor; rol oluşturma/güncelleme yüzeyine alan eklenmeli (bkz. SEC-005 "açık işler").
 
 - **`FiscalResult.CompletedAt` invaryantını sözleşmeye bağla.** "CompletedAt = sunucu saati"
   şu an dokümantasyonla korunuyor; `OnFiscalResult` girişinde damgalamak (veya adapter
@@ -39,10 +36,6 @@ kalıcı kayıt burada tutulur; bir madde tamamlanınca bu dosyadan silinir.
   cihaz İstanbul yerel saati gönderirse `fiscal_receipts.issued_at` ~3 saat kayar (yalnız
   yasal damga; poll penceresi artık etkilenmiyor). Token ticari temasında sorulacak;
   netleşene kadar naive layout'lar için `Europe/Istanbul` varsayımı değerlendirilebilir.
-- **arch-lint gerçek ihlalleri.** `go-arch-lint check` artık koşuyor ama bildirimler var:
-  `payment_http → payment/repo, payment/fiscal/tokenx` doğrudan bağımlılıkları,
-  `payment/fiscal/tokenx`'in hiçbir component'e bağlı olmaması, ~30 `_test` self-reference
-  eksiği. CI gate'i yeşile çekmek için config + yapısal düzeltme kararı gerekiyor.
 - **Worker cycle-arası kesin fiş sıralaması.** `MarkRetry` + çoklu process senaryosunda
   sıralama garantisi process-içi; kesin çözüm claim sorgusunda per-terminal lease.
 
@@ -50,8 +43,6 @@ kalıcı kayıt burada tutulur; bir madde tamamlanınca bu dosyadan silinir.
 
 - Webhook endpoint'i gözlemlenebilirlik kör noktası (otelhttp WithFilter ile span+metrik
   tamamen kapalı) — ADR notu + filter'ın payment modülünden `fx.Provide` ile sağlanması.
-- POS `Receipt.tsx` uzak pending/settled ödemeleri satır olarak göstermiyor (yalnız bakiye
-  düşürüyor); `receivedTotalForPrint` uzak tahsilatı "ALINAN"a katmıyor.
 - 409 dışındaki hata gövdeleri (404/403/422/500) hâlâ düz metin; tümünü `{error, code}`
   JSON'a taşıma kararı.
 - `payments` tablosuna `failure_reason` alanı (şimdilik `fiscal_submissions.last_error`).

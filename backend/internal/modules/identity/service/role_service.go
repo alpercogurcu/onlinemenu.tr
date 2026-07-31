@@ -29,32 +29,35 @@ type permCacheEntry struct {
 
 // RoleService manages roles and resolves permission sets for a tenant.
 type RoleService struct {
-	db       *db.Pool
-	roleRepo *repo.RoleRepo
-	permRepo *repo.PermissionRepo
-	cache    *redis.Client
-	logger   *zap.Logger
+	db             *db.Pool
+	roleRepo       *repo.RoleRepo
+	permRepo       *repo.PermissionRepo
+	membershipRepo *repo.MembershipRepo
+	cache          *redis.Client
+	logger         *zap.Logger
 }
 
 // RoleParams groups the fx-injected dependencies for NewRoleService.
 type RoleParams struct {
 	fx.In
 
-	DB       *db.Pool
-	RoleRepo *repo.RoleRepo
-	PermRepo *repo.PermissionRepo
-	Cache    *redis.Client
-	Logger   *zap.Logger
+	DB             *db.Pool
+	RoleRepo       *repo.RoleRepo
+	PermRepo       *repo.PermissionRepo
+	MembershipRepo *repo.MembershipRepo
+	Cache          *redis.Client
+	Logger         *zap.Logger
 }
 
 // NewRoleService constructs a RoleService for fx injection.
 func NewRoleService(p RoleParams) *RoleService {
 	return &RoleService{
-		db:       p.DB,
-		roleRepo: p.RoleRepo,
-		permRepo: p.PermRepo,
-		cache:    p.Cache,
-		logger:   p.Logger,
+		db:             p.DB,
+		roleRepo:       p.RoleRepo,
+		permRepo:       p.PermRepo,
+		membershipRepo: p.MembershipRepo,
+		cache:          p.Cache,
+		logger:         p.Logger,
 	}
 }
 
@@ -73,14 +76,17 @@ func (s *RoleService) ListForTenant(ctx context.Context, tenantID uuid.UUID) ([]
 	return roles, nil
 }
 
-// CreateTenantRole inserts a custom tenant-wide role.
-func (s *RoleService) CreateTenantRole(ctx context.Context, tenantID uuid.UUID, name string) (domain.Role, error) {
+// CreateTenantRole inserts a custom tenant-wide role. branchScoped marks the role
+// as grantable only at a concrete branch (ADR-SEC-005); until this parameter
+// existed every custom role was born chain-wide.
+func (s *RoleService) CreateTenantRole(ctx context.Context, tenantID uuid.UUID, name string, branchScoped bool) (domain.Role, error) {
 	if name == "" {
 		return domain.Role{}, pub.ErrInvalid
 	}
 	r := domain.Role{
-		TenantID: &tenantID,
-		Name:     name,
+		TenantID:     &tenantID,
+		Name:         name,
+		BranchScoped: branchScoped,
 	}
 	var created domain.Role
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -94,15 +100,19 @@ func (s *RoleService) CreateTenantRole(ctx context.Context, tenantID uuid.UUID, 
 	return created, nil
 }
 
-// CreateBranchRole inserts a custom branch-scoped role.
-func (s *RoleService) CreateBranchRole(ctx context.Context, tenantID, branchID uuid.UUID, name string) (domain.Role, error) {
+// CreateBranchRole inserts a custom role owned by a single branch.
+// branchScoped is accepted for symmetry but cannot lower the guarantee:
+// RoleRepo.Create persists role.RequiresBranch(), which is already true for a
+// branch-owned role.
+func (s *RoleService) CreateBranchRole(ctx context.Context, tenantID, branchID uuid.UUID, name string, branchScoped bool) (domain.Role, error) {
 	if name == "" {
 		return domain.Role{}, pub.ErrInvalid
 	}
 	r := domain.Role{
-		TenantID: &tenantID,
-		BranchID: &branchID,
-		Name:     name,
+		TenantID:     &tenantID,
+		BranchID:     &branchID,
+		Name:         name,
+		BranchScoped: branchScoped,
 	}
 	var created domain.Role
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -114,6 +124,57 @@ func (s *RoleService) CreateBranchRole(ctx context.Context, tenantID, branchID u
 		return domain.Role{}, fmt.Errorf("identity/service/role: create branch role: %w", err)
 	}
 	return created, nil
+}
+
+// Update rewrites a custom role's name and branch_scoped flag (PUT semantics:
+// both fields are replaced). System roles are immutable templates.
+//
+// A FALSE -> TRUE transition is refused while chain-wide memberships of the role
+// still exist. The memberships_branch_scope_guard trigger only fires on
+// membership writes, so those rows would survive the flip as live chain-wide
+// grants of a now branch-scoped role — the exact leak ADR-SEC-005 closes. The
+// refusal carries the count (pub.BranchScopeConflictError, HTTP 409) so the
+// admin can re-scope or terminate them and retry; silently flipping and logging
+// a warning would leave the leak in place with nobody obliged to act on it.
+//
+// Read, count and write share one transaction: a concurrent CreateMembership
+// between a separate count and update would slip through the check.
+func (s *RoleService) Update(ctx context.Context, tenantID, roleID uuid.UUID, name string, branchScoped bool) (domain.Role, error) {
+	if name == "" {
+		return domain.Role{}, pub.ErrInvalid
+	}
+
+	var updated domain.Role
+	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		current, err := s.roleRepo.GetByID(ctx, tx, tenantID, roleID)
+		if err != nil {
+			return err
+		}
+		if current.IsSystem {
+			return pub.ErrInvalid
+		}
+
+		next := current
+		next.Name = name
+		next.BranchScoped = branchScoped
+
+		if next.RequiresBranch() && !current.RequiresBranch() {
+			count, countErr := s.membershipRepo.CountChainWideForRole(ctx, tx, tenantID, roleID)
+			if countErr != nil {
+				return countErr
+			}
+			if count > 0 {
+				return pub.BranchScopeConflictError{RoleID: roleID, ChainWideMemberships: count}
+			}
+		}
+
+		updated, err = s.roleRepo.Update(ctx, tx, tenantID, next)
+		return err
+	})
+	if err != nil {
+		return domain.Role{}, wrapNotFound(err, "identity/service/role: update: %w")
+	}
+	return updated, nil
 }
 
 // Delete removes a custom role. System roles cannot be deleted.

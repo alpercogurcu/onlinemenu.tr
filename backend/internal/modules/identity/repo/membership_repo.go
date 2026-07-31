@@ -39,6 +39,30 @@ func (r *MembershipRepo) GetByID(ctx context.Context, tx pgx.Tx, tenantID, membe
 	return m, nil
 }
 
+// CountChainWideForRole counts the memberships that grant roleID across the whole
+// chain (branch_id IS NULL) and are still capable of conferring permissions.
+//
+// 'terminated' rows are excluded deliberately: they are history, never resolved
+// by ActiveRoleIDsAt, and counting them would block a legitimate branch_scoped
+// flip forever with no action the admin could take short of deleting audit rows.
+// 'suspended' rows are counted — suspension is reversible, so leaving one behind
+// only defers the leak until the membership is reactivated.
+func (r *MembershipRepo) CountChainWideForRole(ctx context.Context, tx pgx.Tx, tenantID, roleID uuid.UUID) (int, error) {
+	const q = `
+		SELECT COUNT(*)
+		FROM memberships
+		WHERE tenant_id = $1
+		  AND role_id = $2
+		  AND branch_id IS NULL
+		  AND status <> 'terminated'`
+
+	var count int
+	if err := tx.QueryRow(ctx, q, tenantID, roleID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("identity/repo/membership: count chain-wide for role: %w", err)
+	}
+	return count, nil
+}
+
 // ListByPerson returns all active memberships for a person within a tenant.
 func (r *MembershipRepo) ListByPerson(ctx context.Context, tx pgx.Tx, tenantID, personID uuid.UUID) ([]domain.Membership, error) {
 	const q = `

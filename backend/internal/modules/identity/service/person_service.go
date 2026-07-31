@@ -116,7 +116,10 @@ func (s *PersonService) Update(ctx context.Context, tenantID, personID uuid.UUID
 // wrapNotFound returns pub.ErrNotFound and pub.ErrInvalid unwrapped so callers
 // can use errors.Is. All other errors are wrapped with the supplied format string.
 func wrapNotFound(err error, format string) error {
-	if errors.Is(err, pub.ErrNotFound) || errors.Is(err, pub.ErrInvalid) {
+	// Sentinel errors are already the caller-facing answer; wrapping them would
+	// only bury the detail the HTTP layer reads back out (see
+	// pub.BranchScopeConflictError, which carries a count).
+	if errors.Is(err, pub.ErrNotFound) || errors.Is(err, pub.ErrInvalid) || errors.Is(err, pub.ErrConflict) {
 		return err
 	}
 	return fmt.Errorf(format, err)

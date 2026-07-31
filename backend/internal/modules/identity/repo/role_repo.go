@@ -91,6 +91,33 @@ func (r *RoleRepo) Create(ctx context.Context, tx pgx.Tx, role domain.Role) (dom
 	return created, nil
 }
 
+// Update rewrites the mutable fields of a custom role and returns the persisted
+// record. branch_scoped is derived through role.RequiresBranch(), exactly as in
+// Create: a branch-owned role (branch_id IS NOT NULL) stays branch-scoped even
+// if the caller sends false, because a role that exists only at one branch can
+// never legitimately be granted chain-wide.
+//
+// System roles are excluded in the WHERE clause. roles_write RLS already blocks
+// them (their tenant_id IS NULL never matches app.tenant_id), but the explicit
+// predicate keeps the rule readable and survives a policy change.
+func (r *RoleRepo) Update(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, role domain.Role) (domain.Role, error) {
+	const q = `
+		UPDATE roles
+		SET name = $3, branch_scoped = $4
+		WHERE id = $1 AND tenant_id = $2 AND NOT is_system
+		RETURNING id, tenant_id, branch_id, name, COALESCE(system_key, ''), is_system, branch_scoped, created_at`
+
+	row := tx.QueryRow(ctx, q, role.ID, tenantID, role.Name, role.RequiresBranch())
+	updated, err := scanRole(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Role{}, pub.ErrNotFound
+		}
+		return domain.Role{}, fmt.Errorf("identity/repo/role: update: %w", err)
+	}
+	return updated, nil
+}
+
 // Delete removes a custom role. Returns pub.ErrNotFound when the role does not exist,
 // and a descriptive error when the caller attempts to delete a system role.
 func (r *RoleRepo) Delete(ctx context.Context, tx pgx.Tx, tenantID, roleID uuid.UUID) error {

@@ -71,6 +71,11 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 
 			r.With(h.permit("identity.role.read")).Get("/roles", h.ListRoles)
 			r.With(h.permit("identity.role.create")).Post("/roles", h.CreateRole)
+			// identity.role.update needs no rego change: role management is
+			// manager-only and the manager wildcard in
+			// configs/opa/bundles/authz.rego (allow if has_role("manager"))
+			// already covers every identity.role.* action.
+			r.With(h.permit("identity.role.update")).Put("/roles/{roleID}", h.UpdateRole)
 			r.With(h.permit("identity.role.delete")).Delete("/roles/{roleID}", h.DeleteRole)
 
 			r.With(h.permit("identity.membership.read")).Get("/memberships", h.ListMemberships)
@@ -124,6 +129,8 @@ func (h *Handler) handleErr(w http.ResponseWriter, err error) {
 		h.writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, pub.ErrInvalid):
 		h.writeError(w, http.StatusBadRequest, "invalid input")
+	case errors.Is(err, pub.ErrConflict):
+		h.writeError(w, http.StatusConflict, "conflict")
 	default:
 		h.logger.Error("internal service error", zap.Error(err))
 		h.writeError(w, http.StatusInternalServerError, "internal error")

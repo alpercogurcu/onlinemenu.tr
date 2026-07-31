@@ -32,6 +32,7 @@ import { useFiscalStatusPolling, type StatusResolution } from './hooks/useFiscal
 import { useBranchFiscalPending } from './hooks/useBranchFiscalPending'
 import { toServerCompletedMap } from './lib/branchFiscal'
 import {
+  buildRemotePaymentRows,
   checkIdsAwaitingFiscal,
   closeBlockReason as computeCloseBlockReason,
   collectableRemaining,
@@ -297,6 +298,18 @@ function App() {
   const remoteSettledForSelected = useMemo(
     () => remoteSettledForCheck(branchFiscal.recentlySettled, selectedCheckId),
     [branchFiscal.recentlySettled, selectedCheckId],
+  )
+
+  // Payment-rail rows for money this station did not itself register — the
+  // branch-wide fiscal visibility gap: `remaining`/`closeBlockReason` already
+  // account for this money (see collectableRemaining/closeBlockReason above),
+  // but until now Receipt.tsx's payment rail only ever rendered `tracked`, so
+  // a cashier had no row explaining why the balance moved or the close is
+  // blocked by a payment taken elsewhere. See buildRemotePaymentRows for the
+  // dedupe rule (tracked > serverCompleted > remote pending).
+  const remotePaymentRows = useMemo(
+    () => buildRemotePaymentRows(trackedForSelected, remoteForSelected, remoteSettledForSelected, serverCompleted),
+    [trackedForSelected, remoteForSelected, remoteSettledForSelected, serverCompleted],
   )
 
   const confirmedTotal = confirmedOrdersTotal(confirmedOrders)
@@ -713,7 +726,7 @@ function App() {
     }
     setReceiptError('')
     const checkId = selectedCheck.id
-    const receivedAmount = receivedTotalForPrint(trackedForSelected)
+    const receivedAmount = receivedTotalForPrint(trackedForSelected, remotePaymentRows.completed)
     try {
       await CloseCheck(checkId)
       setSelectedCheck(null)
@@ -869,6 +882,8 @@ function App() {
           isFullyPaid={fullyPaid}
           closeBlockReason={closeBlockReason}
           payments={trackedForSelected}
+          remoteCompletedPayments={remotePaymentRows.completed}
+          remotePendingPayments={remotePaymentRows.pending}
           onRegisterPayment={handleRegisterPayment}
           onDiscardFailedPayment={handleDiscardFailedPayment}
           onCloseCheck={handleCloseCheck}

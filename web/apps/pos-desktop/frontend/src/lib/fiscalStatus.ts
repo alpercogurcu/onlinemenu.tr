@@ -314,17 +314,22 @@ export function closeBlockReason(
   const other = remotePendingOnly(remote, tracked).length
   if (own + other === 0) return null
 
-  // The cross-station case gets its own wording on purpose: "başka bir
-  // istasyonda" is the difference between a cashier waiting at their own
-  // screen and one who needs to go look at the till next to them. A generic
-  // count would leave them staring at a block they cannot act on.
+  // The cross-station case gets its own wording on purpose — a generic count
+  // would leave the cashier staring at a block they cannot act on, with no
+  // clue it needs someone else's attention. Worded "başka bir işlemde" rather
+  // than "başka bir istasyonda": `remote` (the branch snapshot's pending list)
+  // is not guaranteed to mean a DIFFERENT station — a payment THIS station
+  // registered in an earlier session (app restart, shift change) that is
+  // still pending server-side and never repopulated `tracked` lands here too.
+  // "başka bir işlemde" is true in both cases; "başka bir istasyonda" would
+  // not be.
   if (own === 0) {
-    return `${other} ödemenin mali kaydı başka bir istasyonda bekleniyor`
+    return `${other} ödemenin mali kaydı başka bir işlemde bekleniyor`
   }
   if (other === 0) {
     return `${own} ödemenin mali kaydı bekleniyor`
   }
-  return `${own + other} ödemenin mali kaydı bekleniyor (${other} tanesi başka istasyonda)`
+  return `${own + other} ödemenin mali kaydı bekleniyor (${other} tanesi başka işlemde)`
 }
 
 /**
@@ -381,9 +386,105 @@ export function shouldRenderPendingBadge(payment: TrackedPayment, nowMs: number)
  * KNOWN LIMITATION (pre-existing, unchanged): payments made in an EARLIER app
  * session are not tracked here, so a reprint after a mid-split restart still
  * shows only what this session collected.
+ *
+ * REMOTE ASYMMETRY — `remoteCompleted` (payments settled at ANOTHER station,
+ * or by an earlier session; see buildRemotePaymentRows) is summed in too, but
+ * it is a fundamentally thinner number than `tracked`'s own `receivedAmount`:
+ *
+ *   - `tracked.receivedAmount` is the raw cash the customer physically handed
+ *     over at THIS station, which may exceed `amountTotal` when change was
+ *     given (a 200 TL note against a 180 TL balance: receivedAmount=200,
+ *     amountTotal=180, 20 TL para üstü already handed back).
+ *   - a remote payment arrives only as `amountTotal` — the registered amount.
+ *     Neither `serverCompleted` (ListCheckPayments/CheckSettlement) nor the
+ *     branch snapshot's `recently_settled` carries what was physically
+ *     tendered or any change given at that till (see RemoteSettledFiscal /
+ *     CheckSettledPaymentWire — no such field exists on the wire).
+ *
+ * DECISION: credit `amountTotal` as the remote payment's contribution, i.e.
+ * treat it as if it were received exactly with no change. This can never
+ * OVERSTATE "ALINAN": `receivedAmount >= amountTotal` always holds by
+ * construction (payment.ts's clampToRemaining/changeDue never let the
+ * registered amount exceed what was received), so `amountTotal` is a lower
+ * bound on whatever cash actually changed hands at the other till. The
+ * printed total may therefore undercount a remote installment that involved
+ * change, but it will never tell a customer they are owed change already
+ * handed back at another station.
  */
-export function receivedTotalForPrint(tracked: readonly TrackedPayment[]): number {
-  return tracked.reduce((sum, p) => (countsAsSettled(p.status) ? sum + p.receivedAmount : sum), 0)
+export function receivedTotalForPrint(
+  tracked: readonly TrackedPayment[],
+  remoteCompleted: readonly RemoteCompletedRow[] = [],
+): number {
+  const own = tracked.reduce((sum, p) => (countsAsSettled(p.status) ? sum + p.receivedAmount : sum), 0)
+  const remote = remoteCompleted.reduce((sum, r) => sum + r.amountTotal, 0)
+  return own + remote
+}
+
+/** One remote-completed payment as rendered on the receipt rail — see
+ * buildRemotePaymentRows. Deliberately just id + amount: that is all either
+ * wire source (`serverCompleted` / branch `recently_settled`) ever carries. */
+export type RemoteCompletedRow = { paymentId: string; amountTotal: number }
+
+/**
+ * Builds the two REMOTE-only slices of the payment rail: rows for money this
+ * station did not itself register but that already affects `remaining` /
+ * `closeBlockReason` — the "why did the balance move / why is close blocked"
+ * visibility this station's own `tracked` list cannot provide (requirement:
+ * branch-wide fiscal visibility on the payment rail, not just the amber dot).
+ *
+ * Pure and side-effect free by design so it is unit-testable without
+ * rendering Receipt.tsx (which has no test runner wired up).
+ *
+ * DEDUPE PRIORITY (matches the rest of this module): tracked > serverCompleted
+ * > remote pending. Concretely:
+ *   - any payment id already in `tracked` is skipped entirely from BOTH
+ *     outputs — PaymentStatusList's existing tracked rows already show it,
+ *     and duplicating it here would render the same payment twice.
+ *   - `completed` merges two sources that are mutually exclusive by
+ *     construction: `serverCompleted` entries (durable — ListCheckPayments /
+ *     CheckSettlement) and remoteCompletedOnly's output (the branch feed's
+ *     fast path, ALREADY defined to exclude anything already in
+ *     serverCompleted). No id can appear in both, so the merge cannot
+ *     double-count.
+ *   - `pending` is `remotePendingOnly`'s result with one more filter applied:
+ *     a payment id that raced into `completed` in this same snapshot (settled
+ *     between two branch-poller ticks) is dropped from `pending` — it already
+ *     happened, so "mali kayıt bekleniyor" would be stale/wrong.
+ *
+ * NAMING CAVEAT — "remote" here means "not in `tracked`", not "at a different
+ * station". `tracked` is this SESSION's in-memory list, and `serverCompleted`
+ * (ListCheckPayments/CheckSettlement) returns every completed payment on the
+ * check regardless of who registered it — so `completed` also includes a
+ * payment THIS station collected in an EARLIER session (app restart, shift
+ * change) that never repopulated `tracked`. Same for `pending`: the branch
+ * snapshot's pending list is not guaranteed to be a different station either.
+ * Receipt.tsx's copy for both row kinds is worded to hold in either case
+ * ("daha önce tahsil edildi", "başka işlemde bekleniyor") — deliberately NOT
+ * claiming "başka istasyonda", which would be false for the same-station case.
+ */
+export function buildRemotePaymentRows(
+  tracked: readonly TrackedPayment[],
+  remotePending: readonly RemotePendingFiscal[],
+  remoteSettled: readonly RemoteSettledFiscal[],
+  serverCompleted: ReadonlyMap<string, number>,
+): { completed: RemoteCompletedRow[]; pending: RemotePendingFiscal[] } {
+  const trackedIds = new Set(tracked.map((p) => p.id))
+
+  const completed: RemoteCompletedRow[] = []
+  const completedIds = new Set<string>()
+  for (const [paymentId, amountTotal] of serverCompleted) {
+    if (trackedIds.has(paymentId)) continue
+    completed.push({ paymentId, amountTotal })
+    completedIds.add(paymentId)
+  }
+  for (const r of remoteCompletedOnly(remoteSettled, tracked, serverCompleted)) {
+    completed.push({ paymentId: r.paymentId, amountTotal: r.amountTotal })
+    completedIds.add(r.paymentId)
+  }
+
+  const pending = remotePendingOnly(remotePending, tracked).filter((r) => !completedIds.has(r.paymentId))
+
+  return { completed, pending }
 }
 
 /**

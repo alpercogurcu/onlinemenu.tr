@@ -2,12 +2,13 @@ import { useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import type { PendingLine } from '../lib/cart'
 import { pendingLineTotal } from '../lib/cart'
-import type { TrackedPayment } from '../lib/fiscalStatus'
+import type { RemoteCompletedRow, RemotePendingFiscal, TrackedPayment } from '../lib/fiscalStatus'
 import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
 import { changeDue as computeChangeDue, clampToRemaining, splitSuggestion } from '../lib/payment'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
 import { HoldButton } from './HoldButton'
+import { CheckIcon, ClockIcon } from './icons'
 
 const QUICK_NOTES = [5000, 10000, 20000, 50000] // ₺50 / ₺100 / ₺200 / ₺500 in kuruş
 // Turkish vowel harmony makes the dative suffix on a numeral irregular
@@ -50,6 +51,16 @@ type ReceiptProps = {
   /** Payments registered against this check in this session, with live fiscal
    * status. Empty for a check whose payments all predate this session. */
   payments: readonly TrackedPayment[]
+  /** Branch-wide visibility (SEC-005 follow-up) — payments completed at
+   * ANOTHER station (or an earlier session) that already count toward
+   * `settledPaidTotal`/`remaining` but have no row of their own in `payments`.
+   * Already deduped against `payments` by the caller (see
+   * lib/fiscalStatus.buildRemotePaymentRows) — never re-filter here. */
+  remoteCompletedPayments: readonly RemoteCompletedRow[]
+  /** Same visibility gap for payments still mid-registration at ANOTHER
+   * station — the reason `remaining` is lower / the close is blocked even
+   * though this station's own `payments` list looks clear. Already deduped. */
+  remotePendingPayments: readonly RemotePendingFiscal[]
   /**
    * amountToRegister is the CLAMPED amount for this one cash-payment step
    * (never more than the remaining balance — see lib/payment's
@@ -90,6 +101,8 @@ export function Receipt({
   isFullyPaid,
   closeBlockReason,
   payments,
+  remoteCompletedPayments,
+  remotePendingPayments,
   onRegisterPayment,
   onDiscardFailedPayment,
   onCloseCheck,
@@ -218,7 +231,12 @@ export function Receipt({
               </div>
             )}
 
-            <PaymentStatusList payments={payments} onRetry={handleRetryPayment} />
+            <PaymentStatusList
+              payments={payments}
+              remoteCompletedPayments={remoteCompletedPayments}
+              remotePendingPayments={remotePendingPayments}
+              onRetry={handleRetryPayment}
+            />
 
             <ErrorBanner message={errorMessage} />
 
@@ -382,17 +400,31 @@ export function Receipt({
  * additionally shows the reason and a full-width retry target (requirement 3 —
  * min-h-11 = 44px).
  *
- * Nothing renders for a check with no payments yet, so the ordinary
- * add-items-and-send flow is visually untouched.
+ * Followed by two more row kinds — same rail, same visual language — for
+ * money this station did NOT itself register but that already moves
+ * `remaining`/`closeBlockReason` (branch-wide fiscal visibility): a payment
+ * completed at another till, and one still mid-registration at another till.
+ * Both lists arrive already deduped against `payments` (see
+ * lib/fiscalStatus.buildRemotePaymentRows) — a payment id never appears twice
+ * on this rail.
+ *
+ * Nothing renders for a check with no payments (own or remote) at all, so the
+ * ordinary add-items-and-send flow is visually untouched.
  */
 function PaymentStatusList({
   payments,
+  remoteCompletedPayments,
+  remotePendingPayments,
   onRetry,
 }: {
   payments: readonly TrackedPayment[]
+  remoteCompletedPayments: readonly RemoteCompletedRow[]
+  remotePendingPayments: readonly RemotePendingFiscal[]
   onRetry: (payment: TrackedPayment) => void
 }) {
-  if (payments.length === 0) return null
+  if (payments.length === 0 && remoteCompletedPayments.length === 0 && remotePendingPayments.length === 0) {
+    return null
+  }
 
   return (
     <ul className="space-y-2">
@@ -419,6 +451,45 @@ function PaymentStatusList({
               </button>
             </>
           )}
+        </li>
+      ))}
+
+      {/* Settled money this station did not itself register — either taken at
+          ANOTHER station, or by this same station in an EARLIER session (app
+          restart, shift change) whose tracked list is gone. Same "settled"
+          visual language as a tracked completed row (teal); the label makes
+          no station claim on purpose since either case is possible — see
+          buildRemotePaymentRows' NAMING CAVEAT. */}
+      {remoteCompletedPayments.map((row) => (
+        <li key={row.paymentId} className="rounded-md border border-line bg-surface px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="money text-sm font-semibold tabular-nums text-ink">
+              {formatMoney(row.amountTotal)}
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-teal/15 px-2 py-0.5 text-xs font-semibold text-teal">
+              <CheckIcon size={14} />
+              Daha önce tahsil edildi
+            </span>
+          </div>
+        </li>
+      ))}
+
+      {/* Still mid-registration somewhere this station cannot see (another
+          station, or this station's own earlier session — same caveat as
+          above) — dimmed, this station has no retry affordance for it, same
+          grey token FiscalStatusBadge already uses for a status this session
+          cannot act on (voided/unknown). */}
+      {remotePendingPayments.map((row) => (
+        <li key={row.paymentId} className="rounded-md border border-line/60 bg-surface/60 px-3 py-2 opacity-70">
+          <div className="flex items-center justify-between gap-2">
+            <span className="money text-sm font-semibold tabular-nums text-ink-dim">
+              {formatMoney(row.amountTotal)}
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-line/40 px-2 py-0.5 text-xs font-semibold text-ink-dim">
+              <ClockIcon size={14} />
+              Başka işlemde • mali kayıt bekleniyor
+            </span>
+          </div>
         </li>
       ))}
     </ul>

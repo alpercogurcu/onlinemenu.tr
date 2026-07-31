@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildRemotePaymentRows,
   checkIdsAwaitingFiscal,
   closeBlockReason,
   collectableRemaining,
   isFullyPaid,
+  receivedTotalForPrint,
   remoteCompletedOnly,
   remotePendingOnly,
   reservedTotal,
@@ -182,9 +184,9 @@ describe('closeBlockReason', () => {
     expect(closeBlockReason([], [])).toBeNull()
   })
 
-  it('names the other station when only a remote payment is pending', () => {
+  it('attributes a lone remote pending payment to another operation, not another station', () => {
     const reason = closeBlockReason([], [remotePending({ paymentId: 'other' })])
-    expect(reason).toBe('1 ödemenin mali kaydı başka bir istasyonda bekleniyor')
+    expect(reason).toBe('1 ödemenin mali kaydı başka bir işlemde bekleniyor')
   })
 
   it('counts a payment once when both sources report it', () => {
@@ -194,7 +196,7 @@ describe('closeBlockReason', () => {
 
   it('breaks down a mixed local/remote block', () => {
     const reason = closeBlockReason([tracked({ id: 'mine' })], [remotePending({ paymentId: 'other' })])
-    expect(reason).toBe('2 ödemenin mali kaydı bekleniyor (1 tanesi başka istasyonda)')
+    expect(reason).toBe('2 ödemenin mali kaydı bekleniyor (1 tanesi başka işlemde)')
   })
 })
 
@@ -205,6 +207,92 @@ describe('checkIdsAwaitingFiscal', () => {
       [remotePending({ paymentId: 'p1', checkId: 'chk-1' }), remotePending({ paymentId: 'p2', checkId: 'chk-2' })],
     )
     expect([...ids].sort()).toEqual(['chk-1', 'chk-2'])
+  })
+})
+
+describe('buildRemotePaymentRows', () => {
+  it('produces no rows when nothing remote is in flight', () => {
+    const rows = buildRemotePaymentRows([], [], [], NO_SERVER_PAYMENTS)
+    expect(rows).toEqual({ completed: [], pending: [] })
+  })
+
+  it('never re-renders a payment this station already tracks, in either bucket', () => {
+    const rows = buildRemotePaymentRows(
+      [tracked({ id: 'p1', status: 'completed' })],
+      [remotePending({ paymentId: 'p1' })],
+      [remoteSettled({ paymentId: 'p1' })],
+      new Map([['p1', 10_000]]),
+    )
+    expect(rows).toEqual({ completed: [], pending: [] })
+  })
+
+  it('surfaces a durably-settled remote payment from serverCompleted', () => {
+    const rows = buildRemotePaymentRows([], [], [], new Map([['other', 5_000]]))
+    expect(rows.completed).toEqual([{ paymentId: 'other', amountTotal: 5_000 }])
+  })
+
+  it('surfaces a fast-path remote completion not yet confirmed by serverCompleted', () => {
+    const rows = buildRemotePaymentRows(
+      [],
+      [],
+      [remoteSettled({ paymentId: 'other', amountTotal: 3_000 })],
+      NO_SERVER_PAYMENTS,
+    )
+    expect(rows.completed).toEqual([{ paymentId: 'other', amountTotal: 3_000 }])
+  })
+
+  it('merges both completed sources without duplicating either one', () => {
+    const rows = buildRemotePaymentRows(
+      [],
+      [],
+      [remoteSettled({ paymentId: 'fast', amountTotal: 1_000 })],
+      new Map([['durable', 2_000]]),
+    )
+    expect(rows.completed.map((r) => r.paymentId).sort()).toEqual(['durable', 'fast'])
+  })
+
+  it('surfaces a remote pending payment not tracked here', () => {
+    const rows = buildRemotePaymentRows([], [remotePending({ paymentId: 'other', amountTotal: 4_000 })], [], NO_SERVER_PAYMENTS)
+    expect(rows.pending).toEqual([{ paymentId: 'other', checkId: 'chk-1', amountTotal: 4_000, ageSeconds: 5 }])
+  })
+
+  it('drops a pending row for a payment that settled in the very same snapshot', () => {
+    // A poll race: the branch feed reports the same id in both pending and
+    // recently_settled. Completed wins — "bekleniyor" would be stale.
+    const rows = buildRemotePaymentRows(
+      [],
+      [remotePending({ paymentId: 'p1' })],
+      [remoteSettled({ paymentId: 'p1' })],
+      NO_SERVER_PAYMENTS,
+    )
+    expect(rows.pending).toEqual([])
+    expect(rows.completed.map((r) => r.paymentId)).toEqual(['p1'])
+  })
+})
+
+describe('receivedTotalForPrint', () => {
+  it('is unchanged when no remote completions are passed (back-compat default)', () => {
+    const total = receivedTotalForPrint([tracked({ id: 'p1', status: 'completed', receivedAmount: 12_000 })])
+    expect(total).toBe(12_000)
+  })
+
+  it('adds a remote completion at its amountTotal, since no receivedAmount exists for it', () => {
+    const total = receivedTotalForPrint(
+      [tracked({ id: 'p1', status: 'completed', receivedAmount: 12_000 })],
+      [{ paymentId: 'other', amountTotal: 5_000 }],
+    )
+    expect(total).toBe(17_000)
+  })
+
+  it('sums multiple remote completions with no own tracked payments', () => {
+    const total = receivedTotalForPrint(
+      [],
+      [
+        { paymentId: 'a', amountTotal: 1_000 },
+        { paymentId: 'b', amountTotal: 2_000 },
+      ],
+    )
+    expect(total).toBe(3_000)
   })
 })
 

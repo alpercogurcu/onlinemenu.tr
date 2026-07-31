@@ -17,6 +17,7 @@ Mimari Karar Kayıtları (Architecture Decision Records). Her karar kendi dosyas
 | [SEC-002](SEC-002-rls-force-runtime-role.md) | RLS FORCE ve Ayrı Runtime Rolü | ✅ Kabul Edildi |
 | [SEC-003](SEC-003-idempotency-key.md) | Idempotency-Key Altyapısı | ✅ Kabul Edildi |
 | [SEC-004](SEC-004-device-pairing.md) | Cihaz Kayıt ve Pairing Code Akışı | 📝 Taslak |
+| [SEC-005](SEC-005-branch-scoped-membership.md) | Şube-Kapsamlı Rollerde Membership Şube Zorunluluğu | ✅ Kabul Edildi |
 
 ### Yetkilendirme (AUTH)
 | Kod | Başlık | Durum |
@@ -34,6 +35,7 @@ Mimari Karar Kayıtları (Architecture Decision Records). Her karar kendi dosyas
 | [DATA-005](DATA-005-recipe-bom-model.md) | Reçete / BOM ve Stok Kalemi Modeli | 📝 Taslak |
 | [DATA-006](DATA-006-branch-transfer-orders.md) | Şubeler Arası Sipariş (Branch Transfer Orders) | 📝 Taslak |
 | [DATA-007](DATA-007-supply-policy.md) | Tedarik Politikası ve Şube-Yerel Maliyet | 📝 Taslak |
+| [DATA-008](DATA-008-cash-session-cashier-identity.md) | Kasa Oturumu Sahipliği ve Kasiyer Kimlik Doğrulama | ✅ Kabul Edildi |
 
 ### Mimari (ARCH)
 | Kod | Başlık | Durum |

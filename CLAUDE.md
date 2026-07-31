@@ -413,6 +413,8 @@ Faz 1'de bunların implementasyonuna **başlama**. Interface/sözleşme tanımla
 | asynq vs Temporal sınırı | [ARCH-002](docs/adr/ARCH-002-asynq-temporal.md) |
 | Typesense (Faz 2) | [ARCH-003](docs/adr/ARCH-003-search-typesense.md) |
 | Fiscal adapter interface | [FISCAL-001](docs/adr/FISCAL-001-fiscal-adapter.md) |
+| Şube-kapsamlı rol / membership guard | [SEC-005](docs/adr/SEC-005-branch-scoped-membership.md) |
+| Kasa oturumu + kasiyer PIN | [DATA-008](docs/adr/DATA-008-cash-session-cashier-identity.md) |
 | Backup & DR | [OPS-001](docs/adr/OPS-001-backup-dr.md) |
 | Tenant offboarding (KVKK) | [OPS-002](docs/adr/OPS-002-tenant-offboarding.md) |
 | Rate limiting | [OPS-003](docs/adr/OPS-003-rate-limiting.md) |

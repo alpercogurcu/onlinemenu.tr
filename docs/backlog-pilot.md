@@ -8,6 +8,15 @@
 tek şubeli bir işletme olacak. `edge-sync` Faz 2'ye kalır; ROADMAP Faz 1'in "satılabilir MVP"
 tanımı bu pilottan sonra tamamlanır.
 
+### Pilot müşteri seçim kriterleri (bağlayıcı)
+
+| Kriter | Neden |
+|---|---|
+| Sabit, güvenilir internet | `edge-sync` yok; bağlantı koparsa satış durur |
+| Tek şube | Zincir-geneli senaryolar test edilmedi |
+| **Tek kasa (tek para çekmecesi)** | ADR-DATA-008: kasa oturumu şube başına. İki çekmece tek sayıma inerse mutabakat anlamsızlaşır — birindeki fazla diğerindeki açığı gizler |
+| Marş kullanmayan segment tercih edilir | Üst segment oturarak servis marşı gerektirir (bkz. aşağıda); fast-food/kafe/paket servis gerektirmez |
+
 **Halihazırda çalışan:** satış omurgası uçtan uca test edilmiş
 (`internal/e2e/spine_test.go`: adisyon aç → sipariş → ödeme → ÖKC mali kayıt → settle → kapat),
 Token/Beko X30TR entegrasyonu gerçek, admin panelinde 29 sayfa, Wails POS istemcisi.
@@ -70,11 +79,15 @@ Doğrulanan durum:
 
 ## 3. Kasa oturumu + kasiyer kimlik doğrulama (tek ADR)
 
-Tasarım referansı ve tam gerekçe: [lessons-from-odoo.md § Tier 1 madde 1 ve 4](lessons-from-odoo.md).
-Bu ikisi **ayrılamaz**: oturumun fark açıklaması, arkasındaki kasiyer sunucuda doğrulanmıyorsa
-hiçbir şey ifade etmez.
+Karar verildi: **[ADR-DATA-008](adr/DATA-008-cash-session-cashier-identity.md)** — oturum **şube**
+başına (POS istasyon kimliği yok; ADR-SEC-004 hâlâ Taslak, `devices` tablosu yok, `fiscal_terminals`
+uygun değil çünkü `basket_mode: list` ile bir ÖKC şubedeki her kasaya hizmet ediyor). Kabul edilen
+kısıt: **çok kasalı şube desteklenmiyor**. SEC-004 gelince nullable `station_id` + backfill ile
+yükseltilir — düşük pişmanlıklı.
 
-- [ ] **ADR:** oturum sahipliği (terminal | kasiyer | şube) + PIN doğrulama modeli
+Tasarım referansı ve tam gerekçe: [lessons-from-odoo.md § Tier 1 madde 1 ve 4](lessons-from-odoo.md).
+
+- [x] **ADR:** oturum sahipliği + PIN doğrulama modeli → ADR-DATA-008
 - [ ] `cash_sessions` + 4 durumlu makine (`opening_control → opened → closing_control → closed`);
       girdiler saklanır (açılış sayımı, kapanış sayımı, nakit hareketi), beklenen ve fark türetilir
 - [ ] Vardiya içi nakit giriş/çıkış kaydı

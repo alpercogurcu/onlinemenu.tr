@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -66,9 +67,19 @@ func (s *MembershipService) List(
 // ListContexts returns the lightweight context summaries for all active memberships
 // belonging to the person identified by keycloakSub.
 // This is a platform-scope read: the memberships-by-person view spans tenants.
+//
+// A Keycloak subject that has authenticated but has no corresponding persons row
+// (no staff onboarding has happened for them yet) is NOT an error: it returns an
+// empty context list. A persons row grants no access on its own — memberships do
+// — so "no person yet" and "person with zero memberships" are behaviourally the
+// same thing from this endpoint's point of view, and both must yield 200 with an
+// empty list rather than surfacing pub.ErrNotFound as a caller-facing error.
 func (s *MembershipService) ListContexts(ctx context.Context, keycloakSub string, personSvc *PersonService) ([]domain.ContextItem, error) {
 	person, err := personSvc.GetByKeycloakSub(ctx, keycloakSub)
 	if err != nil {
+		if errors.Is(err, pub.ErrNotFound) {
+			return []domain.ContextItem{}, nil
+		}
 		return nil, fmt.Errorf("identity/service/membership: list contexts — resolve person: %w", err)
 	}
 

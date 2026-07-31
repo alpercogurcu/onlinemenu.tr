@@ -15,22 +15,21 @@ import (
 
 	"onlinemenu.tr/internal/modules/payment/domain"
 	"onlinemenu.tr/internal/modules/payment/fiscal/tokenx"
-	"onlinemenu.tr/internal/modules/payment/repo"
 	"onlinemenu.tr/internal/platform/auth"
 )
 
-// fiscalAdminStore is the persistence surface the fiscal admin API needs.
+// FiscalAdminStore is the persistence surface the fiscal admin API needs.
 // Declared here, at the point of use, so the handler is testable without a
 // database (accept interfaces, return structs).
-type fiscalAdminStore interface {
-	UpsertTerminal(ctx context.Context, t repo.FiscalTerminal) (repo.FiscalTerminal, error)
-	ListTerminals(ctx context.Context, tenantID, branchID uuid.UUID) ([]repo.FiscalTerminal, error)
-	GetTerminal(ctx context.Context, tenantID, id uuid.UUID) (repo.FiscalTerminal, error)
-	UpdateTerminal(ctx context.Context, tenantID, id uuid.UUID, patch repo.TerminalPatch) (repo.FiscalTerminal, error)
+type FiscalAdminStore interface {
+	UpsertTerminal(ctx context.Context, t domain.FiscalTerminal) (domain.FiscalTerminal, error)
+	ListTerminals(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.FiscalTerminal, error)
+	GetTerminal(ctx context.Context, tenantID, id uuid.UUID) (domain.FiscalTerminal, error)
+	UpdateTerminal(ctx context.Context, tenantID, id uuid.UUID, patch domain.TerminalPatch) (domain.FiscalTerminal, error)
 	ReplaceSections(ctx context.Context, tenantID, terminalID uuid.UUID, sections []domain.DeviceSection) error
-	ListSections(ctx context.Context, tenantID, terminalID uuid.UUID) ([]repo.FiscalDeviceSection, error)
-	ListSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID) ([]repo.FiscalSectionMapping, error)
-	ReplaceSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID, mappings []repo.FiscalSectionMapping) error
+	ListSections(ctx context.Context, tenantID, terminalID uuid.UUID) ([]domain.FiscalDeviceSection, error)
+	ListSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.FiscalSectionMapping, error)
+	ReplaceSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID, mappings []domain.FiscalSectionMapping) error
 }
 
 // FiscalHandler exposes the fiscal device administration API: pairing a
@@ -43,7 +42,7 @@ type fiscalAdminStore interface {
 // registration upserts on (tenant, vendor, serial), and both section sync and
 // mapping writes are full replacements.
 type FiscalHandler struct {
-	store   fiscalAdminStore
+	store   FiscalAdminStore
 	adapter domain.FiscalDeviceAdapter
 	logger  *zap.Logger
 	engine  *auth.Engine
@@ -53,7 +52,7 @@ type FiscalHandler struct {
 type FiscalParams struct {
 	fx.In
 
-	Store   *repo.FiscalAdminRepo
+	Store   FiscalAdminStore
 	Adapter domain.FiscalDeviceAdapter
 	Logger  *zap.Logger
 	Engine  *auth.Engine
@@ -101,7 +100,7 @@ type terminalResponse struct {
 	UpdatedAt         string    `json:"updated_at"`
 }
 
-func toTerminalResponse(t repo.FiscalTerminal) terminalResponse {
+func toTerminalResponse(t domain.FiscalTerminal) terminalResponse {
 	return terminalResponse{
 		ID:                t.ID,
 		TenantID:          t.TenantID,
@@ -219,7 +218,7 @@ func (h *FiscalHandler) createTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	terminal, err := h.store.UpsertTerminal(r.Context(), repo.FiscalTerminal{
+	terminal, err := h.store.UpsertTerminal(r.Context(), domain.FiscalTerminal{
 		TenantID:          p.TenantID,
 		BranchID:          req.BranchID,
 		Vendor:            tokenx.Vendor,
@@ -230,7 +229,7 @@ func (h *FiscalHandler) createTerminal(w http.ResponseWriter, r *http.Request) {
 		BasketMode:        req.BasketMode,
 	})
 	if err != nil {
-		if errors.Is(err, repo.ErrTerminalSerialTaken) {
+		if errors.Is(err, domain.ErrTerminalSerialTaken) {
 			http.Error(w, "terminal serial already registered", http.StatusConflict)
 			return
 		}
@@ -284,13 +283,13 @@ func (h *FiscalHandler) updateTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	terminal, err := h.store.UpdateTerminal(r.Context(), p.TenantID, id, repo.TerminalPatch{
+	terminal, err := h.store.UpdateTerminal(r.Context(), p.TenantID, id, domain.TerminalPatch{
 		Label:      req.Label,
 		BasketMode: req.BasketMode,
 		IsActive:   req.IsActive,
 	})
 	if err != nil {
-		if errors.Is(err, repo.ErrTerminalNotFound) {
+		if errors.Is(err, domain.ErrTerminalNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -324,7 +323,7 @@ func (h *FiscalHandler) syncSections(w http.ResponseWriter, r *http.Request) {
 
 	terminal, err := h.store.GetTerminal(r.Context(), p.TenantID, id)
 	if err != nil {
-		if errors.Is(err, repo.ErrTerminalNotFound) {
+		if errors.Is(err, domain.ErrTerminalNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -378,7 +377,7 @@ func (h *FiscalHandler) listSections(w http.ResponseWriter, r *http.Request) {
 	// Prove the terminal exists (and belongs to this tenant) so an unknown id
 	// answers 404 rather than an empty list that reads as "device has none".
 	if _, err := h.store.GetTerminal(r.Context(), p.TenantID, id); err != nil {
-		if errors.Is(err, repo.ErrTerminalNotFound) {
+		if errors.Is(err, domain.ErrTerminalNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -433,7 +432,7 @@ func (h *FiscalHandler) replaceSectionMappings(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	mappings := make([]repo.FiscalSectionMapping, 0, len(req.Mappings))
+	mappings := make([]domain.FiscalSectionMapping, 0, len(req.Mappings))
 	seen := make(map[uuid.UUID]struct{}, len(req.Mappings))
 	for _, m := range req.Mappings {
 		if m.CategoryID == uuid.Nil {
@@ -451,7 +450,7 @@ func (h *FiscalHandler) replaceSectionMappings(w http.ResponseWriter, r *http.Re
 			return
 		}
 		seen[m.CategoryID] = struct{}{}
-		mappings = append(mappings, repo.FiscalSectionMapping{CategoryID: m.CategoryID, SectionNo: m.SectionNo})
+		mappings = append(mappings, domain.FiscalSectionMapping{CategoryID: m.CategoryID, SectionNo: m.SectionNo})
 	}
 
 	if err := h.store.ReplaceSectionMappings(r.Context(), p.TenantID, req.BranchID, mappings); err != nil {
@@ -494,7 +493,7 @@ func requireBranchIDQuery(w http.ResponseWriter, r *http.Request) (uuid.UUID, bo
 	return branchID, true
 }
 
-func toSectionResponses(sections []repo.FiscalDeviceSection) []sectionResponse {
+func toSectionResponses(sections []domain.FiscalDeviceSection) []sectionResponse {
 	out := make([]sectionResponse, len(sections))
 	for i, s := range sections {
 		out[i] = sectionResponse{
@@ -507,7 +506,7 @@ func toSectionResponses(sections []repo.FiscalDeviceSection) []sectionResponse {
 	return out
 }
 
-func toSectionMappingResponses(mappings []repo.FiscalSectionMapping) []sectionMappingResponse {
+func toSectionMappingResponses(mappings []domain.FiscalSectionMapping) []sectionMappingResponse {
 	out := make([]sectionMappingResponse, len(mappings))
 	for i, m := range mappings {
 		out[i] = sectionMappingResponse{CategoryID: m.CategoryID, SectionNo: m.SectionNo}

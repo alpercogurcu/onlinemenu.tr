@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,54 +12,25 @@ import (
 	"onlinemenu.tr/internal/platform/db"
 )
 
+// Fiscal admin value types now live in payment/domain so the HTTP layer can
+// speak them without importing repo. Aliased here to keep repo call sites and
+// their tests unchanged.
+type (
+	FiscalTerminal       = domain.FiscalTerminal
+	FiscalDeviceSection  = domain.FiscalDeviceSection
+	FiscalSectionMapping = domain.FiscalSectionMapping
+	TerminalPatch        = domain.TerminalPatch
+)
+
 var (
 	// ErrTerminalNotFound means no terminal with that id exists for the tenant.
-	ErrTerminalNotFound = errors.New("payment/repo: fiscal terminal not found")
+	ErrTerminalNotFound = domain.ErrTerminalNotFound
 	// ErrTerminalSerialTaken means the serial is already registered — to another
 	// tenant. (vendor, terminal_serial) is globally unique so an inbound webhook
 	// resolves to exactly one tenant; a second claim on the same physical device
 	// must be refused rather than silently rebound.
-	ErrTerminalSerialTaken = errors.New("payment/repo: fiscal terminal serial already registered")
+	ErrTerminalSerialTaken = domain.ErrTerminalSerialTaken
 )
-
-// FiscalTerminal is a registered fiscal device (ADR-FISCAL-002 §5).
-type FiscalTerminal struct {
-	ID                uuid.UUID
-	TenantID          uuid.UUID
-	BranchID          uuid.UUID
-	Vendor            string
-	TerminalSerial    string
-	VendorMerchantRef string
-	VendorBranchRef   string
-	Label             string
-	BasketMode        string
-	IsActive          bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-}
-
-// FiscalDeviceSection is one device-synced tax section persisted for a terminal.
-type FiscalDeviceSection struct {
-	SectionNo    int
-	Name         string
-	TaxPermyriad int
-	SyncedAt     time.Time
-}
-
-// FiscalSectionMapping ties a catalog category to a device section number.
-type FiscalSectionMapping struct {
-	CategoryID uuid.UUID
-	SectionNo  int
-}
-
-// TerminalPatch carries the mutable fields of a terminal. A nil field is left
-// untouched, which lets PATCH express "clear the label" (empty string) apart
-// from "don't change the label" (absent).
-type TerminalPatch struct {
-	Label      *string
-	BasketMode *string
-	IsActive   *bool
-}
 
 // FiscalAdminRepo backs the fiscal admin API: terminal registry, device-synced
 // sections and category→section mappings. Every method runs inside

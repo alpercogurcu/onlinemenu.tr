@@ -7,7 +7,11 @@
 // ParseWebhook and feeds into domain.FiscalResultSink.
 package tokenx
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"onlinemenu.tr/internal/modules/payment/domain"
+)
 
 // DeviceType is the value stored in branch_settings.fiscal_device_type and
 // echoed on every FiscalResult this adapter produces.
@@ -18,23 +22,20 @@ const DeviceType = "beko_x30tr_cloud"
 // driver; Vendor names the manufacturer's platform.
 const Vendor = "tokenx"
 
-// BasketMode selects the Token endpoint used to deliver a basket. The mode is
-// a physical setting on the device; the backend must match it per terminal.
-type BasketMode string
-
-const (
-	// BasketModeInstant posts to /v1/instant-basket with a terminal-id header.
-	// The device jumps straight to the payment screen. This is the default flow.
-	BasketModeInstant BasketMode = "instant"
-	// BasketModeList posts to /v1/basket with a branch-id header. The basket is
-	// listed on every terminal of the branch and picked by the cashier.
-	BasketModeList BasketMode = "list"
+// The fiscal ports and shared value types live in payment/domain; the adapter
+// aliases them so vendor code reads naturally while the repo layer implements
+// the ports without importing this package (see domain/fiscal_ports.go).
+type (
+	BasketMode       = domain.BasketMode
+	TerminalRef      = domain.TerminalRef
+	SectionResolver  = domain.SectionResolver
+	TerminalResolver = domain.TerminalResolver
 )
 
-// Valid reports whether the mode is a recognised value.
-func (m BasketMode) Valid() bool {
-	return m == BasketModeInstant || m == BasketModeList
-}
+const (
+	BasketModeInstant = domain.BasketModeInstant
+	BasketModeList    = domain.BasketModeList
+)
 
 // Document types accepted by Token. Only the plain fiscal receipt is used in
 // phase 1; invoice-linked types (9005/9006/9007) are a billing-module concern.

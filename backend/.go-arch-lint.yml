@@ -9,8 +9,18 @@ allow:
 # boundary checks because they legitimately import across all modules.
 excludeFiles:
   - "cmd/.*"
-  - "internal/modules/[^/]+/module\\.go"
+  - "internal/modules/[^/]+/module(_test)?\\.go"
   - "internal/e2e/.*"
+  # Full-stack integration tests: these wire a real DB + the module's own lower
+  # layers to exercise an HTTP/WS surface end to end, so they legitimately
+  # import repo/mock packages their production layer must never touch.
+  # Excluded per FILE (never a blanket "_test\.go" pattern) so the production
+  # boundary they are testing stays fully enforced.
+  - "internal/modules/inventory/http/branch_authz_integration_test\\.go"
+  - "internal/modules/inventory/http/supply_policy_visibility_test\\.go"
+  - "internal/modules/billing/service/integration_test\\.go"
+  - "internal/modules/pos/ws/hub_test\\.go"
+  - "internal/modules/identity/repo/role_tenant_guard_test\\.go"
 
 # Sub-layer granularity enforces cross-module boundary: modules may only import
 # the public/ interface of other modules, never domain/, repo/, or service/.
@@ -55,6 +65,7 @@ components:
   payment_service:  { in: "internal/modules/payment/service/**" }
   payment_http:     { in: "internal/modules/payment/http/**" }
   payment_public:   { in: "internal/modules/payment/public/**" }
+  payment_fiscal:   { in: "internal/modules/payment/fiscal/**" }
 
   # Inventory
   inventory_domain:   { in: "internal/modules/inventory/domain/**" }
@@ -114,41 +125,41 @@ deps:
   catalog_repo:
     mayDependOn: [platform, catalog_domain, catalog_repo]
   catalog_service:
-    mayDependOn: [platform, catalog_domain, catalog_repo, catalog_public]
+    mayDependOn: [platform, catalog_domain, catalog_repo, catalog_public, catalog_service]
   catalog_http:
-    mayDependOn: [platform, catalog_domain, catalog_service, catalog_public]
+    mayDependOn: [platform, catalog_domain, catalog_service, catalog_public, catalog_http]
   catalog_public:
-    mayDependOn: [platform]
-  catalog_events:
     mayDependOn: [platform, catalog_public]
+  catalog_events:
+    mayDependOn: [platform, catalog_public, catalog_events]
 
   # --- Identity ---
   identity_domain:
-    mayDependOn: [platform]
+    mayDependOn: [platform, identity_domain]
   identity_repo:
     # Repos return identity_public types directly (no separate domain DTOs).
-    mayDependOn: [platform, identity_domain, identity_public]
+    mayDependOn: [platform, identity_domain, identity_public, identity_repo]
   identity_service:
-    mayDependOn: [platform, identity_domain, identity_repo, identity_public]
+    mayDependOn: [platform, identity_domain, identity_repo, identity_public, identity_service]
   identity_http:
-    mayDependOn: [platform, identity_domain, identity_service, identity_public]
+    mayDependOn: [platform, identity_domain, identity_service, identity_public, identity_http]
   identity_public:
-    mayDependOn: [platform]
+    mayDependOn: [platform, identity_public]
   identity_events:
     # Subscriber creates repo records when tenant events arrive.
-    mayDependOn: [platform, identity_public, identity_repo]
+    mayDependOn: [platform, identity_public, identity_repo, identity_events]
 
   # --- Tenant ---
   tenant_repo:
-    mayDependOn: [platform, tenant_public]
+    mayDependOn: [platform, tenant_public, tenant_repo]
   tenant_service:
-    mayDependOn: [platform, tenant_repo, tenant_public, tenant_events]
+    mayDependOn: [platform, tenant_repo, tenant_public, tenant_events, tenant_service]
   tenant_http:
-    mayDependOn: [platform, tenant_service, tenant_public]
+    mayDependOn: [platform, tenant_service, tenant_public, tenant_http]
   tenant_public:
-    mayDependOn: [platform]
-  tenant_events:
     mayDependOn: [platform, tenant_public]
+  tenant_events:
+    mayDependOn: [platform, tenant_public, tenant_events]
 
   # --- POS ---
   # pos may use catalog_public and payment_public; never their internal layers.
@@ -157,14 +168,14 @@ deps:
   pos_repo:
     mayDependOn: [platform, pos_domain, pos_repo]
   pos_service:
-    mayDependOn: [platform, pos_domain, pos_repo, pos_public, catalog_public, payment_public]
+    mayDependOn: [platform, pos_domain, pos_repo, pos_public, catalog_public, payment_public, pos_service]
   pos_http:
-    mayDependOn: [platform, pos_domain, pos_service, pos_public, catalog_public]
+    mayDependOn: [platform, pos_domain, pos_service, pos_public, catalog_public, pos_http]
   pos_public:
     # pos_public exposes types built from pos_domain aggregates.
-    mayDependOn: [platform, pos_domain]
+    mayDependOn: [platform, pos_domain, pos_public]
   pos_events:
-    mayDependOn: [platform, pos_public]
+    mayDependOn: [platform, pos_public, pos_events]
   # ws.Hub is the kitchen WebSocket fan-out: it subscribes to pos's own NATS
   # events via platform/eventbus and reads order/check state via pos_service
   # (in-module — not cross-module — so pos_service, not just pos_public, is
@@ -177,15 +188,27 @@ deps:
   # --- Payment ---
   # payment must NOT import any pos or billing internals.
   payment_domain:
-    mayDependOn: [platform]
+    mayDependOn: [platform, payment_domain]
   payment_repo:
     mayDependOn: [platform, payment_domain, payment_repo]
   payment_service:
-    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public]
+    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public, payment_service]
+  # payment_fiscal is allowed here for ONE reason: the TokenX webhook endpoint
+  # is definitionally the vendor's inbound edge, so the transport layer must
+  # speak the vendor's wire format (tokenx.ParseWebhook / ParseLockEvent) to
+  # normalize a delivery before handing it to domain.FiscalResultSink. This is
+  # an in-module transport<->adapter edge and does NOT weaken the rules that
+  # matter: payment_http still may not reach payment_repo, and no cross-module
+  # internals are reachable from here.
   payment_http:
-    mayDependOn: [platform, payment_domain, payment_service, payment_public]
+    mayDependOn: [platform, payment_domain, payment_service, payment_public, payment_http, payment_fiscal]
   payment_public:
-    mayDependOn: [platform]
+    mayDependOn: [platform, payment_public]
+  # tokenx is the Token X Connect Cloud device adapter (ADR-FISCAL-002). As an
+  # adapter it implements ports declared in payment_domain and speaks the
+  # vendor wire format; it must never reach into repo, service or http.
+  payment_fiscal:
+    mayDependOn: [platform, payment_domain, payment_fiscal]
 
   # --- Inventory ---
   # inventory is independent; other modules may consume inventory_public (e.g. pos for stock checks).
@@ -194,26 +217,26 @@ deps:
   inventory_repo:
     mayDependOn: [platform, inventory_domain, inventory_repo]
   inventory_service:
-    mayDependOn: [platform, inventory_domain, inventory_repo, inventory_public]
+    mayDependOn: [platform, inventory_domain, inventory_repo, inventory_public, inventory_service]
   inventory_http:
-    mayDependOn: [platform, inventory_domain, inventory_service, inventory_public]
+    mayDependOn: [platform, inventory_domain, inventory_service, inventory_public, inventory_http]
   inventory_public:
-    mayDependOn: [platform]
+    mayDependOn: [platform, inventory_public]
 
   # --- Billing ---
   # billing adapters may use platform/integration for ProviderConfig scaffolding.
   billing_domain:
     mayDependOn: [platform, billing_domain]
   billing_adapter:
-    mayDependOn: [platform, billing_domain, platform_integration]
+    mayDependOn: [platform, billing_domain, platform_integration, billing_adapter]
   billing_repo:
     mayDependOn: [platform, billing_domain, billing_repo]
   billing_service:
-    mayDependOn: [platform, billing_domain, billing_repo, billing_public]
+    mayDependOn: [platform, billing_domain, billing_repo, billing_public, billing_service]
   billing_http:
-    mayDependOn: [platform, billing_domain, billing_service, billing_public]
+    mayDependOn: [platform, billing_domain, billing_service, billing_public, billing_http]
   billing_public:
-    mayDependOn: [platform, billing_domain]
+    mayDependOn: [platform, billing_domain, billing_public]
 
   # --- HR-Core ---
   hrcore_domain:
@@ -221,11 +244,11 @@ deps:
   hrcore_repo:
     mayDependOn: [platform, hrcore_domain, hrcore_repo]
   hrcore_service:
-    mayDependOn: [platform, hrcore_domain, hrcore_repo, hrcore_public]
+    mayDependOn: [platform, hrcore_domain, hrcore_repo, hrcore_public, hrcore_service]
   hrcore_http:
-    mayDependOn: [platform, hrcore_domain, hrcore_service, hrcore_public]
+    mayDependOn: [platform, hrcore_domain, hrcore_service, hrcore_public, hrcore_http]
   hrcore_public:
-    mayDependOn: [platform]
+    mayDependOn: [platform, hrcore_public]
 
   # --- Party ---
   party_domain:
@@ -233,11 +256,11 @@ deps:
   party_repo:
     mayDependOn: [platform, party_domain, party_repo]
   party_service:
-    mayDependOn: [platform, party_domain, party_repo, party_public]
+    mayDependOn: [platform, party_domain, party_repo, party_public, party_service]
   party_http:
-    mayDependOn: [platform, party_domain, party_service, party_public]
+    mayDependOn: [platform, party_domain, party_service, party_public, party_http]
   party_public:
-    mayDependOn: [platform, party_domain]
+    mayDependOn: [platform, party_domain, party_public]
 
   # --- Platform Integration ---
   platform_integration:
@@ -259,6 +282,6 @@ deps:
   # nothing" enforcement, without tripping that validator. Verified by
   # temporarily adding a platform import to edge-sync/domain: still flagged.
   edgesync_outbox:
-    mayDependOn: [edgesync_domain]
-  edgesync_sync:
     mayDependOn: [edgesync_domain, edgesync_outbox]
+  edgesync_sync:
+    mayDependOn: [edgesync_domain, edgesync_outbox, edgesync_sync]

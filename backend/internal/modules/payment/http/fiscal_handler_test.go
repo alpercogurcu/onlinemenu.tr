@@ -17,41 +17,40 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/payment/domain"
-	"onlinemenu.tr/internal/modules/payment/repo"
 	"onlinemenu.tr/internal/platform/auth"
 )
 
 // ─── Test doubles ───────────────────────────────────────────────────────────
 
-// fakeStore implements fiscalAdminStore. Unset hooks panic rather than return
+// fakeStore implements FiscalAdminStore. Unset hooks panic rather than return
 // zero values, so a test that reaches an unexpected call fails loudly instead
 // of asserting against a silently empty result.
 type fakeStore struct {
-	upsertTerminal   func(context.Context, repo.FiscalTerminal) (repo.FiscalTerminal, error)
-	listTerminals    func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalTerminal, error)
-	getTerminal      func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error)
-	updateTerminal   func(context.Context, uuid.UUID, uuid.UUID, repo.TerminalPatch) (repo.FiscalTerminal, error)
+	upsertTerminal   func(context.Context, domain.FiscalTerminal) (domain.FiscalTerminal, error)
+	listTerminals    func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalTerminal, error)
+	getTerminal      func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error)
+	updateTerminal   func(context.Context, uuid.UUID, uuid.UUID, domain.TerminalPatch) (domain.FiscalTerminal, error)
 	replaceSections  func(context.Context, uuid.UUID, uuid.UUID, []domain.DeviceSection) error
-	listSections     func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalDeviceSection, error)
-	listMappings     func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalSectionMapping, error)
-	replaceMappings  func(context.Context, uuid.UUID, uuid.UUID, []repo.FiscalSectionMapping) error
+	listSections     func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalDeviceSection, error)
+	listMappings     func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalSectionMapping, error)
+	replaceMappings  func(context.Context, uuid.UUID, uuid.UUID, []domain.FiscalSectionMapping) error
 	replaceSectionsN int
 	replaceMappingsN int
 }
 
-func (f *fakeStore) UpsertTerminal(ctx context.Context, t repo.FiscalTerminal) (repo.FiscalTerminal, error) {
+func (f *fakeStore) UpsertTerminal(ctx context.Context, t domain.FiscalTerminal) (domain.FiscalTerminal, error) {
 	return f.upsertTerminal(ctx, t)
 }
 
-func (f *fakeStore) ListTerminals(ctx context.Context, tenantID, branchID uuid.UUID) ([]repo.FiscalTerminal, error) {
+func (f *fakeStore) ListTerminals(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.FiscalTerminal, error) {
 	return f.listTerminals(ctx, tenantID, branchID)
 }
 
-func (f *fakeStore) GetTerminal(ctx context.Context, tenantID, id uuid.UUID) (repo.FiscalTerminal, error) {
+func (f *fakeStore) GetTerminal(ctx context.Context, tenantID, id uuid.UUID) (domain.FiscalTerminal, error) {
 	return f.getTerminal(ctx, tenantID, id)
 }
 
-func (f *fakeStore) UpdateTerminal(ctx context.Context, tenantID, id uuid.UUID, patch repo.TerminalPatch) (repo.FiscalTerminal, error) {
+func (f *fakeStore) UpdateTerminal(ctx context.Context, tenantID, id uuid.UUID, patch domain.TerminalPatch) (domain.FiscalTerminal, error) {
 	return f.updateTerminal(ctx, tenantID, id, patch)
 }
 
@@ -60,15 +59,15 @@ func (f *fakeStore) ReplaceSections(ctx context.Context, tenantID, terminalID uu
 	return f.replaceSections(ctx, tenantID, terminalID, s)
 }
 
-func (f *fakeStore) ListSections(ctx context.Context, tenantID, terminalID uuid.UUID) ([]repo.FiscalDeviceSection, error) {
+func (f *fakeStore) ListSections(ctx context.Context, tenantID, terminalID uuid.UUID) ([]domain.FiscalDeviceSection, error) {
 	return f.listSections(ctx, tenantID, terminalID)
 }
 
-func (f *fakeStore) ListSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID) ([]repo.FiscalSectionMapping, error) {
+func (f *fakeStore) ListSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.FiscalSectionMapping, error) {
 	return f.listMappings(ctx, tenantID, branchID)
 }
 
-func (f *fakeStore) ReplaceSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID, m []repo.FiscalSectionMapping) error {
+func (f *fakeStore) ReplaceSectionMappings(ctx context.Context, tenantID, branchID uuid.UUID, m []domain.FiscalSectionMapping) error {
 	f.replaceMappingsN++
 	return f.replaceMappings(ctx, tenantID, branchID, m)
 }
@@ -107,7 +106,7 @@ var (
 	testBranchID = uuid.MustParse("22222222-2222-2222-2222-222222222222")
 )
 
-func newFiscalHandler(store fiscalAdminStore, adapter domain.FiscalDeviceAdapter) *FiscalHandler {
+func newFiscalHandler(store FiscalAdminStore, adapter domain.FiscalDeviceAdapter) *FiscalHandler {
 	return &FiscalHandler{store: store, adapter: adapter, logger: zap.NewNop()}
 }
 
@@ -172,8 +171,8 @@ func TestParseQR(t *testing.T) {
 // ─── createTerminal ─────────────────────────────────────────────────────────
 
 func TestCreateTerminal_FromQR(t *testing.T) {
-	var got repo.FiscalTerminal
-	store := &fakeStore{upsertTerminal: func(_ context.Context, tr repo.FiscalTerminal) (repo.FiscalTerminal, error) {
+	var got domain.FiscalTerminal
+	store := &fakeStore{upsertTerminal: func(_ context.Context, tr domain.FiscalTerminal) (domain.FiscalTerminal, error) {
 		got = tr
 		tr.ID = uuid.New()
 		return tr, nil
@@ -200,8 +199,8 @@ func TestCreateTerminal_FromQR(t *testing.T) {
 }
 
 func TestCreateTerminal_ExplicitFields_DefaultsToInstantMode(t *testing.T) {
-	var got repo.FiscalTerminal
-	store := &fakeStore{upsertTerminal: func(_ context.Context, tr repo.FiscalTerminal) (repo.FiscalTerminal, error) {
+	var got domain.FiscalTerminal
+	store := &fakeStore{upsertTerminal: func(_ context.Context, tr domain.FiscalTerminal) (domain.FiscalTerminal, error) {
 		got = tr
 		return tr, nil
 	}}
@@ -219,8 +218,8 @@ func TestCreateTerminal_ExplicitFields_DefaultsToInstantMode(t *testing.T) {
 // TestCreateTerminal_QROverridesExplicitFields pins the documented precedence:
 // the QR is read off the physical device, so it cannot disagree with itself.
 func TestCreateTerminal_QROverridesExplicitFields(t *testing.T) {
-	var got repo.FiscalTerminal
-	store := &fakeStore{upsertTerminal: func(_ context.Context, tr repo.FiscalTerminal) (repo.FiscalTerminal, error) {
+	var got domain.FiscalTerminal
+	store := &fakeStore{upsertTerminal: func(_ context.Context, tr domain.FiscalTerminal) (domain.FiscalTerminal, error) {
 		got = tr
 		return tr, nil
 	}}
@@ -250,9 +249,9 @@ func TestCreateTerminal_ValidationErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &fakeStore{upsertTerminal: func(context.Context, repo.FiscalTerminal) (repo.FiscalTerminal, error) {
+			store := &fakeStore{upsertTerminal: func(context.Context, domain.FiscalTerminal) (domain.FiscalTerminal, error) {
 				t.Fatal("store must not be reached on a validation failure")
-				return repo.FiscalTerminal{}, nil
+				return domain.FiscalTerminal{}, nil
 			}}
 			h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 			rec := httptest.NewRecorder()
@@ -266,8 +265,8 @@ func TestCreateTerminal_ValidationErrors(t *testing.T) {
 // (vendor, terminal_serial) is globally unique so an inbound webhook resolves
 // to one tenant. A second tenant claiming the device must be told, not served.
 func TestCreateTerminal_SerialTakenByAnotherTenant(t *testing.T) {
-	store := &fakeStore{upsertTerminal: func(context.Context, repo.FiscalTerminal) (repo.FiscalTerminal, error) {
-		return repo.FiscalTerminal{}, repo.ErrTerminalSerialTaken
+	store := &fakeStore{upsertTerminal: func(context.Context, domain.FiscalTerminal) (domain.FiscalTerminal, error) {
+		return domain.FiscalTerminal{}, domain.ErrTerminalSerialTaken
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 
@@ -296,7 +295,7 @@ func TestListTerminals_RequiresBranchID(t *testing.T) {
 // return a bare JSON array (matching catalog's admin-facing convention), and an
 // empty result must serialize as [] so the admin UI can map over it directly.
 func TestListTerminals_EmptyIsArrayNotNull(t *testing.T) {
-	store := &fakeStore{listTerminals: func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalTerminal, error) {
+	store := &fakeStore{listTerminals: func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalTerminal, error) {
 		return nil, nil
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
@@ -312,10 +311,10 @@ func TestListTerminals_EmptyIsArrayNotNull(t *testing.T) {
 
 func TestUpdateTerminal_PatchPassesOnlyPresentFields(t *testing.T) {
 	terminalID := uuid.New()
-	var got repo.TerminalPatch
-	store := &fakeStore{updateTerminal: func(_ context.Context, _, _ uuid.UUID, p repo.TerminalPatch) (repo.FiscalTerminal, error) {
+	var got domain.TerminalPatch
+	store := &fakeStore{updateTerminal: func(_ context.Context, _, _ uuid.UUID, p domain.TerminalPatch) (domain.FiscalTerminal, error) {
 		got = p
-		return repo.FiscalTerminal{ID: terminalID, BasketMode: "list"}, nil
+		return domain.FiscalTerminal{ID: terminalID, BasketMode: "list"}, nil
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 
@@ -332,10 +331,10 @@ func TestUpdateTerminal_PatchPassesOnlyPresentFields(t *testing.T) {
 // TestUpdateTerminal_ClearLabelIsDistinctFromAbsent proves the *string encoding
 // carries "set to empty" apart from "don't touch".
 func TestUpdateTerminal_ClearLabelIsDistinctFromAbsent(t *testing.T) {
-	var got repo.TerminalPatch
-	store := &fakeStore{updateTerminal: func(_ context.Context, _, _ uuid.UUID, p repo.TerminalPatch) (repo.FiscalTerminal, error) {
+	var got domain.TerminalPatch
+	store := &fakeStore{updateTerminal: func(_ context.Context, _, _ uuid.UUID, p domain.TerminalPatch) (domain.FiscalTerminal, error) {
 		got = p
-		return repo.FiscalTerminal{}, nil
+		return domain.FiscalTerminal{}, nil
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 
@@ -365,8 +364,8 @@ func TestUpdateTerminal_Errors(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		store := &fakeStore{updateTerminal: func(context.Context, uuid.UUID, uuid.UUID, repo.TerminalPatch) (repo.FiscalTerminal, error) {
-			return repo.FiscalTerminal{}, repo.ErrTerminalNotFound
+		store := &fakeStore{updateTerminal: func(context.Context, uuid.UUID, uuid.UUID, domain.TerminalPatch) (domain.FiscalTerminal, error) {
+			return domain.FiscalTerminal{}, domain.ErrTerminalNotFound
 		}}
 		h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 		rec := httptest.NewRecorder()
@@ -380,9 +379,9 @@ func TestUpdateTerminal_Errors(t *testing.T) {
 // TestSyncSections_AdapterWithoutCapability_Returns501 covers the branch that
 // neither shipping adapter can reach.
 func TestSyncSections_AdapterWithoutCapability_Returns501(t *testing.T) {
-	store := &fakeStore{getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error) {
+	store := &fakeStore{getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error) {
 		t.Fatal("capability must be checked before any DB access")
-		return repo.FiscalTerminal{}, nil
+		return domain.FiscalTerminal{}, nil
 	}}
 	h := newFiscalHandler(store, nonSyncingAdapter{})
 
@@ -396,8 +395,8 @@ func TestSyncSections_MockAdapter_ReplacesAndReturnsSections(t *testing.T) {
 	terminalID := uuid.New()
 	var written []domain.DeviceSection
 	store := &fakeStore{
-		getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error) {
-			return repo.FiscalTerminal{ID: terminalID, TenantID: testTenantID, TerminalSerial: "AV1"}, nil
+		getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error) {
+			return domain.FiscalTerminal{ID: terminalID, TenantID: testTenantID, TerminalSerial: "AV1"}, nil
 		},
 		replaceSections: func(_ context.Context, tenantID, tid uuid.UUID, s []domain.DeviceSection) error {
 			assert.Equal(t, testTenantID, tenantID)
@@ -405,8 +404,8 @@ func TestSyncSections_MockAdapter_ReplacesAndReturnsSections(t *testing.T) {
 			written = s
 			return nil
 		},
-		listSections: func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalDeviceSection, error) {
-			return []repo.FiscalDeviceSection{{SectionNo: 2, Name: "KDV %10", TaxPermyriad: 1000}}, nil
+		listSections: func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalDeviceSection, error) {
+			return []domain.FiscalDeviceSection{{SectionNo: 2, Name: "KDV %10", TaxPermyriad: 1000}}, nil
 		},
 	}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
@@ -438,8 +437,8 @@ func TestSyncSections_DevicePreservedOnFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeStore{
-				getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error) {
-					return repo.FiscalTerminal{ID: uuid.New(), TerminalSerial: "AV1"}, nil
+				getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error) {
+					return domain.FiscalTerminal{ID: uuid.New(), TerminalSerial: "AV1"}, nil
 				},
 				replaceSections: func(context.Context, uuid.UUID, uuid.UUID, []domain.DeviceSection) error {
 					t.Fatal("stored sections must not be replaced when the sync fails")
@@ -458,8 +457,8 @@ func TestSyncSections_DevicePreservedOnFailure(t *testing.T) {
 }
 
 func TestSyncSections_UnknownTerminal_Returns404(t *testing.T) {
-	store := &fakeStore{getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error) {
-		return repo.FiscalTerminal{}, repo.ErrTerminalNotFound
+	store := &fakeStore{getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error) {
+		return domain.FiscalTerminal{}, domain.ErrTerminalNotFound
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 
@@ -472,8 +471,8 @@ func TestSyncSections_UnknownTerminal_Returns404(t *testing.T) {
 // ─── listSections ───────────────────────────────────────────────────────────
 
 func TestListSections_UnknownTerminal_Returns404(t *testing.T) {
-	store := &fakeStore{getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error) {
-		return repo.FiscalTerminal{}, repo.ErrTerminalNotFound
+	store := &fakeStore{getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error) {
+		return domain.FiscalTerminal{}, domain.ErrTerminalNotFound
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 
@@ -485,11 +484,11 @@ func TestListSections_UnknownTerminal_Returns404(t *testing.T) {
 
 func TestListSections_OK(t *testing.T) {
 	store := &fakeStore{
-		getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (repo.FiscalTerminal, error) {
-			return repo.FiscalTerminal{ID: uuid.New()}, nil
+		getTerminal: func(context.Context, uuid.UUID, uuid.UUID) (domain.FiscalTerminal, error) {
+			return domain.FiscalTerminal{ID: uuid.New()}, nil
 		},
-		listSections: func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalDeviceSection, error) {
-			return []repo.FiscalDeviceSection{{SectionNo: 1, Name: "KDV %1", TaxPermyriad: 100}}, nil
+		listSections: func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalDeviceSection, error) {
+			return []domain.FiscalDeviceSection{{SectionNo: 1, Name: "KDV %1", TaxPermyriad: 100}}, nil
 		},
 	}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
@@ -516,8 +515,8 @@ func TestListSectionMappings_RequiresBranchID(t *testing.T) {
 
 func TestListSectionMappings_BareArrayShape(t *testing.T) {
 	categoryID := uuid.New()
-	store := &fakeStore{listMappings: func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalSectionMapping, error) {
-		return []repo.FiscalSectionMapping{{CategoryID: categoryID, SectionNo: 2}}, nil
+	store := &fakeStore{listMappings: func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalSectionMapping, error) {
+		return []domain.FiscalSectionMapping{{CategoryID: categoryID, SectionNo: 2}}, nil
 	}}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
 
@@ -530,16 +529,16 @@ func TestListSectionMappings_BareArrayShape(t *testing.T) {
 
 func TestReplaceSectionMappings_FullReplace(t *testing.T) {
 	catA, catB := uuid.New(), uuid.New()
-	var got []repo.FiscalSectionMapping
+	var got []domain.FiscalSectionMapping
 	store := &fakeStore{
-		replaceMappings: func(_ context.Context, tenantID, branchID uuid.UUID, m []repo.FiscalSectionMapping) error {
+		replaceMappings: func(_ context.Context, tenantID, branchID uuid.UUID, m []domain.FiscalSectionMapping) error {
 			assert.Equal(t, testTenantID, tenantID)
 			assert.Equal(t, testBranchID, branchID)
 			got = m
 			return nil
 		},
-		listMappings: func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalSectionMapping, error) {
-			return []repo.FiscalSectionMapping{{CategoryID: catA, SectionNo: 1}, {CategoryID: catB, SectionNo: 2}}, nil
+		listMappings: func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalSectionMapping, error) {
+			return []domain.FiscalSectionMapping{{CategoryID: catA, SectionNo: 1}, {CategoryID: catB, SectionNo: 2}}, nil
 		},
 	}
 	h := newFiscalHandler(store, domain.MockFiscalAdapter{})
@@ -562,11 +561,11 @@ func TestReplaceSectionMappings_FullReplace(t *testing.T) {
 // a legitimate "unmap everything", not a no-op.
 func TestReplaceSectionMappings_EmptyClearsBranch(t *testing.T) {
 	store := &fakeStore{
-		replaceMappings: func(_ context.Context, _, _ uuid.UUID, m []repo.FiscalSectionMapping) error {
+		replaceMappings: func(_ context.Context, _, _ uuid.UUID, m []domain.FiscalSectionMapping) error {
 			assert.Empty(t, m)
 			return nil
 		},
-		listMappings: func(context.Context, uuid.UUID, uuid.UUID) ([]repo.FiscalSectionMapping, error) {
+		listMappings: func(context.Context, uuid.UUID, uuid.UUID) ([]domain.FiscalSectionMapping, error) {
 			return nil, nil
 		},
 	}
@@ -613,7 +612,7 @@ func TestReplaceSectionMappings_ValidationErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &fakeStore{replaceMappings: func(context.Context, uuid.UUID, uuid.UUID, []repo.FiscalSectionMapping) error {
+			store := &fakeStore{replaceMappings: func(context.Context, uuid.UUID, uuid.UUID, []domain.FiscalSectionMapping) error {
 				t.Fatal("store must not be reached on a validation failure")
 				return nil
 			}}
@@ -638,7 +637,7 @@ func TestTerminalResponse_WireContract(t *testing.T) {
 	id, tenantID, branchID := uuid.New(), uuid.New(), uuid.New()
 	created := time.Date(2026, 7, 10, 9, 30, 0, 0, time.UTC)
 
-	raw, err := json.Marshal(toTerminalResponse(repo.FiscalTerminal{
+	raw, err := json.Marshal(toTerminalResponse(domain.FiscalTerminal{
 		ID: id, TenantID: tenantID, BranchID: branchID,
 		Vendor: "tokenx", TerminalSerial: "AV0000000658",
 		VendorMerchantRef: "M1", VendorBranchRef: "B1",
@@ -663,7 +662,7 @@ func TestTerminalResponse_WireContract(t *testing.T) {
 }
 
 func TestSectionResponse_WireContract(t *testing.T) {
-	raw, err := json.Marshal(toSectionResponses([]repo.FiscalDeviceSection{
+	raw, err := json.Marshal(toSectionResponses([]domain.FiscalDeviceSection{
 		{SectionNo: 2, Name: "KDV %10", TaxPermyriad: 1000, SyncedAt: time.Date(2026, 7, 10, 9, 30, 0, 0, time.UTC)},
 	}))
 	require.NoError(t, err)

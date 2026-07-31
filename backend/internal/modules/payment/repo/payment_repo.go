@@ -15,7 +15,7 @@ import (
 )
 
 // ErrNotFound is returned when a payment row is not found.
-var ErrNotFound = errors.New("payment/repo: not found")
+var ErrNotFound = domain.ErrNotFound
 
 // ErrDuplicateIdempotencyKey is returned when the idempotency key already exists.
 var ErrDuplicateIdempotencyKey = errors.New("payment/repo: duplicate idempotency key")

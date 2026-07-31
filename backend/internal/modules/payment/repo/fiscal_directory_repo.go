@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"onlinemenu.tr/internal/modules/payment/fiscal/tokenx"
+	"onlinemenu.tr/internal/modules/payment/domain"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -22,17 +22,17 @@ var (
 )
 
 // FiscalTerminalDirectory resolves which Token terminal serves a branch.
-// It implements tokenx.TerminalResolver.
+// It implements domain.TerminalResolver.
 type FiscalTerminalDirectory struct{ db *db.Pool }
 
 func NewFiscalTerminalDirectory(pool *db.Pool) *FiscalTerminalDirectory {
 	return &FiscalTerminalDirectory{db: pool}
 }
 
-var _ tokenx.TerminalResolver = (*FiscalTerminalDirectory)(nil)
+var _ domain.TerminalResolver = (*FiscalTerminalDirectory)(nil)
 
-func (d *FiscalTerminalDirectory) Resolve(ctx context.Context, tenantID, branchID uuid.UUID) (tokenx.TerminalRef, error) {
-	var ref tokenx.TerminalRef
+func (d *FiscalTerminalDirectory) Resolve(ctx context.Context, tenantID, branchID uuid.UUID) (domain.TerminalRef, error) {
+	var ref domain.TerminalRef
 	err := d.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		// Oldest active registration wins so the pick is deterministic when a
 		// branch runs several devices; the basket still reaches every terminal
@@ -52,24 +52,24 @@ func (d *FiscalTerminalDirectory) Resolve(ctx context.Context, tenantID, branchI
 			}
 			return fmt.Errorf("payment/repo: resolve terminal: %w", err)
 		}
-		ref.Mode = tokenx.BasketMode(mode)
+		ref.Mode = domain.BasketMode(mode)
 		return nil
 	})
 	if err != nil {
-		return tokenx.TerminalRef{}, err
+		return domain.TerminalRef{}, err
 	}
 	return ref, nil
 }
 
 // FiscalSectionDirectory resolves a catalog category to the device section and
-// its tax rate. It implements tokenx.SectionResolver.
+// its tax rate. It implements domain.SectionResolver.
 type FiscalSectionDirectory struct{ db *db.Pool }
 
 func NewFiscalSectionDirectory(pool *db.Pool) *FiscalSectionDirectory {
 	return &FiscalSectionDirectory{db: pool}
 }
 
-var _ tokenx.SectionResolver = (*FiscalSectionDirectory)(nil)
+var _ domain.SectionResolver = (*FiscalSectionDirectory)(nil)
 
 func (d *FiscalSectionDirectory) Resolve(ctx context.Context, tenantID, branchID, categoryID uuid.UUID) (int, int, error) {
 	var sectionNo, taxPermyriad int

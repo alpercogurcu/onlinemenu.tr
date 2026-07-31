@@ -360,13 +360,8 @@ func nullableJSON(b []byte) *string {
 	return &s
 }
 
-// SubmissionRouting is the tenant/payment identity a vendor webhook needs to
-// enrich its result before it can reach the sink.
-type SubmissionRouting struct {
-	TenantID  uuid.UUID
-	BranchID  uuid.UUID
-	PaymentID uuid.UUID
-}
+// SubmissionRouting moved to payment/domain (see domain/fiscal_admin.go).
+type SubmissionRouting = domain.SubmissionRouting
 
 // GetRouting resolves a submission id to its owning tenant, branch and
 // payment. A vendor webhook carries only the basketID (= submission id) and no

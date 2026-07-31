@@ -5,32 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"onlinemenu.tr/internal/modules/payment/domain"
 )
-
-// SectionResolver maps a catalog category to a device section (kısım).
-// Implementations read the tenant's synchronized fiscal_section_mappings; the
-// adapter never guesses a sectionNo, because a wrong section means a wrong tax
-// rate on a legal receipt (ADR-FISCAL-002 §2).
-type SectionResolver interface {
-	Resolve(ctx context.Context, tenantID, branchID, categoryID uuid.UUID) (sectionNo int, taxPermyriad int, err error)
-}
-
-// TerminalRef identifies where a basket must be delivered. VendorBranchRef is
-// Token's branch id used as the branch-id header in list mode; it varies per
-// basket and therefore comes from the resolver, never from static config.
-type TerminalRef struct {
-	Serial          string
-	VendorBranchRef string
-	Mode            BasketMode
-}
-
-// TerminalResolver picks the terminal that serves a branch.
-type TerminalResolver interface {
-	Resolve(ctx context.Context, tenantID, branchID uuid.UUID) (TerminalRef, error)
-}
 
 // currencyTRY is the only currency a Turkish fiscal device registers.
 const currencyTRY = "TRY"

@@ -1,20 +1,28 @@
 package http
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/payment/domain"
 	"onlinemenu.tr/internal/modules/payment/fiscal/tokenx"
-	"onlinemenu.tr/internal/modules/payment/repo"
 	"onlinemenu.tr/internal/platform/db"
 )
+
+// fiscalRoutingStore is the only persistence the webhook needs: resolving a
+// vendor basketID back to its owning tenant/branch/payment. Declared at the
+// point of use so the transport layer does not depend on repo.
+type fiscalRoutingStore interface {
+	GetRouting(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.SubmissionRouting, error)
+}
 
 // maxWebhookBody caps the request body; real Token payloads are a few KB.
 const maxWebhookBody = 1 << 20
@@ -33,13 +41,13 @@ const WebhookPathPrefix = "/webhooks/fiscal/tokenx/"
 // replayed or duplicated delivery is harmless.
 type TokenXWebhookHandler struct {
 	db     *db.Pool
-	subs   *repo.FiscalSubmissionRepo
+	subs   fiscalRoutingStore
 	sink   domain.FiscalResultSink
 	secret string
 	logger *zap.Logger
 }
 
-func NewTokenXWebhookHandler(pool *db.Pool, subs *repo.FiscalSubmissionRepo, sink domain.FiscalResultSink, secret string, logger *zap.Logger) *TokenXWebhookHandler {
+func NewTokenXWebhookHandler(pool *db.Pool, subs fiscalRoutingStore, sink domain.FiscalResultSink, secret string, logger *zap.Logger) *TokenXWebhookHandler {
 	return &TokenXWebhookHandler{db: pool, subs: subs, sink: sink, secret: secret, logger: logger}
 }
 
@@ -119,14 +127,14 @@ func (h *TokenXWebhookHandler) handleCompleted(w http.ResponseWriter, r *http.Re
 
 	// The webhook carries only the basketID; recover the owning tenant and
 	// payment from our own submission record before touching any state.
-	var routing repo.SubmissionRouting
+	var routing domain.SubmissionRouting
 	ctx := r.Context()
 	err = h.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		routing, err = h.subs.GetRouting(ctx, tx, res.SubmissionID)
 		return err
 	})
-	if errors.Is(err, repo.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		// Not ours (another environment sharing the credentials, or a stale
 		// basket). Acknowledge so the vendor stops retrying.
 		h.logger.Warn("payment: tokenx webhook for unknown submission",

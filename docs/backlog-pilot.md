@@ -185,9 +185,28 @@ modülde. Karşılaştırma: payment 6082/7570, pos 3914/4077.
 `docs/lessons-from-b2b.md`'nin tam olarak önlemek için yazıldığı hata: *"Casbin RBAC init
 ediliyordu → middleware 0 route'a bağlıydı."*
 
-- [ ] **CI testi:** `role_permissions`'daki her `(resource, action)` için kodda en az bir
-      `permit(...)` çağrı yeri olduğunu doğrula; olmayanda **kır**. Not değil, test
+- [x] **CI testi yazıldı** (`fced7bc`, `platform/auth/permission_wiring_test.go`). Doğrulama grep
+      değil, gerçek OPA motoru + derlenmiş rego bundle'ı. Üç yönde kırılıyor: sınıflandırılmamış yeni
+      seed izni, kapandığı hâlde baseline'da kalan boşluk, ve zorlandığı iddia edilip OPA'da
+      reddedilen izin. 13 çift "zorlanıyor", 10 çift gerekçeli baseline'da
 - [ ] Yönetici onayı akışı (`checks:approve`) — ikram/iskonto/iptal, sunucuda zorlanan
+
+### Testin ilk gününde bulduğu iki gerçek sapma
+
+Kasa oturumu ve yönetici onayı gibi "henüz yapılmadı" boşluklarından **farklı** bir sınıf: burada
+kod ve policy var, ama seed'in verdiği rolle OPA'nın izin verdiği rol **uyuşmuyor**. İkisi de
+doğrulandı, ikisi de pilotu bloklamıyor.
+
+- [ ] **`driver` rolü hiçbir şey yapamıyor.** Seed `orders:read` + `orders:update` veriyor
+      (`000006`, satır 72-73) ama `authz.rego`'da **hiçbir `allow` kuralı** `driver` içermiyor —
+      `pos_counter_actions` `{cashier, shift_manager}`, `pos_kitchen_actions` `{kitchen, bar}`.
+      Rego'da `driver` yalnız **scope** kuralında (satır 277) geçiyor, o da ancak bir allow
+      tetiklendikten sonra devreye giriyor; yani şoför için ölü kod.
+      Karar: teslimat akışı geldiğinde allow yazılacak mı, yoksa seed satırları mı düşecek?
+- [ ] **`kitchen`/`bar` `inventory:read` alıyor ama kullanamıyor.** Seed veriyor (`000006`,
+      satır 81 ve 89); `inventory.level.read` ise `inventory_management_actions` içinde ve
+      ADR-DATA-005 İlke 4 gereği manager/warehouse'a kapalı. Burada **seed yanlış görünüyor** —
+      ADR bilinçli olarak dar tutuyor. Muhtemel çözüm: seed satırlarını kaldırmak.
 
 Bu madde 3'ten **önce** yapılmalı: kasa oturumu `shifts:*` izinlerini kullanacak, test önce
 konursa yanlış izin adı uydurulması engellenir.

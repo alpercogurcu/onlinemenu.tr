@@ -19,10 +19,14 @@ import (
 	"onlinemenu.tr/internal/platform/auth"
 )
 
-// shiftManagerRoleID is the system role that holds shifts:create/update in the
-// seed migration (identity/000006_seed_system_roles.up.sql) — the only role
-// authz.rego grants any payment.cash_session.* write action to.
-const shiftManagerRoleID = "00000001-0000-0000-0000-000000000002"
+// System role ids from identity/000006_seed_system_roles.up.sql. cashier and
+// shift_manager both hold the full cash session lifecycle (shifts:create and
+// shifts:update were widened to cashier in identity/000014); kitchen holds no
+// shifts permission at all and serves as the negative control.
+const (
+	shiftManagerRoleID = "00000001-0000-0000-0000-000000000002"
+	kitchenRoleID      = "00000001-0000-0000-0000-000000000004"
+)
 
 func newCashSessionService() *service.CashSessionService {
 	return service.NewCashSessionService(service.CashSessionParams{
@@ -70,35 +74,49 @@ func cashierPrincipalFor(branchID uuid.UUID) auth.Principal {
 }
 
 // ---------------------------------------------------------------------------
-// Authorization: seed dictionary grants cashier read-only, shift_manager
-// read+write (see permission_wiring_test.go's {shifts,*} registry entries and
-// authz.rego's cash_session_write_actions block).
+// Authorization: cashier and shift_manager both hold the full cash session
+// lifecycle. identity/000014 widened shifts:create+update to the cashier —
+// the person who actually counts the drawer — because requiring a
+// shift_manager for every open/close makes the feature unusable in the
+// single-till restaurant ADR-DATA-008 targets.
+//
+// Manager approval of a NON-ZERO difference is a separate control and is not
+// asserted here; it does not exist yet (see docs/backlog-pilot.md).
 // ---------------------------------------------------------------------------
 
-func TestCashSessionOPA_CashierReadOnly_ShiftManagerReadWrite(t *testing.T) {
+func TestCashSessionOPA_CashierAndShiftManagerHoldFullLifecycle(t *testing.T) {
 	branch := uuid.New()
-	writeActions := []string{
+	actions := []string{
+		"payment.cash_session.read",
 		"payment.cash_session.open",
 		"payment.cash_session.movement",
 		"payment.cash_session.submit_closing",
 		"payment.cash_session.close",
 	}
 
-	for _, action := range writeActions {
-		t.Run("cashier denied "+action, func(t *testing.T) {
+	for _, action := range actions {
+		t.Run("cashier allowed "+action, func(t *testing.T) {
 			_, reached := cashSessionScopedCtx(t, cashierPrincipalFor(branch), action)
-			assert.False(t, reached, "cashier must not hold %s — the seed grants shifts:create/update to shift_manager only", action)
+			assert.True(t, reached, "cashier must hold %s — they count their own drawer (identity/000014)", action)
 		})
 		t.Run("shift_manager allowed "+action, func(t *testing.T) {
 			_, reached := cashSessionScopedCtx(t, shiftManagerPrincipal(branch), action)
-			assert.True(t, reached, "shift_manager must hold %s per the seeded shifts:create/update rows", action)
+			assert.True(t, reached, "shift_manager must hold %s per the seeded shifts rows", action)
 		})
 	}
+}
 
-	_, reached := cashSessionScopedCtx(t, cashierPrincipalFor(branch), "payment.cash_session.read")
-	assert.True(t, reached, "cashier holds shifts:read per the seed")
-	_, reached = cashSessionScopedCtx(t, shiftManagerPrincipal(branch), "payment.cash_session.read")
-	assert.True(t, reached, "shift_manager also holds shifts:read per the seed")
+// TestCashSessionOPA_KitchenDeniedEntirely is the negative control: widening
+// the write actions to the cashier must not have opened them to every
+// branch-scoped role.
+func TestCashSessionOPA_KitchenDeniedEntirely(t *testing.T) {
+	branch := uuid.New()
+	for _, action := range []string{"payment.cash_session.read", "payment.cash_session.open", "payment.cash_session.close"} {
+		t.Run("kitchen denied "+action, func(t *testing.T) {
+			_, reached := cashSessionScopedCtx(t, staffPrincipal(branch, kitchenRoleID), action)
+			assert.False(t, reached, "kitchen holds no shifts permission in the seed")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

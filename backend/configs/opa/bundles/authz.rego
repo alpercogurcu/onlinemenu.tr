@@ -298,9 +298,16 @@ cash_session_write_actions := {
 	"payment.cash_session.close",
 }
 
+# The cashier counts their own drawer: open, in-shift cash in/out, closing
+# count and close are all theirs (identity/000014 grants shifts:create+update
+# to cashier to match). Requiring a shift_manager for every open/close makes
+# the feature unusable in the single-till restaurant ADR-DATA-008 targets.
+# Manager approval of a NON-ZERO difference is a separate control and is not
+# expressed here — the audit trail (who opened, who counted, who closed, every
+# movement with actor and timestamp) is today's control.
 allow if {
 	input.action in cash_session_write_actions
-	has_role("shift_manager")
+	any_role({"cashier", "shift_manager"})
 }
 
 # -- Scope resolution for non-manager allows above: branch-scoped, since cashier/

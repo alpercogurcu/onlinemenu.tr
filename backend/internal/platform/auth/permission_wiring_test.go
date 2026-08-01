@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"testing"
@@ -60,6 +61,10 @@ import (
 // opa_test.go ("../../../configs/opa/bundles" -> backend/configs/...).
 const seedMigrationPath = "../../../migrations/identity/000006_seed_system_roles.up.sql"
 
+// identityMigrationsGlob covers every identity up-migration, because grants are
+// not confined to the original seed file (identity/000014 added some).
+const identityMigrationsGlob = "../../../migrations/identity/*.up.sql"
+
 // seedRoleUUIDs mirrors systemRoleUUID's table (opa_test.go) but keyed the
 // other way around: UUID string -> system_key. Both tables must be kept in
 // sync with identity/000006_seed_system_roles.up.sql by construction, since
@@ -71,6 +76,10 @@ var seedRoleUUIDs = map[string]string{
 	"00000001-0000-0000-0000-000000000004": "kitchen",
 	"00000001-0000-0000-0000-000000000005": "bar",
 	"00000001-0000-0000-0000-000000000006": "manager",
+	// warehouse is seeded separately, in identity/000010_seed_warehouse_role.
+	// Its grants were invisible to this guard until the parser was widened to
+	// scan every identity up-migration rather than only 000006.
+	"00000001-0000-0000-0000-000000000007": "warehouse",
 }
 
 // permissionPair is a (resource, action) column pair as seeded into
@@ -208,20 +217,19 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 	{"shifts", "read"}: {
 		Wired: true, CheckRole: "cashier", CheckAction: "payment.cash_session.read",
 	},
+	// CheckRole is deliberately "cashier" for the write actions: identity/000014
+	// widened shifts:create+update from shift_manager-only to the cashier who
+	// actually counts the drawer. Asserting the cashier proves the weaker of the
+	// two holders is allowed — if that passes, shift_manager necessarily does too.
 	{"shifts", "create"}: {
-		Wired: true, CheckRole: "shift_manager", CheckAction: "payment.cash_session.open",
+		Wired: true, CheckRole: "cashier", CheckAction: "payment.cash_session.open",
 		Reason: "seed 'create' == opening a cash session (payment.cash_session.open).",
 	},
 	{"shifts", "update"}: {
-		Wired: true, CheckRole: "shift_manager", CheckAction: "payment.cash_session.close",
+		Wired: true, CheckRole: "cashier", CheckAction: "payment.cash_session.close",
 		Reason: "seed 'update' covers the cash session lifecycle mutations " +
 			"payment.cash_session.movement / payment.cash_session.submit_closing / " +
-			"payment.cash_session.close; evidenced via close. NOTE: the seed grants " +
-			"shifts:create/update to shift_manager only — cashier holds shifts:read " +
-			"alone, so a cashier can see the open session but cannot open one, " +
-			"record a movement, submit a closing count, or close it. Flagged as a " +
-			"seed/policy question for product review (a real till usually has the " +
-			"cashier count their own drawer), not fixed here.",
+			"payment.cash_session.close; evidenced via close.",
 	},
 
 	// -- staff --------------------------------------------------------------
@@ -254,6 +262,42 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 			"a zero-enforcement gap, but it still means the seeded grant is " +
 			"unusable for its actual holders, so it is tracked here the same way.",
 	},
+
+	// -- warehouse (identity/000010_seed_warehouse_role) -----------------------
+	// These 14 pairs were invisible to this guard until the parser was widened
+	// to scan every identity up-migration instead of only 000006 — the whole
+	// warehouse role had never been checked. All of them resolve to actions in
+	// authz.rego's inventory_management_actions set, which grants `warehouse`
+	// wholesale (ADR-DATA-005 İlke 4), so all are genuinely enforced.
+	//
+	// The seed's coarse `update` maps to the lifecycle verb a depo operator
+	// actually performs, matching the {checks,update}/{orders,update} pattern
+	// above: transfer_orders -> submit, shipments -> advance.
+	{"stock_items", "read"}:     {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.stock_item.read"},
+	{"stock_items", "create"}:   {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.stock_item.create"},
+	{"stock_items", "update"}:   {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.stock_item.update"},
+	{"warehouses", "read"}:      {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.warehouse.read"},
+	{"warehouses", "update"}:    {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.warehouse.update"},
+	{"stock_levels", "read"}:    {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.level.read"},
+	{"stock_movements", "read"}: {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.movement.read"},
+	{"stock_movements", "create"}: {
+		Wired: true, CheckRole: "warehouse", CheckAction: "inventory.movement.create",
+	},
+	{"transfer_orders", "read"}: {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.transfer_order.read"},
+	{"transfer_orders", "create"}: {
+		Wired: true, CheckRole: "warehouse", CheckAction: "inventory.transfer_order.create",
+	},
+	{"transfer_orders", "update"}: {
+		Wired: true, CheckRole: "warehouse", CheckAction: "inventory.transfer_order.submit",
+		Reason: "seed 'update' covers the BTO lifecycle verbs (submit/approve/" +
+			"reject/cancel/fulfil); evidenced via submit.",
+	},
+	{"shipments", "read"}:   {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.shipment.read"},
+	{"shipments", "create"}: {Wired: true, CheckRole: "warehouse", CheckAction: "inventory.shipment.create"},
+	{"shipments", "update"}: {
+		Wired: true, CheckRole: "warehouse", CheckAction: "inventory.shipment.advance",
+		Reason: "seed 'update' covers advance/receive/cancel; evidenced via advance.",
+	},
 }
 
 // seedPermissionRowRe matches a single VALUES row inside an
@@ -277,34 +321,61 @@ type parsedSeedRow struct {
 	Action   string
 }
 
-// parseSeedRolePermissions reads and parses
-// identity/000006_seed_system_roles.up.sql's role_permissions INSERT
-// statements. It is deliberately a small regex scan, not a SQL parser —
-// proportionate for a fixed, hand-written seed file (same tradeoff
-// scripts/lint_sql_rules.sh makes for its own textual invariants).
+// seedRevocationRe catches an up-migration that REMOVES grants. The parser
+// below is purely additive — it unions every INSERT it finds — so a revocation
+// would leave it believing a role still holds a pair it no longer has. Rather
+// than model deletion (and get it subtly wrong), fail loudly and make whoever
+// wrote the revocation extend this parser deliberately.
+var seedRevocationRe = regexp.MustCompile(`(?is)(DELETE\s+FROM|TRUNCATE)\s+role_permissions\b`)
+
+// parseSeedRolePermissions reads and parses the role_permissions INSERT
+// statements out of EVERY identity up-migration, not just the original seed.
+// Scanning only 000006 would make this guard blind to any later migration that
+// grants a permission — precisely the drift it exists to catch (identity/000014
+// was the first such migration).
+//
+// It is deliberately a small regex scan, not a SQL parser — proportionate for
+// fixed, hand-written migration files (the same tradeoff
+// scripts/lint_sql_rules.sh makes for its own textual invariants). The cost is
+// that grants must be written as literal (role_id, NULL, resource, action)
+// tuples to be visible here; 000014 documents that requirement at its INSERT.
 func parseSeedRolePermissions(t *testing.T) []parsedSeedRow {
 	t.Helper()
 
-	raw, err := os.ReadFile(seedMigrationPath)
-	require.NoError(t, err, "read seed migration %s", seedMigrationPath)
-
-	blocks := seedRolePermissionBlockRe.FindAllString(string(raw), -1)
-	require.NotEmpty(t, blocks, "no 'INSERT INTO role_permissions' statements found in %s — "+
-		"has the seed migration been renamed or restructured?", seedMigrationPath)
+	files, err := filepath.Glob(identityMigrationsGlob)
+	require.NoError(t, err, "glob identity migrations %s", identityMigrationsGlob)
+	require.NotEmpty(t, files, "no identity up-migrations matched %s", identityMigrationsGlob)
+	sort.Strings(files)
 
 	var rows []parsedSeedRow
-	for _, block := range blocks {
-		for _, m := range seedPermissionRowRe.FindAllStringSubmatch(block, -1) {
-			roleUUID, resource, action := m[1], m[2], m[3]
-			roleKey, ok := seedRoleUUIDs[roleUUID]
-			require.True(t, ok,
-				"role_permissions row references role_id %s which is not in "+
-					"seedRoleUUIDs — a new system role was seeded and this test's "+
-					"role table needs updating", roleUUID)
-			rows = append(rows, parsedSeedRow{RoleKey: roleKey, Resource: resource, Action: action})
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		require.NoError(t, err, "read migration %s", file)
+		text := string(raw)
+
+		blocks := seedRolePermissionBlockRe.FindAllString(text, -1)
+		if len(blocks) == 0 {
+			continue
+		}
+
+		require.False(t, seedRevocationRe.MatchString(text),
+			"%s revokes role_permissions rows; parseSeedRolePermissions only unions "+
+				"INSERTs and would report grants that no longer exist. Teach it to "+
+				"model revocation before shipping this migration.", file)
+
+		for _, block := range blocks {
+			for _, m := range seedPermissionRowRe.FindAllStringSubmatch(block, -1) {
+				roleUUID, resource, action := m[1], m[2], m[3]
+				roleKey, ok := seedRoleUUIDs[roleUUID]
+				require.True(t, ok,
+					"%s: role_permissions row references role_id %s which is not in "+
+						"seedRoleUUIDs — a new system role was seeded and this test's "+
+						"role table needs updating", file, roleUUID)
+				rows = append(rows, parsedSeedRow{RoleKey: roleKey, Resource: resource, Action: action})
+			}
 		}
 	}
-	require.NotEmpty(t, rows, "parsed zero role_permissions rows out of %s — regex likely stale", seedMigrationPath)
+	require.NotEmpty(t, rows, "parsed zero role_permissions rows out of %s — regex likely stale", identityMigrationsGlob)
 	return rows
 }
 

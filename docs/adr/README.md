@@ -24,6 +24,7 @@ Mimari Karar Kayıtları (Architecture Decision Records). Her karar kendi dosyas
 |---|---|---|
 | [AUTH-001](AUTH-001-four-layer-authorization.md) | Dört Katmanlı Authorization Mimarisi | ✅ Kabul Edildi |
 | [AUTH-002](AUTH-002-keycloak-single-realm.md) | Keycloak Tek Realm Stratejisi | ✅ Kabul Edildi |
+| [AUTH-003](AUTH-003-keycloak-admin-api-staff-invite.md) | Keycloak Admin API ile Personel Daveti | ✅ Kabul Edildi |
 
 ### Veri / Event (DATA)
 | Kod | Başlık | Durum |

@@ -21,6 +21,17 @@ var ErrBranchForbidden = errors.New("payment: branch forbidden")
 // open session per branch). Callers map it to HTTP 409.
 var ErrCashSessionAlreadyOpen = errors.New("payment: branch already has an open cash session")
 
+// ErrInvalidInput marks a caller-supplied value the service rejects (a
+// non-positive amount, an empty reason, an unknown enum). Callers map it to
+// HTTP 422.
+//
+// It exists because the alternative — a bare fmt.Errorf — falls through the
+// handlers' error switch to the generic arm and is reported as 500 "internal
+// server error" while also being logged at Error level. That is wrong twice:
+// the client is told the server broke when the client sent bad input, and the
+// error log fills with false alarms that mask real faults.
+var ErrInvalidInput = errors.New("payment: invalid input")
+
 // SaleReader is consumed by POS (and any other module that needs to verify
 // payment totals for a check).  Dependency direction: pos → payment.public.
 type SaleReader interface {

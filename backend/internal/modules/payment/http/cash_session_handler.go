@@ -123,6 +123,11 @@ func (h *Handler) openCashSession(w http.ResponseWriter, r *http.Request) {
 		OpeningNotes:         req.OpeningNotes,
 	})
 	switch {
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 500: the caller sent a bad value. Falling through to the
+		// generic arm would both lie to the client and log a false alarm.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	case errors.Is(err, pub.ErrBranchForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -150,6 +155,11 @@ func (h *Handler) getActiveCashSession(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.sessions.GetActive(r.Context(), p, branchID)
 	switch {
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 500: the caller sent a bad value. Falling through to the
+		// generic arm would both lie to the client and log a false alarm.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	case errors.Is(err, pub.ErrBranchForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -202,6 +212,11 @@ func (h *Handler) recordCashMovement(w http.ResponseWriter, r *http.Request) {
 		Reason:      req.Reason,
 	})
 	switch {
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 500: the caller sent a bad value. Falling through to the
+		// generic arm would both lie to the client and log a false alarm.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	case errors.Is(err, pub.ErrBranchForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -255,6 +270,11 @@ func (h *Handler) submitClosingCount(w http.ResponseWriter, r *http.Request) {
 		Notes:                req.Notes,
 	})
 	switch {
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 500: the caller sent a bad value. Falling through to the
+		// generic arm would both lie to the client and log a false alarm.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	case errors.Is(err, pub.ErrBranchForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -297,6 +317,11 @@ func (h *Handler) closeCashSession(w http.ResponseWriter, r *http.Request) {
 	view, err := h.sessions.Close(r.Context(), p, sessionID)
 	var cannotClose *service.CashSessionCannotCloseError
 	switch {
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 500: the caller sent a bad value. Falling through to the
+		// generic arm would both lie to the client and log a false alarm.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	case errors.Is(err, pub.ErrBranchForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return

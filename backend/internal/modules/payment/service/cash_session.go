@@ -76,13 +76,13 @@ type OpenCashSessionRequest struct {
 // already been recorded).
 func (s *CashSessionService) Open(ctx context.Context, principal auth.Principal, req OpenCashSessionRequest) (CashSessionView, error) {
 	if req.BranchID == uuid.Nil {
-		return CashSessionView{}, fmt.Errorf("payment/service: branch_id is required")
+		return CashSessionView{}, fmt.Errorf("%w: branch_id is required", pub.ErrInvalidInput)
 	}
 	if err := requireBranch(ctx, principal, req.BranchID); err != nil {
 		return CashSessionView{}, err
 	}
 	if req.OpeningCountedAmount < 0 {
-		return CashSessionView{}, fmt.Errorf("payment/service: opening_counted_amount must not be negative")
+		return CashSessionView{}, fmt.Errorf("%w: opening_counted_amount must not be negative", pub.ErrInvalidInput)
 	}
 
 	var view CashSessionView
@@ -131,7 +131,7 @@ type CashSessionView struct {
 // closing_control) with its live reconciliation figures.
 func (s *CashSessionService) GetActive(ctx context.Context, principal auth.Principal, branchID uuid.UUID) (CashSessionView, error) {
 	if branchID == uuid.Nil {
-		return CashSessionView{}, fmt.Errorf("payment/service: branch_id is required")
+		return CashSessionView{}, fmt.Errorf("%w: branch_id is required", pub.ErrInvalidInput)
 	}
 	if err := requireBranch(ctx, principal, branchID); err != nil {
 		return CashSessionView{}, err
@@ -200,13 +200,13 @@ func (s *CashSessionService) RecordMovement(ctx context.Context, principal auth.
 		return domain.CashMovement{}, fmt.Errorf("payment/service: session id is required")
 	}
 	if !req.Direction.Valid() {
-		return domain.CashMovement{}, fmt.Errorf("payment/service: invalid movement direction %q", req.Direction)
+		return domain.CashMovement{}, fmt.Errorf("%w: invalid movement direction %q", pub.ErrInvalidInput, req.Direction)
 	}
 	if req.AmountMinor <= 0 {
-		return domain.CashMovement{}, fmt.Errorf("payment/service: amount_minor must be positive")
+		return domain.CashMovement{}, fmt.Errorf("%w: amount_minor must be positive", pub.ErrInvalidInput)
 	}
 	if strings.TrimSpace(req.Reason) == "" {
-		return domain.CashMovement{}, fmt.Errorf("payment/service: reason is required")
+		return domain.CashMovement{}, fmt.Errorf("%w: reason is required", pub.ErrInvalidInput)
 	}
 
 	var movement domain.CashMovement
@@ -261,7 +261,7 @@ func (s *CashSessionService) SubmitClosingCount(ctx context.Context, principal a
 		return CashSessionView{}, fmt.Errorf("payment/service: session id is required")
 	}
 	if req.ClosingCountedAmount < 0 {
-		return CashSessionView{}, fmt.Errorf("payment/service: closing_counted_amount must not be negative")
+		return CashSessionView{}, fmt.Errorf("%w: closing_counted_amount must not be negative", pub.ErrInvalidInput)
 	}
 	if err := domain.ValidateDenominations(req.Denominations, req.ClosingCountedAmount); err != nil {
 		return CashSessionView{}, fmt.Errorf("payment/service: %w", err)

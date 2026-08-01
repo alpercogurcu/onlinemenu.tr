@@ -234,7 +234,16 @@ func TestCashSessionService_RecordMovement_RejectedAfterClosingCountSubmitted(t 
 		"a movement submitted after the closing count must not silently invalidate the count already recorded")
 }
 
-func TestCashSessionService_RecordMovement_RejectsInvalidInput(t *testing.T) {
+// TestCashSessionService_RejectsInvalidInput pins every caller-input rejection
+// to pub.ErrInvalidInput, not merely to "some error".
+//
+// The sentinel IS the contract: the HTTP layer switches on it to answer 422.
+// Without it these fall through to the handlers' generic `err != nil` arm and
+// become 500 "internal server error" — telling the cashier the server broke
+// when they typed a bad amount, and filling the error log with false alarms
+// that mask real faults. An earlier version of this test asserted only
+// assert.Error, which is exactly why that gap survived review.
+func TestCashSessionService_RejectsInvalidInput(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()
 	svc := newCashSessionService()
@@ -245,20 +254,39 @@ func TestCashSessionService_RecordMovement_RejectsInvalidInput(t *testing.T) {
 	require.NoError(t, err)
 	session := opened.Session
 
-	_, err = svc.RecordMovement(ctx, manager, session.ID, service.RecordMovementRequest{
-		Direction: domain.CashMovementDirection("sideways"), AmountMinor: 1000, Reason: "x",
-	})
-	assert.Error(t, err)
+	movements := map[string]service.RecordMovementRequest{
+		"unknown direction": {Direction: domain.CashMovementDirection("sideways"), AmountMinor: 1000, Reason: "x"},
+		"zero amount":       {Direction: domain.CashMovementIn, AmountMinor: 0, Reason: "x"},
+		"negative amount":   {Direction: domain.CashMovementIn, AmountMinor: -1, Reason: "x"},
+		"blank reason":      {Direction: domain.CashMovementIn, AmountMinor: 1000, Reason: "   "},
+	}
+	for name, req := range movements {
+		t.Run("movement: "+name, func(t *testing.T) {
+			_, err := svc.RecordMovement(ctx, manager, session.ID, req)
+			assert.ErrorIs(t, err, pub.ErrInvalidInput)
+		})
+	}
 
-	_, err = svc.RecordMovement(ctx, manager, session.ID, service.RecordMovementRequest{
-		Direction: domain.CashMovementIn, AmountMinor: 0, Reason: "x",
+	// The principal's own branch, deliberately: requireBranch runs before the
+	// amount check (authorization precedes validation — fail-closed), so a
+	// foreign branch id would surface ErrBranchForbidden and never reach the
+	// rule under test.
+	t.Run("open: negative opening count", func(t *testing.T) {
+		_, err := svc.Open(ctx, manager, service.OpenCashSessionRequest{BranchID: branch, OpeningCountedAmount: -1})
+		assert.ErrorIs(t, err, pub.ErrInvalidInput)
 	})
-	assert.Error(t, err)
 
-	_, err = svc.RecordMovement(ctx, manager, session.ID, service.RecordMovementRequest{
-		Direction: domain.CashMovementIn, AmountMinor: 1000, Reason: "",
+	t.Run("open: missing branch", func(t *testing.T) {
+		_, err := svc.Open(ctx, manager, service.OpenCashSessionRequest{OpeningCountedAmount: 0})
+		assert.ErrorIs(t, err, pub.ErrInvalidInput)
 	})
-	assert.Error(t, err)
+
+	t.Run("closing count: negative", func(t *testing.T) {
+		_, err := svc.SubmitClosingCount(ctx, manager, session.ID, service.SubmitClosingCountRequest{
+			ClosingCountedAmount: -1,
+		})
+		assert.ErrorIs(t, err, pub.ErrInvalidInput)
+	})
 }
 
 // ---------------------------------------------------------------------------

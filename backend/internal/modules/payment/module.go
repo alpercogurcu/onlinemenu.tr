@@ -40,6 +40,8 @@ var Module = fx.Module("payment",
 		repo.NewFiscalTerminalDirectory,
 		repo.NewFiscalSectionDirectory,
 		repo.NewFiscalAdminRepo,
+		repo.NewCashSessionRepo,
+		service.NewCashSessionService,
 		// Bind the concrete admin repo to the interface the HTTP layer declares
 		// at its point of use, so payment_http never imports payment_repo.
 		func(r *repo.FiscalAdminRepo) paymenthttp.FiscalAdminStore { return r },

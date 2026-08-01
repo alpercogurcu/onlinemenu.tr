@@ -87,6 +87,34 @@ Bizim modelimiz:
 
 ---
 
+## Modül sahipliği — `payment`, `pos` değil
+
+Mutabakat implementasyonuna başlarken karara bağlanan bir soru: `cash_sessions` /
+`cash_movements` hangi modülde yaşar?
+
+**Karar: `payment`.**
+
+Gerekçe:
+
+- Oturumun tüm içeriği para: beklenen kapanış = açılış + alınan nakit ödemeler +
+  kasa hareketleri. Nakit ödemeler zaten `payments` tablosunda (`payment`
+  modülü); bu veriyi `pos` modülünden okumak modül sınırını (yalnızca `public/`
+  üzerinden erişim) ihlal ederdi.
+- Kapatma guard'ı (`cannotClose`) şubenin bekleyen fiscal submission'ı olup
+  olmadığına bakar — bu sorgu zaten `payment/repo.FiscalStatusRepo` içinde var
+  (branch-wide fiscal-pending ucu ve reconciler onu kullanıyor). `pos`'a
+  koymak bu sorguyu tekrar yazmayı ya da `payment`'ta iki yeni `public/`
+  arayüzü (fiscal-pending sorgusu + nakit ödeme toplamı) açmayı gerektirirdi —
+  kazanç olmadan iki yeni cross-module sözleşme.
+- `pos` modülü zaten `payment.public.SaleReader` üzerinden `payment`'a
+  bağımlı (check kapatma akışı `TotalPaidForCheck`/`PendingTotalForCheck`
+  çağırıyor). Kasa oturumunu `payment`'a koymak bu bağımlılık yönünü
+  değiştirmiyor, sadece parayla ilgili tüm mantığı tek modülde topluyor.
+
+`pos` tarafında değişen tek şey: POS istemcisi kasa oturumu uçlarını
+`/api/v1/payments/cash-sessions/*` altında çağırır (check/order akışlarıyla
+aynı şekilde `payment`'a HTTP üzerinden gider, modül sınırı ihlali yok).
+
 ## İzin sözlüğü — yeni ad uydurulmayacak
 
 `000006_seed_system_roles` zaten `shifts` read/create/update izinlerini seed ediyor

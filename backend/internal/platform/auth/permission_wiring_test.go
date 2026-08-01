@@ -199,25 +199,29 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 		Wired: true, CheckRole: "shift_manager", CheckAction: "payment.payment.read",
 	},
 
-	// -- shifts (kasa oturumu / vardiya) — not yet built -------------------
+	// -- shifts (kasa oturumu / cash session, ADR-DATA-008) -----------------
+	// Module ownership landed in `payment`, not `pos` (see the ADR's "Modul
+	// sahipligi" section: the session's content is entirely money and its
+	// close guard needs fiscal-submission state, both payment-owned) — hence
+	// payment.cash_session.* rather than the pos.shift.* name this registry
+	// guessed before that decision was made.
 	{"shifts", "read"}: {
-		Wired: false, CheckRole: "cashier", CheckAction: "pos.shift.read",
-		Reason: "kasa oturumu (cash session) is not yet implemented. " +
-			"ADR-DATA-008 (docs/adr/DATA-008-cash-session-cashier-identity.md) " +
-			"was accepted 2026-07-31 and will eventually wire this — the " +
-			"literal action string 'pos.shift.read' used here is a guess at the " +
-			"eventual name following the pos.<entity>.<verb> convention; if the " +
-			"real implementation names it differently this watch check will not " +
-			"catch it, but the pair-completeness check above still forces a " +
-			"reviewed update the day this migration file changes.",
+		Wired: true, CheckRole: "cashier", CheckAction: "payment.cash_session.read",
 	},
 	{"shifts", "create"}: {
-		Wired: false, CheckRole: "shift_manager", CheckAction: "pos.shift.create",
-		Reason: "see shifts/read — same ADR-DATA-008 gap.",
+		Wired: true, CheckRole: "shift_manager", CheckAction: "payment.cash_session.open",
+		Reason: "seed 'create' == opening a cash session (payment.cash_session.open).",
 	},
 	{"shifts", "update"}: {
-		Wired: false, CheckRole: "shift_manager", CheckAction: "pos.shift.update",
-		Reason: "see shifts/read — same ADR-DATA-008 gap.",
+		Wired: true, CheckRole: "shift_manager", CheckAction: "payment.cash_session.close",
+		Reason: "seed 'update' covers the cash session lifecycle mutations " +
+			"payment.cash_session.movement / payment.cash_session.submit_closing / " +
+			"payment.cash_session.close; evidenced via close. NOTE: the seed grants " +
+			"shifts:create/update to shift_manager only — cashier holds shifts:read " +
+			"alone, so a cashier can see the open session but cannot open one, " +
+			"record a movement, submit a closing count, or close it. Flagged as a " +
+			"seed/policy question for product review (a real till usually has the " +
+			"cashier count their own drawer), not fixed here.",
 	},
 
 	// -- staff --------------------------------------------------------------

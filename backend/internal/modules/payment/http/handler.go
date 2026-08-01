@@ -24,6 +24,7 @@ import (
 // Handler exposes payment REST endpoints.
 type Handler struct {
 	payments *service.PaymentService
+	sessions *service.CashSessionService
 	logger   *zap.Logger
 	engine   *auth.Engine
 }
@@ -33,6 +34,7 @@ type Params struct {
 	fx.In
 
 	Payments *service.PaymentService
+	Sessions *service.CashSessionService
 	Logger   *zap.Logger
 	Cache    *redis.Client
 	Engine   *auth.Engine
@@ -46,7 +48,7 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{payments: p.Payments, logger: p.Logger, engine: p.Engine},
+		h:     &Handler{payments: p.Payments, sessions: p.Sessions, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
@@ -73,6 +75,23 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("payment.fiscal_terminal.manage")).
 			Post("/fiscal/submissions/{id}/expire", hwc.h.expireSubmission)
 		r.With(hwc.h.permit("payment.payment.read")).Get("/{id}", hwc.h.getPayment)
+
+		// ADR-DATA-008: kasa oturumu (cash session). Static segment
+		// "/cash-sessions/active" resolves ahead of the "/{id}/..." routes below.
+		r.With(hwc.h.permit("payment.cash_session.open")).Post("/cash-sessions", hwc.h.openCashSession)
+		r.With(hwc.h.permit("payment.cash_session.read")).Get("/cash-sessions/active", hwc.h.getActiveCashSession)
+		// Cash movements are a bare INSERT with no natural dedup (unlike open's
+		// unique index or close's status-gated UPDATE) — a network retry would
+		// double-record real cash removed once. ADR-SEC-003's enumerated matrix
+		// does not literally list this endpoint, but its failure mode is exactly
+		// the "çift ödeme" class the ADR exists to prevent, so it carries
+		// Idempotency-Key the same as a payment write.
+		r.With(hwc.h.permit("payment.cash_session.movement"), httpx.Idempotency(hwc.cache)).
+			Post("/cash-sessions/{id}/movements", hwc.h.recordCashMovement)
+		r.With(hwc.h.permit("payment.cash_session.submit_closing")).
+			Post("/cash-sessions/{id}/closing-count", hwc.h.submitClosingCount)
+		r.With(hwc.h.permit("payment.cash_session.close")).
+			Post("/cash-sessions/{id}/close", hwc.h.closeCashSession)
 	})
 }
 

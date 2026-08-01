@@ -270,6 +270,39 @@ allow if {
 	any_role({"cashier", "shift_manager"})
 }
 
+# -- Payment: kasa oturumu / cash session (ADR-DATA-008). Module ownership is
+# payment, not pos — see the ADR's "Modul sahipligi" section — so these follow
+# the payment.<resource>.<verb> naming convention rather than the pos.shift.*
+# name floated in role_permissions seed row's original wiring-test baseline
+# comment before the ownership decision was made.
+#
+# These mirror role_permissions' seeded shifts dictionary exactly
+# (identity/000006_seed_system_roles.up.sql): shifts:read is granted to BOTH
+# cashier and shift_manager, but shifts:create/update are granted to
+# shift_manager ONLY. That means a cashier can see the open session but cannot
+# open one, record a movement, submit a closing count, or close it — every
+# write action below is shift_manager-only, deliberately NOT extended to
+# cashier despite cashier being the role that would, in a real till, most
+# often be the one counting their own drawer. This is a known seed/policy
+# question flagged for product review, not fixed here (the task this was
+# built under explicitly forbids inventing/expanding what the seed grants).
+allow if {
+	input.action == "payment.cash_session.read"
+	any_role({"cashier", "shift_manager"})
+}
+
+cash_session_write_actions := {
+	"payment.cash_session.open",
+	"payment.cash_session.movement",
+	"payment.cash_session.submit_closing",
+	"payment.cash_session.close",
+}
+
+allow if {
+	input.action in cash_session_write_actions
+	has_role("shift_manager")
+}
+
 # -- Scope resolution for non-manager allows above: branch-scoped, since cashier/
 # shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {

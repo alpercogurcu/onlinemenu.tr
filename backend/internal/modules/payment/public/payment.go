@@ -16,6 +16,11 @@ var ErrNotFound = errors.New("payment: not found")
 // does not cover (ADR-AUTH-001 layer 3). Callers map it to HTTP 403.
 var ErrBranchForbidden = errors.New("payment: branch forbidden")
 
+// ErrCashSessionAlreadyOpen is returned by CashSessionService.Open when the
+// branch already has an open cash session (ADR-DATA-008 Karar 1: at most one
+// open session per branch). Callers map it to HTTP 409.
+var ErrCashSessionAlreadyOpen = errors.New("payment: branch already has an open cash session")
+
 // SaleReader is consumed by POS (and any other module that needs to verify
 // payment totals for a check).  Dependency direction: pos → payment.public.
 type SaleReader interface {

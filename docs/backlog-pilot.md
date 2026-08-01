@@ -197,7 +197,8 @@ Kasa oturumu ve yönetici onayı gibi "henüz yapılmadı" boşluklarından **fa
 kod ve policy var, ama seed'in verdiği rolle OPA'nın izin verdiği rol **uyuşmuyor**. İkisi de
 doğrulandı, ikisi de pilotu bloklamıyor.
 
-- [ ] **`driver` rolü hiçbir şey yapamıyor.** Seed `orders:read` + `orders:update` veriyor
+- [ ] ⏸️ **Ertelendi (2026-08-01 ürün kararı: şoför/teslimat kapsam dışı).**
+      **`driver` rolü hiçbir şey yapamıyor.** Seed `orders:read` + `orders:update` veriyor
       (`000006`, satır 72-73) ama `authz.rego`'da **hiçbir `allow` kuralı** `driver` içermiyor —
       `pos_counter_actions` `{cashier, shift_manager}`, `pos_kitchen_actions` `{kitchen, bar}`.
       Rego'da `driver` yalnız **scope** kuralında (satır 277) geçiyor, o da ancak bir allow
@@ -218,11 +219,25 @@ Açık teknik sorular `backlog-fiscal.md`'de (tokenx 401 re-auth akışı, `oper
 
 ---
 
-## Pilot kapsamı dışında — segment kararına bağlı
+## Kapsam dışı (2026-08-01 ürün kararı)
 
-**Marş sistemi** ([lessons-from-odoo.md § Tier 2 madde 7](lessons-from-odoo.md)). Üst segment,
-oturarak servis veren restoranda **bloklayıcı**; fast-food, kafe, paket servis, food truck'ta hiç
-gerekmez. Şube düzeyinde flag'lenebilir olduğu için pilot müşteri seçildikten sonra karara bağlanır.
+Odak **POS + mutfak ekranı**. Aşağıdakiler bilinçli olarak ertelendi; hiçbiri unutulmuş değil.
 
-İçindeki para riski önemli: **tetiklenmemiş marş** adisyon toplamına, ÖKC sepetine ve stok
-düşümüne girmemeli — `TestPOSSpine_ClosePaysOnlyForActiveOrders`'ın koruduğu hatanın kardeşi.
+**Marş sistemi** ([lessons-from-odoo.md § Tier 2 madde 7](lessons-from-odoo.md)) — marşla çalışan
+bir restoranla anlaşıldığında yapılacak. Üst segment oturarak servis dışında hiç gerekmiyor ve şube
+düzeyinde flag'lenebilir, dolayısıyla o müşteri gelene kadar bekletmenin maliyeti yok.
+
+> Yapılacağı zaman kaçırılmaması gereken para riski: **tetiklenmemiş marş** adisyon toplamına,
+> ÖKC sepetine ve stok düşümüne girmemeli. `TestPOSSpine_ClosePaysOnlyForActiveOrders`'ın koruduğu
+> hatanın kardeşi — müşteri yemediği tatlıyı ödemek zorunda kalır.
+
+**Şoför / teslimat** — `driver` rolünün OPA sapması dahil (yukarıda madde 7 altında).
+
+**İmalat (`manufacturing`)** — modül 32 satırlık iskelet, ROADMAP'te Faz 3. Parti/SKT takibi
+(madde 11'deki `product_expiry` boşluğu) de bu kapsamda bekliyor.
+
+### Mutfak ekranı — mevcut durum
+
+KDS **çalışıyor**, eksik değil: `admin/(main)/pos/kitchen` 4 sütunlu kanban
+(`pending → accepted → preparing → ready`), `pos/ws` hub'ı üzerinden canlı WebSocket akışı,
+bağlantı durumu rozeti, accept/advance aksiyonları. Marş dışında bilinen bir işlevsel boşluğu yok.

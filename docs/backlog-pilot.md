@@ -68,14 +68,60 @@ Doğrulanan durum:
 > diye güvenlik açığı olarak işaretlemiştim. Yanlıştı; uçlar mount edilmiyor, açık delik yok.
 > Sorun güvenlik değil, **eksik yol**.
 
-Önerilen çözüm (uygulanmadan önce teyit):
-- [ ] `/me/contexts` (pre-context yol) doğrulanmış Keycloak claim'lerinden person'ı **upsert etsin**.
-      Person satırı tek başına hiçbir yetki vermez — yetki `memberships`'tedir; dolayısıyla realm'de
-      kimlik doğrulayabilen herkesin person satırı olması güvenli
-- [ ] Admin'in membership açabilmesi için **e-posta ile kişi arama** ucu — dar DTO, tenant-admin
-      izniyle, platform-scope `GetPerson`'dan ayrı
-- [ ] `POST /persons` ve `GET /persons/{id}` devre dışı kalsın; platform-admin yolu ayrı iş
-- [ ] Admin panelinde "personel davet et → rol ata" akışı
+- [x] **Davranış hatası düzeltildi** (`cf5066f`): kaydı olmayan özne artık 404 değil, boş liste + 200
+      alıyor. `ErrNotFound`'u yutmak burada güvenli — `GetByKeycloakSub` `WithAllTenantsReadTx`
+      altında koşuyor ve `persons_select`'in `all_tenants` dalı var, yani ErrNotFound gerçekten
+      "böyle kişi yok" demek, RLS'in gizlemesi değil.
+
+### 🔴 Otomatik provizyon bloklu — karar bekliyor
+
+Onaylanan çözüm (`/me/contexts` doğrulanmış claim'lerden person upsert'i) **uygulanabilir değil**:
+
+**Keycloak token'ı yalnızca `sub` taşıyor.** `platform/auth/keycloak_verifier.go` `Verify`'ın son
+satırı `return &KeycloakClaims{Sub: sub}, nil`; `KeycloakClaims` ve `Principal`'da Email/Name alanı
+yok. Bu unutulmuş değil, ADR-AUTH-001'de böyle yazılı, ve `deploy/keycloak/README.md` realm'in
+`profile`/`email` scope'larını bilinçli olarak tanımlamadığını söylüyor.
+Buna karşılık `persons.email` **NOT NULL** ve düz **UNIQUE** (`identity/000001`). Hiç görülmemiş bir
+özne için oraya yazılacak meşru bir değer yok; placeholder üretmek ikinci kayıtta unique çakışması
+verir ve ileride bildirim kodunun ulaşacağı sahte adresler doğurur.
+
+> **Elenen bir yol:** `persons_update` RLS'inde `all_tenants` dalı yok (`000008`, bilinçli).
+> Ama bu **engel değil**: `INSERT ... ON CONFLICT (keycloak_sub) DO NOTHING` + `SELECT` kullanılırsa
+> UPDATE hiç devreye girmez. `persons_insert` zaten `WITH CHECK (true)`, `persons_select`'in de
+> `all_tenants` dalı var. Yani **RLS'e dokunmaya gerek yok** — tek gerçek engel e-posta claim'i.
+
+**Karar (2026-08-01): admin panelden davet.** Elenen yollar:
+
+| | Yol | Neden elendi |
+|---|---|---|
+| ~~A~~ | ~~Realm'e `email`/`profile` scope'u; `Principal` claim'leri taşısın~~ | Personel önce bir kez girip boş ekran görmek, sonra tekrar girmek zorunda kalırdı. Ayrıca ADR-AUTH-001'in token şeklini değiştirmek gerekirdi |
+| ~~C~~ | ~~`persons.email` nullable + `persons_update` RLS'e all_tenants dalı~~ | RLS invaryantını (SEC-002) gereksiz yere zayıflatıyor; `DO NOTHING` yolu zaten çözüyordu |
+
+> **Önemli:** seçilen yol e-posta claim'ine **ihtiyaç duymuyor.** E-postayı davet formunda yönetici
+> giriyor; Keycloak kullanıcısını Admin API yaratıp `sub`'ı geri döndürüyor ve bağ davet anında
+> kuruluyor. Yani **token şekli değişmiyor, ADR-AUTH-001 dokunulmadan kalıyor.** A'nın işi B'nin ön
+> koşulu değildi — B onu tamamen atlıyor.
+
+**Akış:** yönetici ad + e-posta + şube + rol girer → backend Keycloak kullanıcısını yaratır (veya
+e-postayla mevcut olanı bulur) → dönen kullanıcı id'si `persons.keycloak_sub` olur → `persons` +
+`memberships` yazılır → Keycloak parola belirleme e-postasını gönderir → personel ilk girişinde
+doğrudan çalışır.
+
+**Kapsam** (Keycloak Admin API entegrasyonu bugün **hiç yok** — `platform/keycloak` paketi yok,
+`client_credentials`/service account izi yok):
+- [ ] **ADR:** backend'in Keycloak'a yazma yetkisi — servis hesabı, yetki sınırı, sır yönetimi
+- [ ] `platform/keycloak`: Admin API istemcisi (client_credentials, kullanıcı yarat/e-postayla ara,
+      parola belirleme aksiyonu). Sır Vault'tan, `os.Getenv` modül kodunda yasak
+- [ ] `deploy/keycloak/realm-onlinemenu.json`: `manage-users` yetkili confidential client
+- [ ] `POST /v1/identity/{tenantID}/staff` — davet ucu, tenant-kapsamlı (platform-admin değil)
+- [ ] **Kısmi başarısızlık:** Keycloak kullanıcısı yaratıldı ama DB yazımı düştü senaryosu.
+      Davet e-posta bazında idempotent olmalı; yeniden denemede ikinci Keycloak kullanıcısı doğmamalı
+- [ ] Admin panelinde "personel ekle → rol ata" ekranı
+- [ ] İzin: mevcut `identity.membership.create` yeter mi, ayrı `identity.staff.invite` mı — madde 7'nin
+      testi artık bunu zorluyor, seed ile kod birlikte gitmeli
+- [ ] `POST /persons` ve `GET /persons/{id}` devre dışı kalmaya devam eder
+
+⚠️ Bu, kasa oturumuyla birlikte pilotun ikinci uzun kalemi. Takvim beklentisi buna göre kurulmalı.
 
 ## 3. Kasa oturumu + kasiyer kimlik doğrulama (tek ADR)
 

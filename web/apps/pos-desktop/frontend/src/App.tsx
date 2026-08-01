@@ -22,12 +22,15 @@ import {
 } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { main } from '../wailsjs/go/models'
+import { CashSessionBanner } from './components/CashSessionBanner'
+import { CashSessionModal } from './components/CashSessionModal'
 import { CheckRail } from './components/CheckRail'
 import { ContextPicker } from './components/ContextPicker'
 import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
 import { TablePlan } from './components/TablePlan'
+import { useCashSession } from './hooks/useCashSession'
 import { useFiscalStatusPolling, type StatusResolution } from './hooks/useFiscalStatusPolling'
 import { useBranchFiscalPending } from './hooks/useBranchFiscalPending'
 import { toServerCompletedMap } from './lib/branchFiscal'
@@ -127,6 +130,13 @@ function App() {
   // Payment ids of branch-wide fiscal failures the cashier has acknowledged —
   // see visibleRemoteFailures.
   const [dismissedFailureIds, setDismissedFailureIds] = useState<ReadonlySet<string>>(new Set())
+
+  // ADR-DATA-008 kasa oturumu (cash session) — owned entirely by the hook
+  // (fetch/open/movement/sayım/kapanış + staleness detection), see
+  // hooks/useCashSession.ts. Only the modal's open/closed UI state lives
+  // here, matching CheckRail's own local `opening` flag pattern.
+  const cashSession = useCashSession(session?.branch_id)
+  const [cashSessionModalOpen, setCashSessionModalOpen] = useState(false)
 
   const canOpenCheck = Boolean(session?.branch_id)
 
@@ -392,6 +402,12 @@ function App() {
     setPrintError('')
     setPrintRetryCheckId(null)
     setDismissedFailureIds(new Set())
+    // Belt and braces alongside useCashSession's own branchId-keyed reset
+    // (see that hook's doc comment) — covers the edge case of a chain-wide
+    // staff session (branchId already undefined pre-logout, so that key
+    // would not itself change).
+    cashSession.reset()
+    setCashSessionModalOpen(false)
   }
 
   // Which check serverCompleted currently belongs to. WRITTEN ONLY BY
@@ -802,6 +818,13 @@ function App() {
         </div>
       </header>
 
+      <CashSessionBanner
+        checked={cashSession.checked}
+        session={cashSession.session}
+        stale={cashSession.stale}
+        onOpen={() => setCashSessionModalOpen(true)}
+      />
+
       {printError && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink">
           <span>Fiş yazdırılamadı: {printError}</span>
@@ -890,6 +913,25 @@ function App() {
           errorMessage={receiptError}
         />
       </div>
+
+      <CashSessionModal
+        open={cashSessionModalOpen}
+        onClose={() => setCashSessionModalOpen(false)}
+        checked={cashSession.checked}
+        loading={cashSession.loading}
+        session={cashSession.session}
+        error={cashSession.error}
+        closingSnapshot={cashSession.closingSnapshot}
+        stale={cashSession.stale}
+        cannotCloseReasons={cashSession.cannotCloseReasons}
+        canOpenSession={canOpenCheck}
+        onOpenSession={cashSession.openSession}
+        onRecordMovement={cashSession.recordMovement}
+        onSubmitClosingCount={cashSession.submitClosingCount}
+        onCloseSession={cashSession.closeSession}
+        onDismissCannotClose={cashSession.dismissCannotClose}
+        onRefresh={cashSession.refresh}
+      />
     </div>
   )
 }

@@ -94,6 +94,26 @@ export function describeError(err: unknown): string {
   if (raw.includes('table can only become occupied by opening a check')) {
     return 'Masa durumu yalnızca adisyon açılarak değiştirilebilir.'
   }
+  // ADR-DATA-008 kasa oturumu — checked ahead of the generic 409 fallback for
+  // the same reason as the table-plan bodies above: a cashier staring at a
+  // blocked açılış/kapanış needs the specific reason, not "çakışıyor".
+  if (raw.includes('branch already has an open cash session')) {
+    return 'Bu şubede zaten açık bir kasa oturumu var — sayfayı yenileyin.'
+  }
+  if (raw.includes('movements can only be recorded while opened')) {
+    return 'Sayım gönderildikten sonra nakit giriş/çıkış yapılamaz — kasa yeniden sayılmadan hareket eklenemez.'
+  }
+  if (raw.includes('submit a closing count first')) {
+    return 'Kasayı kapatmadan önce sayım yapılmalı.'
+  }
+  if (raw.includes('denomination sum') && raw.includes('does not equal')) {
+    // Should be unreachable from this client — closing_counted_amount is
+    // always derived from the denomination rows themselves (see
+    // lib/cashSession.ts's denominationTotal) — but kept as a specific
+    // message rather than falling through to a generic 422, in case a future
+    // caller regresses that invariant.
+    return 'Kupür dökümü toplamı sayılan tutarla eşleşmiyor.'
+  }
   if (raw.includes('status 422')) return 'Eksik veya geçersiz bilgi — girdileri kontrol edin.'
   if (raw.includes('status 409')) return 'Bu adisyon/sipariş başka bir işlemle çakışıyor — sayfayı yenileyin.'
   if (raw.includes('status 500')) {

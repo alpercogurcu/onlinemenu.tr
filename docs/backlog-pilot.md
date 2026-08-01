@@ -134,19 +134,28 @@ yükseltilir — düşük pişmanlıklı.
 Tasarım referansı ve tam gerekçe: [lessons-from-odoo.md § Tier 1 madde 1 ve 4](lessons-from-odoo.md).
 
 - [x] **ADR:** oturum sahipliği + PIN doğrulama modeli → ADR-DATA-008
-- [ ] `cash_sessions` + 4 durumlu makine (`opening_control → opened → closing_control → closed`);
-      girdiler saklanır (açılış sayımı, kapanış sayımı, nakit hareketi), beklenen ve fark türetilir
-- [ ] Vardiya içi nakit giriş/çıkış kaydı
-- [ ] Kupür dökümlü sayım ekranı
+- [x] `cash_sessions` + `cash_movements` + 4 durumlu makine (`3778a53`). Girdiler saklanır, beklenen
+      ve fark **hiçbir yerde saklanmaz** — her okumada hesaplanır. Şubede tek açık oturum kısmi
+      unique index'le (uygulama mantığıyla değil)
+- [x] Vardiya içi nakit giriş/çıkış kaydı — `Idempotency-Key` zorunlu (yeniden denenen bir çıkış,
+      fiilen bir kez alınmış parayı iki kez kaydederdi)
+- [x] Kapatılamama guard'ı tek fonksiyonda: şubede bekleyen mali kayıt varken kapanmaz
+- [x] `shifts:*` sözlüğü kullanıldı; kasiyere `create`+`update` verildi (`22e54ad`, identity/000014)
+      çünkü kasiyer kendi çekmecesini sayar — her açılış/kapanış için müdür beklemek özelliği
+      tek kasalı restoranda kullanılamaz kılıyordu
+- [x] Kupür dökümlü sayım ekranı + açılış/durum/kapanış POS ekranları (`da2341d`)
+- [x] Doğrulama hataları 500 değil 422 (`d451cb2`) — POS ekranı görevinden çıkan gerçek backend açığı
 - [ ] Kuruş yuvarlama — yalnız nakitte, fark kayıt altında
-- [ ] Kapatılamama guard'ı tek fonksiyonda
 - [ ] Eski oturum **uyarı** job'ı (otomatik kapatma değil — sayımı imkânsız kılar)
 - [ ] Kurtarma oturumu (`rescue`) — stranded submission runbook'uyla birleştir
-- [ ] PIN yalnız sunucuda doğrulanır, istemciye hash olarak bile inmez; argon2id + deneme hız
-      sınırı + kilitlenme denetim izi. İstemcideki rol yalnız görünüm ipucu
-- [ ] Mevcut `shifts:*` izin sözlüğünü kullan — yeni izin adı uydurma (madde 7)
+- [ ] Kasa hareketleri geçmiş listesi — şu an yalnız net toplam görünüyor, defter satırları değil
+- [ ] **PIN akışı henüz yok.** Kasiyer değişimi hâlâ tam Keycloak akışı gerektiriyor; ADR-DATA-008
+      Karar 2 yazılı ama uygulanmadı. Yoğun serviste asıl darboğaz bu
 
-Tahmin: 7–10 gün (kupür ekranı ve yuvarlama ilk tahminde yoktu).
+**Bilinen davranış (hata değil):** sayım gönderildikten sonra bekleyen bir mali kayıt çözülürse
+beklenen kapanış kayar ve sayım bayatlar. Backend doğru davranıyor, POS ekranı da bunu açıkça
+gösterip yeniden saymaya zorluyor (dondurulmuş snapshot + `stale` bayrağı). Sessizce değişen bir
+fark rakamı kasiyeri kendisine ait olmayan bir açıktan sorumlu tutardı.
 
 ## 4. Gün sonu satış özeti
 
@@ -216,6 +225,21 @@ konursa yanlış izin adı uydurulması engellenir.
 
 Dış bağımlılık — takvimi bizde değil, şimdiden temas kurulmalı.
 Açık teknik sorular `backlog-fiscal.md`'de (tokenx 401 re-auth akışı, `operationDate` timezone).
+
+---
+
+## ⏳ Yanıt bekleyen ürün soruları
+
+Üçü de teknik değil, ticari/operasyonel karar. Hiçbiri tahminle kapatılmamalı.
+
+1. **Keycloak davet entegrasyonu başlasın mı?** ADR-AUTH-003 yazıldı ve onaylandı, implementasyon
+   bekliyor. Personel eklenemeden pilot çalışmıyor (madde 2), ama POS/mutfak odağının dışında.
+2. **Kasa açılmadan satış yapılabilmeli mi?** Bugün yapılabiliyor; POS yalnızca uyarı gösteriyor.
+   Engellenecekse zorlama **backend'e** konmalı — istemcide bloklamak, backend'de olmayan bir
+   kuralı uydurmak olur ve ikisi zamanla ayrışır.
+3. **Fark onayı (açık/fazla) yöneticiye bağlansın mı?** Bugünkü kontrol denetim izi: kim açtı, kim
+   saydı, kim kapattı, her hareket aktör ve zaman damgasıyla. Dört-göz kuralı istenirse seed'li ama
+   hâlâ bağlanmamış `checks:approve` sözlüğü buna aday.
 
 ---
 

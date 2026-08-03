@@ -146,9 +146,63 @@ Yönetici onayı gerektiren kasa aksiyonları (fark onayı, kasadan para çıkı
 
 ---
 
-## Açık soru
+## PIN akışının ayrıntıları (2026-08-03 eki)
 
-Vardiya içinde kasiyerin **çıkışı** nasıl olur — açık bırakılan bir istasyon, kasiyer değişiminde
-otomatik mi düşer, yoksa süre aşımıyla mı? Odoo'da bu kavram yok (istemci tarafı etiket olduğu için
-gerekmiyor). Bizde gerçek principal olduğu için context token'ın ömrü bu kararı taşır; TTL değeri
-implementasyon sırasında ölçülüp bu ADR'ye yazılmalıdır.
+Karar 2 modeli veriyordu ama dört noktayı açık bırakmıştı. Implementasyondan önce karara bağlandı,
+çünkü dördü de güvenlik kararı ve tahmine bırakılamaz.
+
+### 1. PIN'in kapsamı: `(person, tenant)`
+
+Ne kişi başına ne membership başına.
+
+- **Kişi başına olamaz:** tek realm kullanıyoruz (AUTH-002), aynı kişi iki işletmede çalışabiliyor.
+  Kişi başına tek PIN, A işletmesinde belirlenen PIN'in B işletmesinde de çalışması demekti.
+- **Membership başına olamaz:** aynı tenant'ta iki şubede görevli bir kişi iki ayrı PIN taşırdı;
+  kasiyer için anlamsız, unutma kaynağı.
+
+Tablo `identity` modülünde, tenant-kapsamlı, FORCE RLS ile.
+
+### 2. PIN'i kasiyerin kendisi belirler; yönetici yalnız sıfırlar
+
+Kasiyer, vardiyaya katıldığı anda (o anda zaten Keycloak ile kimliği doğrulanmış — güvenilir an)
+kendi PIN'ini belirler. Yönetici PIN'i **okuyamaz ve belirleyemez**, yalnız **sıfırlayabilir**
+(kayıt silinir, kasiyer bir sonraki katılımında yeniden belirler).
+
+Gerekçe hesap verebilirlik: PIN'i yönetici koyarsa, kasiyerin adına yapılmış bir işlemin gerçekten
+kasiyer tarafından yapıldığı savunulamaz. Mutabakat farkının altındaki imzanın anlamı buna bağlı.
+
+### 3. Değişim = listeden isim seç + PIN gir
+
+Odoo PIN'i bir **arama anahtarı** gibi kullanıyor (girilen PIN kime aitse o seçiliyor). Biz
+kullanmıyoruz:
+
+- Aynı PIN'e sahip iki kasiyer sorunu doğmuyor — çakışma yönetmek gerekmiyor.
+- Daha önemlisi: PIN bir **kimlik belirteci değil, seçilmiş kimliğe ikinci faktör** oluyor. Tahmin
+  edilen bir PIN tek başına kimin olduğunu söylemiyor.
+
+Listede yalnız **o oturuma katılmış** kasiyerler görünür.
+
+### 4. Katılım ve token ömrü
+
+Bir kasiyerin PIN'le seçilebilmesi için o kasa oturumuna **en az bir kez tam Keycloak akışıyla
+katılmış** olması şart (`cash_session_participants`). Vardiya başında bir kez; gün boyu PIN.
+
+PIN doğrulaması mevcut `/auth/context` akışına bağlanıp CTX token üretir. Token:
+
+- **`session_id` taşır** ve sunucu, oturum artık açık değilse reddeder.
+- Ömrü `min(8 saat, oturumun kapanışı)`.
+
+Böylece **kasayı kapatmak o oturumdan türetilmiş bütün token'ları geçersiz kılar** — açık bırakılan
+bir istasyon, vardiya bitince kendiliğinden düşer. ADR'nin eski "açık soru"su bu şekilde kapandı:
+çıkış ayrı bir aksiyon değil, oturumun kapanmasının sonucu.
+
+### 5. Kaba kuvvet savunması
+
+PIN 4-6 hane, yani anahtar uzayı küçük — asıl savunma deneme sayısı:
+
+- Sayaç `(session_id, person_id)` başına, Redis'te (ADR-OPS-003'ün altyapısı).
+- 5 başarısız denemeden sonra o kişi için PIN yolu **kilitlenir**; yalnızca tam Keycloak akışıyla
+  yeniden katılım açar.
+- Kilitlenme olayı denetim izine yazılır — sessizce kilitlenip kasiyeri şaşırtmamalı.
+
+Saklama argon2id, kullanıcı başına tuz. PIN hiçbir biçimde istemciye inmez; hash de inmez.

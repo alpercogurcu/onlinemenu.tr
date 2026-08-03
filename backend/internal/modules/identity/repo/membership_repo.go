@@ -183,6 +183,59 @@ func (r *MembershipRepo) Create(ctx context.Context, tx pgx.Tx, m domain.Members
 	return created, nil
 }
 
+// FindOrCreate returns the existing membership matching
+// (person_id, tenant_id, branch_id, role_id), or creates one from m if none
+// exists yet.
+//
+// This is the idempotency primitive the staff invite flow (ADR-AUTH-003)
+// relies on for its final write: a retried invite for a person who already
+// holds this exact membership must succeed by returning the existing row,
+// not by raising a unique-violation the caller has to specially handle. A
+// person can legitimately hold the SAME role at a DIFFERENT branch, or a
+// DIFFERENT role at the same branch — only an exact quadruple match is
+// treated as "already granted"; anything else falls through to a normal
+// insert.
+//
+// ON CONFLICT ON CONSTRAINT memberships_unique DO NOTHING is used rather than
+// catching the unique-violation error for the same reason as
+// PersonRepo.FindOrCreateByKeycloakSub: a raised error aborts the
+// transaction, and the fallback SELECT needs to run inside it. The
+// constraint uses NULLS NOT DISTINCT (identity migration 000012), so a
+// second chain-wide grant (branch_id IS NULL) for the same person+role
+// conflicts correctly instead of silently duplicating.
+func (r *MembershipRepo) FindOrCreate(ctx context.Context, tx pgx.Tx, m domain.Membership) (domain.Membership, error) {
+	const insertQ = `
+		INSERT INTO memberships (person_id, tenant_id, branch_id, role_id, status)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT ON CONSTRAINT memberships_unique DO NOTHING
+		RETURNING id, person_id, tenant_id, branch_id, role_id, status, created_at, updated_at`
+
+	row := tx.QueryRow(ctx, insertQ, m.PersonID, m.TenantID, m.BranchID, m.RoleID, string(m.Status))
+	created, err := scanMembership(row)
+	if err == nil {
+		return created, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Membership{}, fmt.Errorf("identity/repo/membership: find or create: insert: %w", err)
+	}
+
+	const selectQ = `
+		SELECT id, person_id, tenant_id, branch_id, role_id, status, created_at, updated_at
+		FROM memberships
+		WHERE person_id = $1 AND tenant_id = $2
+		  AND branch_id IS NOT DISTINCT FROM $3
+		  AND role_id = $4`
+
+	existing, err := scanMembership(tx.QueryRow(ctx, selectQ, m.PersonID, m.TenantID, m.BranchID, m.RoleID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Membership{}, pub.ErrNotFound
+		}
+		return domain.Membership{}, fmt.Errorf("identity/repo/membership: find or create: refetch: %w", err)
+	}
+	return existing, nil
+}
+
 // UpdateStatus changes the lifecycle status of a membership.
 func (r *MembershipRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, tenantID, membershipID uuid.UUID, status domain.MembershipStatus) error {
 	const q = `

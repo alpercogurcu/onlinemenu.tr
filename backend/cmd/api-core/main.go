@@ -28,6 +28,7 @@ import (
 	"onlinemenu.tr/internal/platform/cache"
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
+	"onlinemenu.tr/internal/platform/keycloak"
 	platformotel "onlinemenu.tr/internal/platform/otel"
 	"onlinemenu.tr/internal/platform/vault"
 )
@@ -50,12 +51,14 @@ func main() {
 		fx.Provide(newCacheConfig),
 		fx.Provide(newOPAConfig),
 		fx.Provide(newHTTPConfig),
+		fx.Provide(newKeycloakConfig),
 
 		db.Module,
 		eventbus.Module,
 		platformotel.Module,
 		vault.Module,
 		cache.Module,
+		keycloak.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),
@@ -217,6 +220,33 @@ func newHTTPConfig() httpConfig {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+}
+
+// newKeycloakConfig assembles the Keycloak Admin API client config
+// (ADR-AUTH-003), used by identity.Module's staff invite endpoint. See
+// cmd/api's newKeycloakConfig for the full rationale: KEYCLOAK_ADMIN_CLIENT_ID
+// gates the feature so this service boots in dev/CI without a Keycloak admin
+// service account or Vault secret configured.
+func newKeycloakConfig(vc *vault.Client) (keycloak.Config, error) {
+	clientID := envOr("KEYCLOAK_ADMIN_CLIENT_ID", "")
+	if clientID == "" {
+		return keycloak.Config{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	secret, err := vc.GetString(ctx, "secret", "keycloak/admin-client", "client_secret")
+	if err != nil {
+		return keycloak.Config{}, fmt.Errorf("api-core: fetch keycloak admin client secret from vault: %w", err)
+	}
+
+	return keycloak.Config{
+		BaseURL:      mustEnv("KEYCLOAK_ADMIN_BASE_URL"),
+		Realm:        envOr("KEYCLOAK_REALM", "onlinemenu"),
+		ClientID:     clientID,
+		ClientSecret: secret,
+	}, nil
 }
 
 func mustEnv(key string) string {

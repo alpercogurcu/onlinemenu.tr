@@ -21,6 +21,7 @@ type Handler struct {
 	roles       *service.RoleService
 	memberships *service.MembershipService
 	contexts    *service.ContextService
+	staffInvite *service.StaffInviteService
 	logger      *zap.Logger
 	engine      *auth.Engine
 }
@@ -30,6 +31,7 @@ func NewHandler(
 	roles *service.RoleService,
 	memberships *service.MembershipService,
 	contexts *service.ContextService,
+	staffInvite *service.StaffInviteService,
 	logger *zap.Logger,
 	engine *auth.Engine,
 ) *Handler {
@@ -38,6 +40,7 @@ func NewHandler(
 		roles:       roles,
 		memberships: memberships,
 		contexts:    contexts,
+		staffInvite: staffInvite,
 		logger:      logger,
 		engine:      engine,
 	}
@@ -81,6 +84,11 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 			r.With(h.permit("identity.membership.read")).Get("/memberships", h.ListMemberships)
 			r.With(h.permit("identity.membership.create")).Post("/memberships", h.CreateMembership)
 			r.With(h.permit("identity.membership.update")).Put("/memberships/{membershipID}", h.UpdateMembershipStatus)
+
+			// ADR-AUTH-003: staff invite. Reuses identity.membership.create —
+			// see InviteStaff's doc comment for why no new permission is
+			// warranted.
+			r.With(h.permit("identity.membership.create")).Post("/staff", h.InviteStaff)
 		})
 	})
 }
@@ -127,6 +135,12 @@ func (h *Handler) handleErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pub.ErrNotFound):
 		h.writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 400: distinct sentinel from ErrInvalid (mirrors
+		// payment.ErrInvalidInput, commit d451cb2) so this mapping cannot
+		// change the status code of any existing identity endpoint — none of
+		// them return this sentinel today, only StaffInviteService does.
+		h.writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, pub.ErrInvalid):
 		h.writeError(w, http.StatusBadRequest, "invalid input")
 	case errors.Is(err, pub.ErrConflict):

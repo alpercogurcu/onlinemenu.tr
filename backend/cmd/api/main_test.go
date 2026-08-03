@@ -26,6 +26,7 @@ import (
 	"onlinemenu.tr/internal/platform/cache"
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
+	"onlinemenu.tr/internal/platform/keycloak"
 	platformotel "onlinemenu.tr/internal/platform/otel"
 	"onlinemenu.tr/internal/platform/outbox"
 	"onlinemenu.tr/internal/platform/vault"
@@ -52,6 +53,7 @@ func TestFxGraphValidation(t *testing.T) {
 		fx.Provide(newOutboxConfig),
 		fx.Provide(newPosWSConfig),
 		fx.Provide(newFiscalConfig),
+		fx.Provide(newKeycloakConfig),
 
 		db.Module,
 		eventbus.Module,
@@ -59,6 +61,7 @@ func TestFxGraphValidation(t *testing.T) {
 		vault.Module,
 		cache.Module,
 		outbox.Module,
+		keycloak.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),

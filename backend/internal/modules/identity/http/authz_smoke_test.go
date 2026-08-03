@@ -34,7 +34,7 @@ var preContextAllowlist = map[string]bool{
 // holds no roles. See the catalog module's authz_smoke_test.go for full rationale.
 func TestRegisterRoutes_AllRoutesRequirePermission(t *testing.T) {
 	engine := newSmokeTestEngine(t)
-	h := identityhttp.NewHandler(nil, nil, nil, nil, zap.NewNop(), engine)
+	h := identityhttp.NewHandler(nil, nil, nil, nil, nil, zap.NewNop(), engine)
 
 	mux := chi.NewMux()
 	mux.Use(recoverMiddleware)

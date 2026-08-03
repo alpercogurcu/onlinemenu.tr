@@ -74,6 +74,44 @@ func (r *PersonRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Person) (do
 	return created, nil
 }
 
+// FindOrCreateByKeycloakSub returns the existing person for p.KeycloakSub, or
+// creates one from p if none exists yet.
+//
+// This is the idempotency primitive the staff invite flow (ADR-AUTH-003)
+// relies on: two concurrent invites for a brand-new email (or a single
+// invite retried after its Keycloak write succeeded but nothing was
+// committed to Postgres) must converge on exactly one persons row.
+//
+// ON CONFLICT DO NOTHING is used rather than catching a unique-violation
+// error, because a raised error would abort the surrounding transaction —
+// the caller could not then re-SELECT the existing row without starting a
+// new transaction. DO NOTHING never raises, so the fallback SELECT below
+// runs safely inside the same tx as the attempted INSERT.
+func (r *PersonRepo) FindOrCreateByKeycloakSub(ctx context.Context, tx pgx.Tx, p domain.Person) (domain.Person, error) {
+	const insertQ = `
+		INSERT INTO persons (keycloak_sub, email, full_name, phone)
+		VALUES ($1, $2, $3, NULLIF($4, ''))
+		ON CONFLICT (keycloak_sub) DO NOTHING
+		RETURNING id, keycloak_sub, email, full_name, COALESCE(phone, ''), created_at, updated_at`
+
+	row := tx.QueryRow(ctx, insertQ, p.KeycloakSub, p.Email, p.FullName, p.Phone)
+	created, err := scanPerson(row)
+	if err == nil {
+		return created, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Person{}, fmt.Errorf("identity/repo/person: find or create: insert: %w", err)
+	}
+
+	// Conflict: another invite already created this person. Fetch it — no
+	// abort occurred, so this SELECT runs in the same transaction.
+	existing, err := r.GetByKeycloakSub(ctx, tx, p.KeycloakSub)
+	if err != nil {
+		return domain.Person{}, fmt.Errorf("identity/repo/person: find or create: refetch: %w", err)
+	}
+	return existing, nil
+}
+
 // Update persists changes to mutable person fields.
 func (r *PersonRepo) Update(ctx context.Context, tx pgx.Tx, p domain.Person) (domain.Person, error) {
 	const q = `

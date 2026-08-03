@@ -17,6 +17,7 @@ import (
 	"onlinemenu.tr/internal/platform/cache"
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
+	"onlinemenu.tr/internal/platform/keycloak"
 	platformotel "onlinemenu.tr/internal/platform/otel"
 	"onlinemenu.tr/internal/platform/vault"
 )
@@ -40,12 +41,14 @@ func TestFxGraphValidation(t *testing.T) {
 		fx.Provide(newCacheConfig),
 		fx.Provide(newOPAConfig),
 		fx.Provide(newHTTPConfig),
+		fx.Provide(newKeycloakConfig),
 
 		db.Module,
 		eventbus.Module,
 		platformotel.Module,
 		vault.Module,
 		cache.Module,
+		keycloak.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),

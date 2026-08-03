@@ -35,6 +35,7 @@ import (
 	"onlinemenu.tr/internal/platform/cache"
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/eventbus"
+	"onlinemenu.tr/internal/platform/keycloak"
 	platformotel "onlinemenu.tr/internal/platform/otel"
 	"onlinemenu.tr/internal/platform/outbox"
 	"onlinemenu.tr/internal/platform/vault"
@@ -62,6 +63,7 @@ func main() {
 		fx.Provide(newOutboxConfig),
 		fx.Provide(newPosWSConfig),
 		fx.Provide(newFiscalConfig),
+		fx.Provide(newKeycloakConfig),
 
 		db.Module,
 		eventbus.Module,
@@ -69,6 +71,7 @@ func main() {
 		vault.Module,
 		cache.Module,
 		outbox.Module,
+		keycloak.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
 		fx.Provide(newTokenVerifier),
@@ -452,6 +455,41 @@ func newFiscalConfig() payment.FiscalConfig {
 		}
 	}
 	return cfg
+}
+
+// newKeycloakConfig assembles the Keycloak Admin API client config (ADR-AUTH-003).
+//
+// KEYCLOAK_ADMIN_CLIENT_ID gates the whole feature the same way FISCAL_DEVICE_TYPE
+// gates the TokenX adapter above: unset (the dev/CI default), the staff invite
+// endpoint is simply unavailable — every keycloak.Client call returns
+// keycloak.ErrNotConfigured — rather than the process failing to boot because
+// no local Keycloak admin service account or Vault secret has been set up.
+// Set (production), every field is required and the Vault-sourced client
+// secret is fetched eagerly so a missing secret fails fast at startup rather
+// than at the first staff invite.
+func newKeycloakConfig(vc *vault.Client) (keycloak.Config, error) {
+	clientID := envOr("KEYCLOAK_ADMIN_CLIENT_ID", "")
+	if clientID == "" {
+		return keycloak.Config{}, nil
+	}
+
+	// fx does not inject context.Context (see newTokenVerifier below); a
+	// bounded background context is used so a stuck Vault call cannot hang
+	// startup forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	secret, err := vc.GetString(ctx, "secret", "keycloak/admin-client", "client_secret")
+	if err != nil {
+		return keycloak.Config{}, fmt.Errorf("api: fetch keycloak admin client secret from vault: %w", err)
+	}
+
+	return keycloak.Config{
+		BaseURL:      mustEnv("KEYCLOAK_ADMIN_BASE_URL"),
+		Realm:        envOr("KEYCLOAK_REALM", "onlinemenu"),
+		ClientID:     clientID,
+		ClientSecret: secret,
+	}, nil
 }
 
 func newOutboxConfig() outbox.Config {

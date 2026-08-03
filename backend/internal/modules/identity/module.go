@@ -27,6 +27,7 @@ var Module = fx.Module("identity",
 		service.NewRoleService,
 		service.NewMembershipService,
 		service.NewContextService,
+		service.NewStaffInviteService,
 		events.NewSubscriber,
 		identityhttp.NewHandler,
 		// Adapters expose the services through the public interfaces consumed by other modules.

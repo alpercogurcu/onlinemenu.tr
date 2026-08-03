@@ -47,6 +47,22 @@ type identityInvalidError struct{}
 
 func (identityInvalidError) Error() string { return "identity: invalid input" }
 
+// ErrInvalidInput marks a caller-supplied value the staff invite service
+// rejects (a blank name/email, a malformed email, a branch-scoped role
+// invited without a branch_id). Callers map it to HTTP 422.
+//
+// This mirrors payment.ErrInvalidInput (commit d451cb2): without a sentinel,
+// these fall through to the generic error branch, are reported as 500
+// "internal server error", and are logged at Error level even though the
+// caller — not the server — is at fault. It is distinct from ErrInvalid
+// (mapped to 400 elsewhere in this module) so introducing it does not change
+// the status code of any existing identity endpoint.
+var ErrInvalidInput = identityInvalidInputError{}
+
+type identityInvalidInputError struct{}
+
+func (identityInvalidInputError) Error() string { return "identity: invalid input" }
+
 // ErrConflict is returned when input is well-formed but conflicts with the
 // current state of the resource, so the caller must act before retrying.
 // Callers should use errors.Is to check for this condition.

@@ -87,7 +87,7 @@ func (r *BranchRepo) CreateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17
+			$12, $13, $14, NULLIF($15, ''), $16, $17
 		)
 		RETURNING ` + branchCols
 
@@ -116,7 +116,7 @@ func (r *BranchRepo) UpdateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 			name = $1, slug = $2, ownership_type = $3, operation_type = $4,
 			supply_rules = $5, phone = $6, address = $7, city = $8,
 			district = $9, postal_code = $10, iban = $11, legal_name = $12,
-			identity_type = $13, tax_no = $14, tax_office = $15, is_active = $16,
+			identity_type = $13, tax_no = NULLIF($14, ''), tax_office = $15, is_active = $16,
 			updated_at = NOW()
 		WHERE tenant_id = $17 AND id = $18
 		RETURNING ` + branchCols

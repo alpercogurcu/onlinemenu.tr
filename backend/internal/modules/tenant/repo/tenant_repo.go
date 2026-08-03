@@ -26,7 +26,7 @@ func NewTenantRepo() *TenantRepo {
 func (r *TenantRepo) GetByID(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (pub.Tenant, error) {
 	const q = `
 		SELECT id, name, legal_name, trade_name, slug, plan, enabled_modules,
-		       identity_type, tax_no, tax_office, mersis_no,
+		       identity_type, COALESCE(tax_no, ''), tax_office, COALESCE(mersis_no, ''),
 		       address, city, district, postal_code, country,
 		       phone, contact_email, is_active
 		FROM tenants
@@ -61,12 +61,12 @@ func (r *TenantRepo) Create(ctx context.Context, tx pgx.Tx, t pub.Tenant) (pub.T
 			phone, contact_email, is_active
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11,
+			$8, NULLIF($9, ''), $10, NULLIF($11, ''),
 			$12, $13, $14, $15, $16,
 			$17, $18, $19
 		)
 		RETURNING id, name, legal_name, trade_name, slug, plan, enabled_modules,
-		          identity_type, tax_no, tax_office, mersis_no,
+		          identity_type, COALESCE(tax_no, ''), tax_office, COALESCE(mersis_no, ''),
 		          address, city, district, postal_code, country,
 		          phone, contact_email, is_active`
 
@@ -94,13 +94,13 @@ func (r *TenantRepo) Update(ctx context.Context, tx pgx.Tx, t pub.Tenant) (pub.T
 	const q = `
 		UPDATE tenants SET
 			name = $1, legal_name = $2, trade_name = $3, slug = $4, plan = $5,
-			enabled_modules = $6, identity_type = $7, tax_no = $8, tax_office = $9,
-			mersis_no = $10, address = $11, city = $12, district = $13,
+			enabled_modules = $6, identity_type = $7, tax_no = NULLIF($8, ''), tax_office = $9,
+			mersis_no = NULLIF($10, ''), address = $11, city = $12, district = $13,
 			postal_code = $14, country = $15, phone = $16, contact_email = $17,
 			is_active = $18, updated_at = NOW()
 		WHERE id = $19
 		RETURNING id, name, legal_name, trade_name, slug, plan, enabled_modules,
-		          identity_type, tax_no, tax_office, mersis_no,
+		          identity_type, COALESCE(tax_no, ''), tax_office, COALESCE(mersis_no, ''),
 		          address, city, district, postal_code, country,
 		          phone, contact_email, is_active`
 

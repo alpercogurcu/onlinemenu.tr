@@ -213,10 +213,11 @@ func TestDocumentRepo_Defect_UpdateDocumentStatus_NoTransitionGuard(t *testing.T
 // duplicate-key error). The intended "leave it blank during onboarding"
 // path is broken for every tenant after the first.
 func TestTenantRepo_Defect_SecondTenantWithoutTaxNo_Collides(t *testing.T) {
-	t.Skip("DEFECT: public.Tenant.TaxNo/MersisNo are non-nullable Go strings, so leaving them unset " +
-		"inserts '' (not NULL) and collides with tenants_tax_no_idx/tenants_mersis_no_idx for every " +
-		"tenant after the first — see file-level comment for repro")
-
+	// FIXED: TenantRepo now writes NULLIF($n, '') for tax_no/mersis_no and
+	// reads them back with COALESCE(col, ''), so an unset field lands as NULL
+	// and the partial unique indexes ignore it — which is what migration
+	// 000002's own comment ("onboarding kolaylığı") always intended. This is
+	// now a live regression test; do not re-skip it.
 	ctx := context.Background()
 	r := repo.NewTenantRepo()
 
@@ -244,10 +245,8 @@ func TestTenantRepo_Defect_SecondTenantWithoutTaxNo_Collides(t *testing.T) {
 // tenant/000003) — and notably this index is GLOBAL, not scoped per tenant,
 // so it collides across UNRELATED tenants' branches, not just within one.
 func TestBranchRepo_Defect_SecondBranchWithoutTaxNo_Collides(t *testing.T) {
-	t.Skip("DEFECT: public.Branch.TaxNo is a non-nullable Go string, so leaving it unset inserts '' " +
-		"(not NULL) and collides with the GLOBAL branches_tax_no_idx for every branch after the " +
-		"first, across ALL tenants — see file-level comment for repro")
-
+	// FIXED: BranchRepo now writes NULLIF($n, '') for tax_no; the read side
+	// already used COALESCE. Live regression test — do not re-skip.
 	ctx := context.Background()
 	r := repo.NewBranchRepo()
 

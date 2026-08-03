@@ -80,9 +80,22 @@ func (p Principal) IsCustomer() bool { return p.Ctx == ContextCustomer }
 // semantics here are only safe for tenant-level ownership checks
 // (tenant/http handler, branchAccessMiddleware), where a chain-wide
 // membership legitimately means chain-wide reach. In a service acting on
-// branch-scoped money or stock it fails OPEN: memberships.branch_id is
-// nullable with no constraint keeping a branch-scoped system role bound to a
-// branch, so a mis-provisioned chain-wide cashier would pass this check.
+// branch-scoped money or stock it fails OPEN: this check alone cannot tell a
+// legitimately chain-wide principal (an owner) from one that merely lacks a
+// branch, so it would hand a branch-scoped action to whoever asks.
+//
+// Note on why that is still true after ADR-SEC-005: 000012/000013 do now
+// force a branch_scoped role's membership to carry a non-null branch_id, so
+// the specific "mis-provisioned chain-wide cashier" this comment used to cite
+// is no longer reachable. The warning stands for the general reason above —
+// chain-wide reach is not per-branch authorization — and because the DB
+// guard constrains membership rows, not this function's inputs.
+//
+// Enforced, not just documented: the only direct caller is
+// tenant/http.branchAccessMiddleware (a tenant-level ownership check, which
+// additionally verifies the branch belongs to the path tenant). Every module
+// that authorizes branch-scoped work has its own deliberately stricter
+// requireBranch — see payment/pos/inventory/billing service/branch_authz.go.
 func (p Principal) HasBranchAccess(branchID uuid.UUID) bool {
 	if p.Ctx != ContextStaff {
 		return false

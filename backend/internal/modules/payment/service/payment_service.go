@@ -120,13 +120,13 @@ func cashPaymentRequiresOpenSession(method domain.PaymentMethod) bool {
 // ADR-SEC-003:    IdempotencyKey must be non-empty (enforced by HTTP middleware and here).
 func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleRequest) (domain.Payment, error) {
 	if req.IdempotencyKey == "" {
-		return domain.Payment{}, fmt.Errorf("payment/service: idempotency key is required")
+		return domain.Payment{}, fmt.Errorf("%w: idempotency key is required", pub.ErrInvalidInput)
 	}
 	if !req.Method.Valid() {
-		return domain.Payment{}, fmt.Errorf("payment/service: invalid method %q", req.Method)
+		return domain.Payment{}, fmt.Errorf("%w: invalid method %q", pub.ErrInvalidInput, req.Method)
 	}
 	if req.AmountTotal <= 0 {
-		return domain.Payment{}, fmt.Errorf("payment/service: amount_total must be positive")
+		return domain.Payment{}, fmt.Errorf("%w: amount_total must be positive", pub.ErrInvalidInput)
 	}
 	if req.Currency == "" {
 		req.Currency = "TRY"

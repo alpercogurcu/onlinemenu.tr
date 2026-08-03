@@ -901,3 +901,43 @@ func TestReconciler_CompletedSubmissionIsNeverSwept(t *testing.T) {
 	assert.Equal(t, domain.PaymentStatusCompleted, fetchPayment(t, svc, payment.ID).Status)
 	assert.Equal(t, string(domain.FiscalSubmissionCompleted), submissionStatus(t, tenantA, payment.ID))
 }
+
+// TestPaymentService_RegisterSale_RejectsInvalidInput pins RegisterSale's
+// caller-input rejections to pub.ErrInvalidInput.
+//
+// The sentinel is the contract the HTTP layer switches on to answer 422.
+// Before it existed, registerSale had no sentinel mapping at all: an unknown
+// payment method or a non-positive amount was answered "internal server error"
+// and logged at Error level — the caller was told the server broke, and real
+// faults were buried under false alarms. Asserting only "some error" is how
+// that survived, so these assert the sentinel specifically.
+func TestPaymentService_RegisterSale_RejectsInvalidInput(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	svc := newPaymentService()
+
+	cases := map[string]service.RegisterSaleRequest{
+		"missing idempotency key": {
+			TenantID: tenantA, BranchID: branchA,
+			Method: domain.PaymentMethodCash, AmountTotal: 1000, Currency: "TRY",
+		},
+		"unknown method": {
+			TenantID: tenantA, BranchID: branchA, IdempotencyKey: uuid.NewString(),
+			Method: domain.PaymentMethod("bitcoin"), AmountTotal: 1000, Currency: "TRY",
+		},
+		"zero amount": {
+			TenantID: tenantA, BranchID: branchA, IdempotencyKey: uuid.NewString(),
+			Method: domain.PaymentMethodCash, AmountTotal: 0, Currency: "TRY",
+		},
+		"negative amount": {
+			TenantID: tenantA, BranchID: branchA, IdempotencyKey: uuid.NewString(),
+			Method: domain.PaymentMethodCash, AmountTotal: -1, Currency: "TRY",
+		},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.RegisterSale(ctx, req)
+			assert.ErrorIs(t, err, pub.ErrInvalidInput)
+		})
+	}
+}

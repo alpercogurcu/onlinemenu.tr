@@ -302,6 +302,15 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		// before they can take cash.
 		http.Error(w, "bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı", http.StatusConflict)
 		return
+	case errors.Is(err, pub.ErrInvalidInput):
+		// 422, not 500. Until now this endpoint had no sentinel mapping at
+		// all, so an unknown payment method or a non-positive amount was
+		// answered "internal server error" and logged at Error level — the
+		// caller was told the server broke, and real faults were buried under
+		// false alarms. Same defect d451cb2 fixed on the cash session
+		// handlers; it survived here because the sentinel did not exist yet.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
 	case err != nil:
 		h.logger.Error("payment: register sale", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)

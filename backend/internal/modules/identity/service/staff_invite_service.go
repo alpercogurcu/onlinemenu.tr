@@ -192,19 +192,34 @@ func (s *StaffInviteService) Invite(ctx context.Context, tenantID uuid.UUID, req
 		Person:              person,
 		Membership:          membership,
 		KeycloakUserCreated: created,
-		NotificationSent:    true,
 	}
 
-	// Person and membership are already committed at this point. A failure
-	// here (most commonly: the realm has no SMTP configured) must not be
-	// swallowed (docs/lessons-from-b2b.md) — it is surfaced on the result
-	// with its underlying reason, not raised as an error that would tell the
-	// caller the whole invite failed when it did not.
-	if err := s.admin.TriggerPasswordSetup(ctx, kcUser.ID); err != nil {
-		s.logger.Warn("identity/service/staff_invite: password-setup email not sent",
-			zap.String("keycloak_user_id", kcUser.ID), zap.Error(err))
-		result.NotificationSent = false
-		result.NotificationError = err.Error()
+	// Only a user THIS call created needs a password. On the reuse path the
+	// person already has working credentials — under AUTH-002's single realm
+	// they may be working at another tenant right now — and triggering
+	// execute-actions on their account would send them an unrequested
+	// "set your password" mail and, if the realm attaches UPDATE_PASSWORD as
+	// a required action, force a reset that breaks their existing login.
+	// One tenant's invite must not reach into an account another tenant
+	// depends on; that is the same boundary the ADR draws when it forbids
+	// deleting the Keycloak user to compensate a DB failure.
+	//
+	// Result contract: NotificationSent is true only when a mail was actually
+	// sent; NotificationError is non-empty only when an attempt failed. The
+	// reuse path leaves both zero — nothing was needed and nothing failed.
+	if created {
+		if err := s.admin.TriggerPasswordSetup(ctx, kcUser.ID); err != nil {
+			// Person and membership are already committed. A failure here
+			// (most commonly: the realm has no SMTP configured) must not be
+			// swallowed (docs/lessons-from-b2b.md) — it is surfaced on the
+			// result with its underlying reason, not raised as an error that
+			// would tell the caller the whole invite failed when it did not.
+			s.logger.Warn("identity/service/staff_invite: password-setup email not sent",
+				zap.String("keycloak_user_id", kcUser.ID), zap.Error(err))
+			result.NotificationError = err.Error()
+		} else {
+			result.NotificationSent = true
+		}
 	}
 
 	return result, nil

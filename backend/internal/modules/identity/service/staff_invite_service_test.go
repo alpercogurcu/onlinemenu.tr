@@ -175,6 +175,16 @@ func TestStaffInvite_EmailAlreadyInRealm_ReusesExistingUser(t *testing.T) {
 	assert.False(t, result.KeycloakUserCreated, "an existing realm user must be reused, not recreated")
 	assert.Equal(t, preexisting.ID, result.Person.KeycloakSub)
 	assert.Equal(t, 0, admin.createCalls, "CreateUser must never be called when FindUserByEmail already found the user")
+
+	// The account already has working credentials — very possibly in daily use
+	// at the tenant that provisioned it. Triggering execute-actions on it
+	// would send an unrequested password-setup mail and, with UPDATE_PASSWORD
+	// attached as a required action, force a reset that breaks that tenant's
+	// login. One tenant's invite must not reach into another's account.
+	assert.Equal(t, 0, admin.notifyCalls,
+		"password setup must not be triggered for a reused account")
+	assert.False(t, result.NotificationSent, "no mail was sent, so this must not claim one was")
+	assert.Empty(t, result.NotificationError, "nothing was attempted, so nothing failed")
 }
 
 // TestStaffInvite_DBFailureAfterKeycloakWrite_RecoversOnRetry is the ADR's

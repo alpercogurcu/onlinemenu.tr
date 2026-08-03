@@ -168,9 +168,15 @@ Tasarım referansı ve tam gerekçe: [lessons-from-odoo.md § Tier 1 madde 1 ve 
 - [x] **PIN akışı backend'i** (`6ca7656`) — katılım, PIN'le geçiş, yönetici sıfırlaması.
       Kullanıcı sayımına karşı tek sentinel + her durumda argon2id hesabı; kilit (session, person)
       başına Redis'te, açılışı yalnız yeniden katılım
-- [ ] **PIN akışının POS arayüzü** — backend hazır, ekran yok. Kasiyer hâlâ PIN'le geçiş yapamıyor
-- [ ] **Katılımcı listesi ucu yok.** PIN ekranı "listeden isim seç" modeline dayanıyor ama bir
-      oturuma kimlerin katıldığını sorgulayacak uç bulunmuyor. POS arayüzünün ilk çarpacağı duvar bu
+- [x] **PIN akışının POS arayüzü + katılımcı listesi ucu** (`4cd02cd`). PIN input'tan çıkmıyor,
+      her gönderimden sonra koşulsuz temizleniyor, istemcide karşılaştırılmıyor
+- [ ] **`Join` sırasında iki farklı durum aynı 403'ü dönüyor.** Hâlihazırda PIN'le geçmiş bir
+      kasiyer "vardiyaya katıl" derse backend `ErrSessionScopedPrincipal` dönüyor, ama bu
+      `ErrBranchForbidden` ile aynı gövdeye düşüyor; ekran "yetkiniz yok" diyor, oysa doğru mesaj
+      "önce Keycloak ile yeniden giriş yapın". Ayırt edilebilir bir sentinel gerekiyor
+- [ ] **Vardiyaya katılım otomatik değil.** Kasiyer Keycloak ile giriş yaptıktan sonra ayrıca
+      "Vardiyaya Katıl" demek zorunda. Bilinçli seçim (otomatik katılım için spec yoktu) ama
+      ürün tarafında bakılmalı — kasiyer katılmayı unutursa PIN'le seçilemez hale geliyor
 
 **⚠️ Ölçülmesi gereken:** `RequireOpenSession`, oturum-kapsamlı token taşıyan **her istekte**
 `IsOpen` çağırıyor ve bu düz bir SELECT değil — `WithTenantReadTx` tam bir transaction açıyor

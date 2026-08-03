@@ -228,18 +228,30 @@ Açık teknik sorular `backlog-fiscal.md`'de (tokenx 401 re-auth akışı, `oper
 
 ---
 
-## ⏳ Yanıt bekleyen ürün soruları
+## Kararlar (2026-08-03)
 
-Üçü de teknik değil, ticari/operasyonel karar. Hiçbiri tahminle kapatılmamalı.
+Üç açık ürün sorusu karara bağlandı. Gerekçeler burada; katılmıyorsanız tartışılacak yer burası.
 
-1. **Keycloak davet entegrasyonu başlasın mı?** ADR-AUTH-003 yazıldı ve onaylandı, implementasyon
-   bekliyor. Personel eklenemeden pilot çalışmıyor (madde 2), ama POS/mutfak odağının dışında.
-2. **Kasa açılmadan satış yapılabilmeli mi?** Bugün yapılabiliyor; POS yalnızca uyarı gösteriyor.
-   Engellenecekse zorlama **backend'e** konmalı — istemcide bloklamak, backend'de olmayan bir
-   kuralı uydurmak olur ve ikisi zamanla ayrışır.
-3. **Fark onayı (açık/fazla) yöneticiye bağlansın mı?** Bugünkü kontrol denetim izi: kim açtı, kim
-   saydı, kim kapattı, her hareket aktör ve zaman damgasıyla. Dört-göz kuralı istenirse seed'li ama
-   hâlâ bağlanmamış `checks:approve` sözlüğü buna aday.
+**1. Keycloak davet entegrasyonu → başlıyor.** Pilotun önündeki tek yapısal engel; personel
+eklenemeden diğer hiçbir işin anlamı yok. POS/mutfak odağı özellik kapsamına dairdi, altyapı ön
+koşulunu düşürmeye değil. ADR-AUTH-003 uygulanıyor.
+
+**2. Kasa açılmadan satış → engelleniyor (yalnız nakit, backend'de).**
+Bu bir tercih değil **doğruluk sorunu**: beklenen kapanış
+`opening + SumCompletedCashPayments(branch, session.OpenedAt, session.ClosedAt) + movements`
+ile hesaplanıyor. Oturum yokken alınan nakit hiçbir oturum penceresine düşmüyor, yani mutabakata
+**hiç girmiyor** — çekmece yapısal olarak tutmuyor.
+
+Kapsam dar tutuldu: kart/ÖKC, yemek kartı, ikram, ödemesiz ve açık hesap çekmeceye dokunmadığı için
+engellenmiyor; adisyon açma, sipariş girme, adisyon kapatma da engellenmiyor. Zorlama backend'de
+çünkü istemcide bloklamak, sunucuda olmayan bir kuralı uydurmak olur ve ikisi zamanla ayrışır.
+
+**3. Fark onayı (açık/fazla) → ertelendi, denetim izi yeterli.** Tek kasalı pilotta kasiyer çoğu
+zaman işletmecinin kendisi. Dört-göz kuralı kapanışta ikinci bir kişinin hazır bulunmasını şart
+koşar; küçük restoranda bu kişi yok ve kural fiilen kasayı kapatılamaz hale getirir. Bugünkü
+kontrol: kim açtı, kim saydı, kim kapattı, her hareket aktör ve zaman damgasıyla.
+Çok kişili vardiyası olan bir müşteri geldiğinde yeniden bakılır; aday sözlük seed'li ama hâlâ
+bağlanmamış `checks:approve`.
 
 ---
 

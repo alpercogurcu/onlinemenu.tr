@@ -107,21 +107,37 @@ e-postayla mevcut olanı bulur) → dönen kullanıcı id'si `persons.keycloak_s
 `memberships` yazılır → Keycloak parola belirleme e-postasını gönderir → personel ilk girişinde
 doğrudan çalışır.
 
-**Kapsam** (Keycloak Admin API entegrasyonu bugün **hiç yok** — `platform/keycloak` paketi yok,
-`client_credentials`/service account izi yok):
-- [ ] **ADR:** backend'in Keycloak'a yazma yetkisi — servis hesabı, yetki sınırı, sır yönetimi
-- [ ] `platform/keycloak`: Admin API istemcisi (client_credentials, kullanıcı yarat/e-postayla ara,
-      parola belirleme aksiyonu). Sır Vault'tan, `os.Getenv` modül kodunda yasak
-- [ ] `deploy/keycloak/realm-onlinemenu.json`: `manage-users` yetkili confidential client
-- [ ] `POST /v1/identity/{tenantID}/staff` — davet ucu, tenant-kapsamlı (platform-admin değil)
-- [ ] **Kısmi başarısızlık:** Keycloak kullanıcısı yaratıldı ama DB yazımı düştü senaryosu.
-      Davet e-posta bazında idempotent olmalı; yeniden denemede ikinci Keycloak kullanıcısı doğmamalı
-- [ ] Admin panelinde "personel ekle → rol ata" ekranı
-- [ ] İzin: mevcut `identity.membership.create` yeter mi, ayrı `identity.staff.invite` mı — madde 7'nin
-      testi artık bunu zorluyor, seed ile kod birlikte gitmeli
-- [ ] `POST /persons` ve `GET /persons/{id}` devre dışı kalmaya devam eder
+**Kapsam:**
+- [x] **ADR-AUTH-003** — backend'in Keycloak'a yazma yetkisi, servis hesabı, sır yönetimi
+- [x] `platform/keycloak` (`8bd4138`) — client_credentials, token önbellekli/singleflight,
+      `AdminAPI` arayüzü üzerinden tüketiliyor (testler canlı Keycloak istemiyor).
+      **Silme metodu yok** — "DB hatasında Keycloak kullanıcısı asla silinmez" kuralı yapısal
+      olarak imkânsız kılındı, uygulanmamış değil
+- [x] `POST /v1/identity/{tenantID}/staff` — davet ucu
+- [x] Kısmi başarısızlık: `ON CONFLICT DO NOTHING` + aynı transaction'da yeniden SELECT.
+      Unique ihlalini yakalayıp yeniden okumak transaction'ı abort ederdi (25P02)
+- [x] İzin kararı: **yeni izin eklenmedi.** Seed'de hiç `identity` kaynağı yok; `identity.*`
+      rotaları zaten yalnız manager wildcard'ıyla erişilebiliyor. Doğrulandı, varsayılmadı
+- [x] Servis hesabı kurulumu, Vault yolu ve env değişkenleri belgelendi (`1d50fca`,
+      `deploy/keycloak/README.md`)
+- [ ] `deploy/keycloak/realm-onlinemenu.json`'a confidential client'ın **eklenmesi**
+      (README anlatıyor, realm dosyası henüz taşımıyor — dev ortamı elle kurulum gerektiriyor)
+- [ ] Admin panelinde "personel ekle → rol ata" ekranı — uç hazır, arayüz yok
+- [x] `POST /persons` ve `GET /persons/{id}` devre dışı kalmaya devam ediyor
 
-⚠️ Bu, kasa oturumuyla birlikte pilotun ikinci uzun kalemi. Takvim beklentisi buna göre kurulmalı.
+### Bu iş sırasında ortaya çıkan, kapatılmamış açıklar
+
+- [ ] **`persons.email` Keycloak ile senkron değil.** Realm yöneticisi bir kullanıcının e-postasını
+      doğrudan değiştirirse `persons.email` sessizce kayar. Sonraki davet o adresle Keycloak'ta
+      kullanıcı bulamaz → ikinci kullanıcı yaratır → person yazımında `persons_email_idx`
+      çakışır ve 500'e düşer. Gün-2 Keycloak operasyonlarında gerçekçi
+- [ ] **Şube varlığı doğrulanmıyor.** `identity/000011` modül izolasyonu için
+      `memberships.branch_id → branches` FK'sını kaldırmış; davet, var olmayan bir şubeye
+      membership yazabilir ve DB seviyesinde hiçbir şey yakalamaz. Servis de doğrulayamıyor
+      (`tenant/public`'e geçmeden). Önceden var olan boşluk, ama bu uç ona yeni bir yol açıyor
+- [ ] **SMTP olmadan davet yarım kalıyor.** Parola e-postası düşerse davet başarılı sayılıyor
+      (doğru — geri alınacak bir şey yok) ve `notification_sent: false` dönüyor, ama personel
+      giriş yapamıyor. Üretimde SMTP fiilen zorunlu
 
 ## 3. Kasa oturumu + kasiyer kimlik doğrulama (tek ADR)
 

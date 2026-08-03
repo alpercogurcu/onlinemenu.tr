@@ -138,3 +138,76 @@ Kanıtladıkları:
 > **CI önerisi:** Bu test normal `go test ./...` içinde çalışmaz (build tag).
 > CI'da ayrı bir job/step olarak (Docker gerektirir) koşturulmalı:
 > `go test -tags keycloak_integration ./internal/e2e/keycloaklogin/...`
+
+---
+
+## Personel Daveti — Admin API Servis Hesabı (ADR-AUTH-003)
+
+`POST /v1/identity/{tenantID}/staff` yöneticiye personel davet ettiriyor; backend
+bunun için Keycloak Admin API'sine **yazma** yetkisiyle bağlanıyor. Bu bölüm o
+bağlantının kurulması için gereken her şeyi listeler — koddaki değerler burada
+belgelenmezse dağıtım sessizce çalışmaz.
+
+### 1. Realm'de confidential client
+
+`onlinemenu-admin-api` (ad serbest) adında bir client açın:
+
+- **Client authentication:** ON (confidential)
+- **Service accounts roles:** ON — `client_credentials` grant bunu gerektirir
+- **Standard flow / Direct access grants:** OFF (bu client hiç kullanıcı adına oturum açmaz)
+
+### 2. Servis hesabına verilecek roller — yalnız üçü
+
+`realm-management` client'ından, servis hesabı kullanıcısına:
+
+| Rol | Neden |
+|---|---|
+| `create-user` | Kullanıcı yaratmak |
+| `query-users` | E-postayla var olanı bulmak — idempotency bunun üzerine kurulu |
+| `manage-users` | Parola belirleme (execute-actions) e-postasını tetiklemek |
+
+**Vermeyin:** `manage-realm`, `manage-clients`, `manage-authorization`,
+`manage-identity-providers`. Ele geçirilen bir uygulama sunucusu kimlik
+katmanının tamamını devredebilmemeli; bu iş için gerekli değiller.
+
+### 3. Vault'taki sır — tam yol
+
+Backend client secret'ı **Vault'tan** okur (`.env`'den değil):
+
+```
+mount : secret
+path  : keycloak/admin-client
+key   : client_secret
+```
+
+```bash
+vault kv put secret/keycloak/admin-client client_secret='<client secret>'
+```
+
+### 4. Ortam değişkenleri
+
+| Değişken | Zorunlu | Varsayılan | Not |
+|---|---|---|---|
+| `KEYCLOAK_ADMIN_CLIENT_ID` | — | *(boş)* | **Boşsa özellik tamamen kapalıdır**: config sıfır değerle döner, davet ucu çalışmaz. Üretimde doldurulmalı |
+| `KEYCLOAK_ADMIN_BASE_URL` | evet* | — | `KEYCLOAK_ADMIN_CLIENT_ID` doluysa zorunlu; eksikse süreç başlangıçta durur |
+| `KEYCLOAK_REALM` | hayır | `onlinemenu` | |
+
+### 5. SMTP — sessizce düşmez ama düşer
+
+Realm'de SMTP yapılandırılmamışsa parola belirleme e-postası gönderilemez.
+Davet **başarılı sayılır** (person ve membership zaten yazılmıştır, geri
+alınacak bir şey yoktur) ama yanıt `notification_sent: false` ve
+`notification_error: "<gerçek hata>"` taşır, ayrıca Warn seviyesinde loglanır.
+
+Personel giriş yapamayacağı için üretimde SMTP yapılandırması **fiilen
+zorunludur**; aksi halde her davet elle parola belirlemeyi gerektirir.
+
+### 6. Dört yerde wiring — atlanırsa `go build` uyarmaz
+
+`keycloak.Module` şu **dört** dosyada birden kayıtlı olmalı:
+`cmd/api/main.go`, `cmd/api-core/main.go` ve bunların `main_test.go`'ları
+(ikisi fx modül listesini `fx.ValidateApp` için bağımsız olarak yeniden bildirir).
+
+Biri atlanırsa `go build ./...` **yeşil kalır**, DI grafiği ise çözülemez olur;
+yalnız `go test ./cmd/...` yakalar. Yeni bir platform modülü eklerken aynı tuzak
+geçerli.

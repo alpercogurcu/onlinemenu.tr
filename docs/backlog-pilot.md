@@ -236,7 +236,7 @@ Açık teknik sorular `backlog-fiscal.md`'de (tokenx 401 re-auth akışı, `oper
 eklenemeden diğer hiçbir işin anlamı yok. POS/mutfak odağı özellik kapsamına dairdi, altyapı ön
 koşulunu düşürmeye değil. ADR-AUTH-003 uygulanıyor.
 
-**2. Kasa açılmadan satış → engelleniyor (yalnız nakit, backend'de).**
+**2. Kasa açılmadan satış → engelleniyor (yalnız nakit, backend'de).** ✅ Uygulandı (`b1c5691`).
 Bu bir tercih değil **doğruluk sorunu**: beklenen kapanış
 `opening + SumCompletedCashPayments(branch, session.OpenedAt, session.ClosedAt) + movements`
 ile hesaplanıyor. Oturum yokken alınan nakit hiçbir oturum penceresine düşmüyor, yani mutabakata
@@ -245,6 +245,12 @@ ile hesaplanıyor. Oturum yokken alınan nakit hiçbir oturum penceresine düşm
 Kapsam dar tutuldu: kart/ÖKC, yemek kartı, ikram, ödemesiz ve açık hesap çekmeceye dokunmadığı için
 engellenmiyor; adisyon açma, sipariş girme, adisyon kapatma da engellenmiyor. Zorlama backend'de
 çünkü istemcide bloklamak, sunucuda olmayan bir kuralı uydurmak olur ve ikisi zamanla ayrışır.
+
+Guard, ödeme yazımıyla aynı transaction'da ve idempotency okumasından **sonra** duruyor: öncesinde
+olsaydı, oturum açıkken başarılı olmuş bir ödemenin ağ hatası sonrası yeniden denenmesi yanlışlıkla
+reddedilirdi. Oturum okuması `FOR SHARE` — düz `SELECT` ile eşzamanlı bir kapanış, guard'ın okuması
+ile ödemenin yazımı arasına girip parayı yine görünmez yapabiliyordu. Bu yarış ampirik olarak
+üretildi (25 iterasyonun 3-4'ünde) ve düzeltmeden sonra kayboldu; regresyon testi mevcut.
 
 **3. Fark onayı (açık/fazla) → ertelendi, denetim izi yeterli.** Tek kasalı pilotta kasiyer çoğu
 zaman işletmecinin kendisi. Dört-göz kuralı kapanışta ikinci bir kişinin hazır bulunmasını şart

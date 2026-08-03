@@ -165,8 +165,22 @@ Tasarım referansı ve tam gerekçe: [lessons-from-odoo.md § Tier 1 madde 1 ve 
 - [ ] Eski oturum **uyarı** job'ı (otomatik kapatma değil — sayımı imkânsız kılar)
 - [ ] Kurtarma oturumu (`rescue`) — stranded submission runbook'uyla birleştir
 - [ ] Kasa hareketleri geçmiş listesi — şu an yalnız net toplam görünüyor, defter satırları değil
-- [ ] **PIN akışı henüz yok.** Kasiyer değişimi hâlâ tam Keycloak akışı gerektiriyor; ADR-DATA-008
-      Karar 2 yazılı ama uygulanmadı. Yoğun serviste asıl darboğaz bu
+- [x] **PIN akışı backend'i** (`6ca7656`) — katılım, PIN'le geçiş, yönetici sıfırlaması.
+      Kullanıcı sayımına karşı tek sentinel + her durumda argon2id hesabı; kilit (session, person)
+      başına Redis'te, açılışı yalnız yeniden katılım
+- [ ] **PIN akışının POS arayüzü** — backend hazır, ekran yok. Kasiyer hâlâ PIN'le geçiş yapamıyor
+- [ ] **Katılımcı listesi ucu yok.** PIN ekranı "listeden isim seç" modeline dayanıyor ama bir
+      oturuma kimlerin katıldığını sorgulayacak uç bulunmuyor. POS arayüzünün ilk çarpacağı duvar bu
+
+**⚠️ Ölçülmesi gereken:** `RequireOpenSession`, oturum-kapsamlı token taşıyan **her istekte**
+`IsOpen` çağırıyor ve bu düz bir SELECT değil — `WithTenantReadTx` tam bir transaction açıyor
+(pool checkout + `SET LOCAL app.tenant_id` + sorgu + commit). Yani PIN'le geçmiş her kasiyerin her
+isteği POS sıcak yolunda bir DB transaction'ı daha ekliyor.
+
+Önbelleklememek bilinçli ve doğru: kapanmış bir oturumun birkaç saniye daha istek kabul etmesi,
+az önce kapattığımız görünmez-para hatasının aynısını geri getirirdi. Ama maliyet ROADMAP'in
+500 aktif POS hedefinde ölçülmeli (`task backend:loadtest:smoke`/`full` mevcut). Gerekirse doğru
+çözüm kısa TTL'li önbellek **değil**, kapanışta açık invalidasyon (kapanış tek bir nokta).
 
 **Bilinen davranış (hata değil):** sayım gönderildikten sonra bekleyen bir mali kayıt çözülürse
 beklenen kapanış kayar ve sayım bayatlar. Backend doğru davranıyor, POS ekranı da bunu açıkça

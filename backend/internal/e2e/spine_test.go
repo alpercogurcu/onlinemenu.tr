@@ -93,6 +93,18 @@ func TestMain(m *testing.M) {
 
 	sharedPool = newPool(ctx, superDSN)
 
+	// This file's fixed tenantID/branchID constants back every cash-method
+	// RegisterSale call in the spine tests. PaymentService now refuses a cash
+	// payment for a branch with no open cash session (ADR-DATA-008), so one
+	// session is opened here for the package's whole lifetime — the guard
+	// only requires SOME open session for the branch, not a fresh one per test.
+	if err := openCashSessionForBranch(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "open cash session for branchID: %v\n", err)
+		sharedPool.Close()
+		_ = ctr.Terminate(ctx)
+		os.Exit(1)
+	}
+
 	rc := m.Run()
 
 	sharedPool.Close()
@@ -200,6 +212,28 @@ func newPool(ctx context.Context, superDSN string) *db.Pool {
 	return p
 }
 
+// openCashSessionForBranch opens the one cash session every
+// PaymentMethodCash-registering spine test relies on (see the TestMain
+// comment). Called exactly once from TestMain, so ErrCashSessionAlreadyOpen
+// here would mean this function itself ran twice — a real setup bug, not a
+// benign race — and is therefore surfaced rather than swallowed.
+func openCashSessionForBranch(ctx context.Context) error {
+	svc := paymentsvc.NewCashSessionService(paymentsvc.CashSessionParams{
+		DB:         sharedPool,
+		Sessions:   paymentrepo.NewCashSessionRepo(),
+		FiscalRepo: paymentrepo.NewFiscalStatusRepo(),
+		Logger:     zap.NewNop(),
+	})
+	manager := auth.Principal{
+		PersonID: staffID,
+		Ctx:      auth.ContextStaff,
+		TenantID: tenantID,
+		BranchID: branchID,
+	}
+	_, err := svc.Open(ctx, manager, paymentsvc.OpenCashSessionRequest{BranchID: branchID, OpeningCountedAmount: 0})
+	return err
+}
+
 // buildServices constructs POS and payment services without fx.
 func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.PaymentService) {
 	log := zap.NewNop()
@@ -208,6 +242,7 @@ func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.Pa
 	payService := paymentsvc.NewPaymentService(paymentsvc.Params{
 		DB:          sharedPool,
 		PaymentRepo: payRepo,
+		SessionRepo: paymentrepo.NewCashSessionRepo(),
 		Fiscal:      paymentdomain.MockFiscalAdapter{},
 		Logger:      log,
 	})

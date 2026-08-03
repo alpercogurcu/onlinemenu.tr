@@ -25,6 +25,7 @@ type PaymentService struct {
 	paymentRepo    *repo.PaymentRepo
 	submissionRepo *repo.FiscalSubmissionRepo
 	statusRepo     *repo.FiscalStatusRepo
+	sessionRepo    *repo.CashSessionRepo
 	fiscal         domain.FiscalDeviceAdapter
 	adapterType    string
 	logger         *zap.Logger
@@ -38,6 +39,7 @@ type Params struct {
 	PaymentRepo    *repo.PaymentRepo
 	SubmissionRepo *repo.FiscalSubmissionRepo
 	StatusRepo     *repo.FiscalStatusRepo
+	SessionRepo    *repo.CashSessionRepo
 	Fiscal         domain.FiscalDeviceAdapter
 	Logger         *zap.Logger
 }
@@ -48,6 +50,7 @@ func NewPaymentService(p Params) *PaymentService {
 		paymentRepo:    p.PaymentRepo,
 		submissionRepo: p.SubmissionRepo,
 		statusRepo:     p.StatusRepo,
+		sessionRepo:    p.SessionRepo,
 		fiscal:         p.Fiscal,
 		adapterType:    adapterTypeOf(p.Fiscal),
 		logger:         p.Logger,
@@ -87,6 +90,25 @@ type RegisterSaleRequest struct {
 	TerminalSerial string
 }
 
+// cashPaymentRequiresOpenSession reports whether method physically moves cash
+// through the branch's drawer and therefore must be reconciled by an open
+// cash session (ADR-DATA-008). Only PaymentMethodCash does:
+//   - PaymentMethodTerminal settles over the ÖKC card rail; the physical
+//     drawer is never touched.
+//   - PaymentMethodMealCard settles with the meal-card vendor, not cash.
+//   - PaymentMethodComp / PaymentMethodNoCharge move no money at all (ikram /
+//     ödemesiz).
+//   - PaymentMethodOpenAccount defers settlement to a later payment, which
+//     will itself pass through this same check when it actually lands.
+//
+// Written as a positive "== cash" check rather than "!= terminal" deliberately
+// mirrors CashSessionRepo.SumCompletedCashPayments's own reasoning: a
+// negation would silently exempt this guard for any future PaymentMethod
+// added without an explicit decision here.
+func cashPaymentRequiresOpenSession(method domain.PaymentMethod) bool {
+	return method == domain.PaymentMethodCash
+}
+
 // RegisterSale creates a pending payment and enqueues its fiscal submission in
 // the same transaction (ADR-FISCAL-002). The device adapter is deliberately NOT
 // called here: a real ÖKC takes seconds or minutes to collect the payment, and
@@ -120,6 +142,22 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 		}
 		if !errors.Is(err, repo.ErrNotFound) {
 			return fmt.Errorf("payment/service: check idempotency: %w", err)
+		}
+
+		// Only a genuinely new registration is gated — never a replay of an
+		// already-successful one (the idempotency fast path above already
+		// returned by this point for a replay). Checked here, inside the same
+		// transaction as the Create below and after the idempotency read: a
+		// check outside this transaction would race a concurrent session close
+		// between the check and the write (TOCTOU) and would also wrongly gate
+		// idempotent retries of a payment that succeeded while a session was open.
+		if cashPaymentRequiresOpenSession(req.Method) {
+			if _, sessErr := s.sessionRepo.GetActiveByBranchForShare(ctx, tx, req.TenantID, req.BranchID); sessErr != nil {
+				if errors.Is(sessErr, repo.ErrNotFound) {
+					return pub.ErrNoCashSessionOpen
+				}
+				return fmt.Errorf("payment/service: check cash session: %w", sessErr)
+			}
 		}
 
 		payment, err = s.paymentRepo.Create(ctx, tx, domain.Payment{

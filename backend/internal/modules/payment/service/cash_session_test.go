@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -378,6 +379,174 @@ func TestCashSessionService_GetActive_DifferenceArithmetic(t *testing.T) {
 
 // TestCashSessionService_SubmitClosingCount_RejectsDenominationMismatch pins
 // the denomination-sum invariant at the service layer (domain.ValidateDenominations).
+// ---------------------------------------------------------------------------
+// RegisterSale cash-method guard: a branch with no open cash session must
+// refuse cash payments (ADR-DATA-008 gap fix). Cash taken while no session
+// exists falls outside every session window a reconciliation will ever
+// compute — SumCompletedCashPayments's window is always [OpenedAt, ClosedAt)
+// of SOME session — so the money is not merely hard to reconcile, it is
+// permanently invisible. Only PaymentMethodCash is gated; every other method
+// settles somewhere other than the physical drawer this session reconciles.
+// ---------------------------------------------------------------------------
+
+func TestPaymentService_RegisterSale_RefusesCashWithNoOpenSession(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	paySvc := newPaymentService()
+	branch := uuid.New()
+	tenantID := uuid.New()
+
+	_, err := paySvc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID: tenantID, BranchID: branch, IdempotencyKey: uuid.New().String(),
+		Method: domain.PaymentMethodCash, AmountTotal: 1000, Currency: "TRY",
+	})
+	require.ErrorIs(t, err, pub.ErrNoCashSessionOpen,
+		"a cash payment with no open cash session for the branch must be refused, or the drawer can never balance")
+}
+
+func TestPaymentService_RegisterSale_AcceptsCashWithOpenSession(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	cashSvc := newCashSessionService()
+	paySvc := newPaymentService()
+	branch := uuid.New()
+	manager := shiftManagerPrincipal(branch)
+
+	_, err := cashSvc.Open(ctx, manager, service.OpenCashSessionRequest{BranchID: branch, OpeningCountedAmount: 0})
+	require.NoError(t, err)
+
+	payment, err := paySvc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID: manager.TenantID, BranchID: branch, IdempotencyKey: uuid.New().String(),
+		Method: domain.PaymentMethodCash, AmountTotal: 1000, Currency: "TRY",
+	})
+	require.NoError(t, err, "a cash payment must be accepted while the branch has an open cash session")
+	assert.Equal(t, domain.PaymentStatusPending, payment.Status)
+}
+
+// TestPaymentService_RegisterSale_AcceptsCashDuringClosingControl pins that
+// closing_control still counts as "open" for this guard — GetActiveByBranch
+// (the read the close guard itself relies on for one-open-per-branch) treats
+// opened and closing_control as the same active set. A session mid-count is
+// still a real drawer a cashier could be taking cash from at the register
+// while a manager elsewhere is counting yesterday's float; refusing cash here
+// would just be a second, redundant place cash goes missing from the books.
+func TestPaymentService_RegisterSale_AcceptsCashDuringClosingControl(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	cashSvc := newCashSessionService()
+	paySvc := newPaymentService()
+	branch := uuid.New()
+	manager := shiftManagerPrincipal(branch)
+
+	opened, err := cashSvc.Open(ctx, manager, service.OpenCashSessionRequest{BranchID: branch, OpeningCountedAmount: 0})
+	require.NoError(t, err)
+	_, err = cashSvc.SubmitClosingCount(ctx, manager, opened.Session.ID, service.SubmitClosingCountRequest{ClosingCountedAmount: 0})
+	require.NoError(t, err)
+
+	active, err := cashSvc.GetActive(ctx, manager, branch)
+	require.NoError(t, err)
+	require.Equal(t, domain.CashSessionClosingControl, active.Session.Status, "precondition: session is mid-close")
+
+	_, err = paySvc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID: manager.TenantID, BranchID: branch, IdempotencyKey: uuid.New().String(),
+		Method: domain.PaymentMethodCash, AmountTotal: 500, Currency: "TRY",
+	})
+	require.NoError(t, err, "closing_control is still an open drawer for this guard's purposes")
+}
+
+// TestPaymentService_RegisterSale_NonCashMethodUnaffectedByNoOpenSession pins
+// the guard's method scope: terminal (ÖKC), meal_card, comp, no_charge and
+// open_account never touch the physical drawer, so none of them may be
+// blocked by a missing cash session. Only terminal is exercised directly —
+// domain.PaymentMethod.Valid()'s full enumeration is already pinned elsewhere
+// (domain/payment.go); this test only needs one representative non-cash
+// method to prove the guard does not fire for it.
+func TestPaymentService_RegisterSale_NonCashMethodUnaffectedByNoOpenSession(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	paySvc := newPaymentService()
+	branch := uuid.New()
+	tenantID := uuid.New()
+
+	payment, err := paySvc.RegisterSale(ctx, service.RegisterSaleRequest{
+		TenantID: tenantID, BranchID: branch, IdempotencyKey: uuid.New().String(),
+		Method: domain.PaymentMethodTerminal, AmountTotal: 1000, Currency: "TRY",
+	})
+	require.NoError(t, err, "a terminal payment must never require a cash session — it never touches the drawer")
+	assert.Equal(t, domain.PaymentStatusPending, payment.Status)
+}
+
+// TestPaymentService_RegisterSale_ConcurrentWithSessionClose_NeverInvisible
+// is the TOCTOU case: RegisterSale's cash-session guard and CashSessionService.Close
+// race on the same branch. The guard reads under FOR SHARE
+// (CashSessionRepo.GetActiveByBranchForShare) specifically so this cannot
+// happen: either Close's FOR UPDATE (via GetByIDForUpdate) wins and blocks
+// the guard until it commits — at which point Postgres re-evaluates the
+// guard's WHERE clause against the now-closed row and it sees nothing — or
+// the guard's FOR SHARE wins and blocks Close until the payment transaction
+// commits, so closed_at is stamped strictly after the payment's created_at.
+//
+// The one outcome that must never happen: RegisterSale succeeds, Close also
+// succeeds, and the payment's created_at falls outside the closed session's
+// window — that is a cash sale reconciliation can never find again. The test
+// runs enough iterations that a missing lock (a regression back to a plain
+// SELECT) would be expected to surface it.
+func TestPaymentService_RegisterSale_ConcurrentWithSessionClose_NeverInvisible(t *testing.T) {
+	requireDB(t)
+	cashSvc := newCashSessionService()
+	paySvc := newPaymentService()
+
+	for i := 0; i < 25; i++ {
+		ctx := context.Background()
+		branch := uuid.New()
+		manager := shiftManagerPrincipal(branch)
+
+		opened, err := cashSvc.Open(ctx, manager, service.OpenCashSessionRequest{BranchID: branch, OpeningCountedAmount: 0})
+		require.NoError(t, err)
+		_, err = cashSvc.SubmitClosingCount(ctx, manager, opened.Session.ID, service.SubmitClosingCountRequest{ClosingCountedAmount: 0})
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		var payment domain.Payment
+		var payErr error
+		var closedView service.CashSessionView
+		var closeErr error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			payment, payErr = paySvc.RegisterSale(ctx, service.RegisterSaleRequest{
+				TenantID: manager.TenantID, BranchID: branch, IdempotencyKey: uuid.New().String(),
+				Method: domain.PaymentMethodCash, AmountTotal: 1000, Currency: "TRY",
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			closedView, closeErr = cashSvc.Close(ctx, manager, opened.Session.ID)
+		}()
+		wg.Wait()
+
+		switch {
+		case payErr != nil:
+			// Lost the race outright: the guard saw the session already gone.
+			require.ErrorIs(t, payErr, pub.ErrNoCashSessionOpen, "iteration %d", i)
+		case closeErr != nil:
+			// Close lost the race: RegisterSale's own new pending fiscal
+			// submission blocks cannotClose. Assert it is specifically that
+			// guard, not some unrelated failure the loop would otherwise mask.
+			var cannotClose *service.CashSessionCannotCloseError
+			require.ErrorAs(t, closeErr, &cannotClose,
+				"iteration %d: close failed for an unexpected reason: %v", i, closeErr)
+		default:
+			// Both succeeded: the payment MUST be inside the now-closed window.
+			require.NotNil(t, closedView.Session.ClosedAt, "iteration %d", i)
+			require.True(t, payment.CreatedAt.Before(*closedView.Session.ClosedAt),
+				"iteration %d: payment created_at %s must precede closed_at %s or reconciliation loses it forever",
+				i, payment.CreatedAt, *closedView.Session.ClosedAt)
+		}
+	}
+}
+
 func TestCashSessionService_SubmitClosingCount_RejectsDenominationMismatch(t *testing.T) {
 	requireDB(t)
 	ctx := context.Background()

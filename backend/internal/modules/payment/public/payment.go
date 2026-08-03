@@ -21,6 +21,17 @@ var ErrBranchForbidden = errors.New("payment: branch forbidden")
 // open session per branch). Callers map it to HTTP 409.
 var ErrCashSessionAlreadyOpen = errors.New("payment: branch already has an open cash session")
 
+// ErrNoCashSessionOpen is returned by PaymentService.RegisterSale when a
+// cash-method payment is registered for a branch with no open cash session
+// (ADR-DATA-008). The expected-close formula sums completed cash payments
+// inside the session's [OpenedAt, ClosedAt) window; a cash payment taken
+// while no session exists falls outside every window a session will ever
+// have and is permanently invisible to reconciliation — the drawer can never
+// balance. Refusing it at the source is the only fix; there is no later
+// point where the money can be reattached to a session. Callers map it to
+// HTTP 409 (a caller-actionable state conflict, not a server fault).
+var ErrNoCashSessionOpen = errors.New("payment: branch has no open cash session")
+
 // ErrInvalidInput marks a caller-supplied value the service rejects (a
 // non-positive amount, an empty reason, an unknown enum). Callers map it to
 // HTTP 422.

@@ -81,6 +81,39 @@ func (r *CashSessionRepo) GetActiveByBranch(ctx context.Context, tx pgx.Tx, tena
 	return s, err
 }
 
+// GetActiveByBranchForShare is GetActiveByBranch under a FOR SHARE row lock.
+// PaymentService.RegisterSale uses this (not the plain read) for its cash
+// session guard: a plain SELECT takes a per-statement READ COMMITTED
+// snapshot and blocks on nothing, so a concurrent Close (whose
+// GetByIDForUpdate holds FOR UPDATE on this same row) could commit strictly
+// between the guard's read and the payment INSERT — the payment would then
+// carry a created_at past the session's closed_at and vanish from
+// SumCompletedCashPayments's window forever, exactly the money-invisibility
+// bug this guard exists to prevent.
+//
+// FOR SHARE, not FOR UPDATE: many concurrent cash RegisterSale calls against
+// the same open session must proceed together (they do not conflict with
+// each other), while any one of them holding the row blocks Close's FOR
+// UPDATE until they commit — and, symmetrically, a Close that grabbed the
+// X-lock first blocks this call until Close commits, at which point Postgres
+// re-evaluates the WHERE clause against the now-closed row (EvalPlanQual)
+// and this returns zero rows rather than the stale pre-close version. Either
+// interleaving lands on the correct side: the payment is guaranteed to be
+// inside an open window, or refused outright.
+func (r *CashSessionRepo) GetActiveByBranchForShare(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID) (domain.CashSession, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT `+cashSessionColumns+`
+		FROM cash_sessions
+		WHERE tenant_id = $1 AND branch_id = $2 AND status IN ('opened', 'closing_control')
+		FOR SHARE
+	`, tenantID, branchID)
+	s, err := scanCashSession(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.CashSession{}, domain.ErrNotFound
+	}
+	return s, err
+}
+
 // GetByIDForUpdate loads a session row locked FOR UPDATE, for use inside the
 // transaction that will mutate it (submit closing count / close). Locking
 // here — rather than relying only on the guarded UPDATEs below — keeps the

@@ -293,7 +293,16 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		Meta:           req.Meta.toDomain(),
 		TerminalSerial: req.TerminalSerial,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, pub.ErrNoCashSessionOpen):
+		// 409, not 500: the branch's drawer state is a caller-actionable
+		// conflict, not a server fault (follows the same rationale as
+		// ErrCashSessionAlreadyOpen below). The message is written for the
+		// cashier, not a developer: they need to know to open the drawer
+		// before they can take cash.
+		http.Error(w, "bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı", http.StatusConflict)
+		return
+	case err != nil:
 		h.logger.Error("payment: register sale", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return

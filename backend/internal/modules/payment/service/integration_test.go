@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,8 +24,10 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/payment/domain"
+	pub "onlinemenu.tr/internal/modules/payment/public"
 	"onlinemenu.tr/internal/modules/payment/repo"
 	"onlinemenu.tr/internal/modules/payment/service"
+	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -66,6 +69,21 @@ func TestMain(m *testing.M) {
 	}
 
 	sharedPool = newPool(ctx, superDSN, "app_runtime", "runtime_secret")
+
+	// This package's fixed tenantA/branchA constants are shared by dozens of
+	// RegisterSale(..., PaymentMethodCash, ...) calls across every test file
+	// in this binary. Rather than open-then-forget a session per test (which
+	// would collide on ADR-DATA-008's one-open-session-per-branch constraint
+	// the moment a second test tried it), open exactly one session for the
+	// package's whole lifetime here — the guard added for
+	// PaymentService.RegisterSale only requires SOME open session for the
+	// branch, not a fresh one per call.
+	if err := openCashSessionForBranchA(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "open cash session for branchA: %v\n", err)
+		sharedPool.Close()
+		_ = ctr.Terminate(ctx)
+		os.Exit(1)
+	}
 
 	rc := m.Run()
 
@@ -209,9 +227,39 @@ func newPaymentService() *service.PaymentService {
 		PaymentRepo:    repo.NewPaymentRepo(),
 		SubmissionRepo: repo.NewFiscalSubmissionRepo(),
 		StatusRepo:     repo.NewFiscalStatusRepo(),
+		SessionRepo:    repo.NewCashSessionRepo(),
 		Fiscal:         domain.MockFiscalAdapter{},
 		Logger:         zap.NewNop(),
 	})
+}
+
+// openCashSessionForBranchA opens the one cash session every
+// PaymentMethodCash-registering test in this package's TestMain relies on
+// (see the TestMain comment). It is called exactly once, so
+// ErrCashSessionAlreadyOpen would only mean this function itself was called
+// twice — a real setup bug, not a benign race — and is therefore NOT
+// swallowed the way a per-test "ensure open" helper would need to.
+func openCashSessionForBranchA(ctx context.Context) error {
+	svc := service.NewCashSessionService(service.CashSessionParams{
+		DB:         sharedPool,
+		Sessions:   repo.NewCashSessionRepo(),
+		FiscalRepo: repo.NewFiscalStatusRepo(),
+		Logger:     zap.NewNop(),
+	})
+	manager := auth.Principal{
+		PersonID: uuid.New(),
+		Ctx:      auth.ContextStaff,
+		TenantID: tenantA,
+		BranchID: branchA,
+	}
+	_, err := svc.Open(ctx, manager, service.OpenCashSessionRequest{BranchID: branchA, OpeningCountedAmount: 0})
+	if err != nil {
+		if errors.Is(err, pub.ErrCashSessionAlreadyOpen) {
+			return fmt.Errorf("branchA cash session opened twice: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func newSubmissionWorker(sink domain.FiscalResultSink) *service.SubmissionWorker {

@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	pub "onlinemenu.tr/internal/modules/payment/public"
+	"onlinemenu.tr/internal/modules/payment/service"
 )
 
 // joinCashSessionRequest is the POST .../participants body. Pin is optional
@@ -61,6 +62,59 @@ func (h *Handler) joinCashSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// participantResponse is the wire shape for one entry in the participant
+// list — deliberately narrow (see service.CashSessionParticipantView): no
+// email, no other person field, just what a till-switch picker needs to
+// render and decide whether a name is selectable.
+type participantResponse struct {
+	PersonID uuid.UUID `json:"person_id"`
+	FullName string    `json:"full_name"`
+	HasPin   bool      `json:"has_pin"`
+	Locked   bool      `json:"locked"`
+}
+
+func toParticipantResponse(v service.CashSessionParticipantView) participantResponse {
+	return participantResponse{
+		PersonID: v.PersonID,
+		FullName: v.FullName,
+		HasPin:   v.HasPin,
+		Locked:   v.Locked,
+	}
+}
+
+// listCashSessionParticipants answers
+// GET /api/v1/payments/cash-sessions/{id}/participants.
+func (h *Handler) listCashSessionParticipants(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	sessionID, ok := requireURLID(w, r)
+	if !ok {
+		return
+	}
+
+	participants, err := h.sessionPin.ListParticipants(r.Context(), p, sessionID)
+	switch {
+	case errors.Is(err, pub.ErrBranchForbidden):
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	case errors.Is(err, pub.ErrNotFound):
+		http.Error(w, "cash session not found", http.StatusNotFound)
+		return
+	case err != nil:
+		h.logger.Error("payment: list cash session participants", zap.Error(err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]participantResponse, len(participants))
+	for i, v := range participants {
+		out[i] = toParticipantResponse(v)
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"participants": out})
 }
 
 // switchCashierRequest is the POST .../switch body.

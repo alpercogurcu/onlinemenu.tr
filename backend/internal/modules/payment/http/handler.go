@@ -99,6 +99,11 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		// and manager-driven PIN reset. See cash_session_pin_handler.go.
 		r.With(hwc.h.permit("payment.cash_session.join")).
 			Post("/cash-sessions/{id}/participants", hwc.h.joinCashSession)
+		// Read-only, same permission as the session read above: any
+		// participant of this session (cashier or shift_manager) may see
+		// who else has joined — this is what populates the switch picker.
+		r.With(hwc.h.permit("payment.cash_session.read")).
+			Get("/cash-sessions/{id}/participants", hwc.h.listCashSessionParticipants)
 		r.With(hwc.h.permit("payment.cash_session.switch"), httpx.Idempotency(hwc.cache)).
 			Post("/cash-sessions/{id}/switch", hwc.h.switchCashier)
 		r.With(hwc.h.permit("payment.cash_session.pin_reset")).

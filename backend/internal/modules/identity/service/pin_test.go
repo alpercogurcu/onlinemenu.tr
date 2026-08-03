@@ -102,6 +102,26 @@ func TestPinService_ResetPin_UnsetIsNotAnError(t *testing.T) {
 	assert.NoError(t, svc.ResetPin(ctx, tenantA, uuid.New()))
 }
 
+func TestPinService_HasPin_ReflectsSetAndReset(t *testing.T) {
+	svc := newPinService()
+	ctx := t.Context()
+	personID := uuid.New()
+
+	has, err := svc.HasPin(ctx, tenantA, personID)
+	require.NoError(t, err)
+	assert.False(t, has, "a person who never set a pin must report has_pin=false")
+
+	require.NoError(t, svc.SetOwnPin(ctx, tenantA, personID, "1234"))
+	has, err = svc.HasPin(ctx, tenantA, personID)
+	require.NoError(t, err)
+	assert.True(t, has)
+
+	require.NoError(t, svc.ResetPin(ctx, tenantA, personID))
+	has, err = svc.HasPin(ctx, tenantA, personID)
+	require.NoError(t, err)
+	assert.False(t, has, "has_pin must flip back to false after a manager reset")
+}
+
 // TestPinService_TenantIsolation proves the (person, tenant) scope from
 // ADR-DATA-008 §1: the same personID can hold two different PINs in two
 // different tenants, and one tenant's VerifyPin must not see the other's row.

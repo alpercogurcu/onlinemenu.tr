@@ -183,6 +183,35 @@ func (r *CashSessionRepo) IsParticipant(ctx context.Context, tx pgx.Tx, tenantID
 	return exists, nil
 }
 
+// ListParticipants returns every person who has ever joined sessionID
+// (ADR-DATA-008 PIN akışı §4), ordered by joined_at so the earliest joiner —
+// typically whoever opened the till — sorts first.
+func (r *CashSessionRepo) ListParticipants(ctx context.Context, tx pgx.Tx, tenantID, sessionID uuid.UUID) ([]domain.CashSessionParticipant, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT tenant_id, session_id, branch_id, person_id, joined_at
+		FROM cash_session_participants
+		WHERE tenant_id = $1 AND session_id = $2
+		ORDER BY joined_at ASC
+	`, tenantID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: list cash session participants: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.CashSessionParticipant
+	for rows.Next() {
+		var p domain.CashSessionParticipant
+		if err := rows.Scan(&p.TenantID, &p.SessionID, &p.BranchID, &p.PersonID, &p.JoinedAt); err != nil {
+			return nil, fmt.Errorf("payment/repo: list cash session participants: scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment/repo: list cash session participants: %w", err)
+	}
+	return out, nil
+}
+
 // SubmitClosingCount persists a (possibly amended) closing count and moves the
 // session to closing_control. from must be the status already read under
 // FOR UPDATE in the same transaction; the WHERE clause re-asserts it so a

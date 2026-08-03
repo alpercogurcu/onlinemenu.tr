@@ -62,6 +62,14 @@ type CashierPinService interface {
 	// set). The person sets a fresh PIN at their next full-Keycloak join.
 	// Resetting an already-unset PIN is not an error.
 	ResetPin(ctx context.Context, tenantID, personID uuid.UUID) error
+
+	// HasPin reports whether personID has a PIN set for tenantID, WITHOUT
+	// verifying anything — it never accepts or checks a candidate PIN value
+	// and never touches pin_salt/pin_hash. It exists so a caller building a
+	// cashier-picker UI (participant list) can tell "can be PIN-switched to"
+	// apart from "must join via the full Keycloak flow first" without
+	// resorting to VerifyPin's enumeration-safe-but-uninformative sentinel.
+	HasPin(ctx context.Context, tenantID, personID uuid.UUID) (bool, error)
 }
 
 // ErrPinVerificationFailed is the single sentinel VerifyPin returns for

@@ -22,6 +22,7 @@ import {
 } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import type { main } from '../wailsjs/go/models'
+import { CashierSwitchModal } from './components/CashierSwitchModal'
 import { CashSessionBanner } from './components/CashSessionBanner'
 import { CashSessionModal } from './components/CashSessionModal'
 import { CheckRail } from './components/CheckRail'
@@ -30,6 +31,7 @@ import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
 import { TablePlan } from './components/TablePlan'
+import { useCashierSwitch } from './hooks/useCashierSwitch'
 import { useCashSession } from './hooks/useCashSession'
 import { useFiscalStatusPolling, type StatusResolution } from './hooks/useFiscalStatusPolling'
 import { useBranchFiscalPending } from './hooks/useBranchFiscalPending'
@@ -137,6 +139,13 @@ function App() {
   // here, matching CheckRail's own local `opening` flag pattern.
   const cashSession = useCashSession(session?.branch_id)
   const [cashSessionModalOpen, setCashSessionModalOpen] = useState(false)
+
+  // ADR-DATA-008 PIN akışı (kasiyer değiştirme) — owned by its own hook,
+  // scoped to the branch's currently open cash session (PIN switching is
+  // meaningless without one: there is no session to have joined). Only the
+  // modal's open/closed UI state lives here, same split as cashSession above.
+  const cashierSwitch = useCashierSwitch(cashSession.session?.id)
+  const [cashierSwitchModalOpen, setCashierSwitchModalOpen] = useState(false)
 
   const canOpenCheck = Boolean(session?.branch_id)
 
@@ -385,6 +394,17 @@ function App() {
     }
   }
 
+  // handleSwitchCashier is CashierSwitchModal's onSwitch — it owns
+  // installing the resulting session (mirroring handleSelectContext's own
+  // setSession call), the modal itself never sees a SessionDTO. Returns
+  // whether the switch succeeded so the modal knows to close itself.
+  async function handleSwitchCashier(personId: string, pin: string): Promise<boolean> {
+    const result = await cashierSwitch.switchTo(personId, pin)
+    if (!result) return false
+    setSession(result)
+    return true
+  }
+
   async function handleLogout() {
     await Logout()
     setSession(null)
@@ -408,6 +428,8 @@ function App() {
     // would not itself change).
     cashSession.reset()
     setCashSessionModalOpen(false)
+    cashierSwitch.reset()
+    setCashierSwitchModalOpen(false)
   }
 
   // Which check serverCompleted currently belongs to. WRITTEN ONLY BY
@@ -812,6 +834,19 @@ function App() {
               Yazıcı {printer.status === 'error' ? 'hata' : 'bağlı değil'}
             </span>
           )}
+          <button
+            type="button"
+            disabled={!cashSession.session}
+            title={
+              cashSession.session
+                ? undefined
+                : 'Kasiyer değiştirmek için önce kasa açık olmalı — kasa oturumu, katılımın bağlı olduğu şey.'
+            }
+            onClick={() => setCashierSwitchModalOpen(true)}
+            className="min-h-8 rounded px-2 text-ink-dim disabled:opacity-40"
+          >
+            Kasiyer Değiştir
+          </button>
           <button type="button" onClick={handleLogout} className="min-h-8 rounded px-2 text-ink-dim">
             Çıkış
           </button>
@@ -931,6 +966,17 @@ function App() {
         onCloseSession={cashSession.closeSession}
         onDismissCannotClose={cashSession.dismissCannotClose}
         onRefresh={cashSession.refresh}
+      />
+
+      <CashierSwitchModal
+        open={cashierSwitchModalOpen}
+        onClose={() => setCashierSwitchModalOpen(false)}
+        participants={cashierSwitch.participants}
+        loading={cashierSwitch.loading}
+        error={cashierSwitch.error}
+        onJoin={cashierSwitch.join}
+        onSwitch={handleSwitchCashier}
+        onClearError={cashierSwitch.clearError}
       />
     </div>
   )

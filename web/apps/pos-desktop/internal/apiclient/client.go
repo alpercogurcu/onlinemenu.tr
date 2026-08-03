@@ -404,6 +404,75 @@ func (c *Client) doWithHeadersAttempt(ctx context.Context, method, path string, 
 	return nil
 }
 
+// doWithHeadersNoRecovery is doWithHeaders but NEVER invokes the CTX-401
+// recovery hook, even when one is installed. Used only by SwitchCashier
+// (ADR-DATA-008 PIN akışı): every negative outcome of that call — wrong
+// pin, pin never set, locked out, not a participant — answers 401 BY
+// DESIGN (enumeration-safety, see identitypub.ErrPinVerificationFailed's
+// backend doc comment), not because the CTX token expired.
+//
+// Routing that 401 through the ordinary recovery path would be actively
+// harmful: the installed hook (main.App.recoverKeycloakContext) silently
+// re-derives a CTX token from whatever Keycloak membership was last
+// selected and INSTALLS it — undoing an in-progress cashier switch the
+// user never asked to undo — and then retries the identical
+// (session_id, person_id, pin) body under that recovered token, which
+// means a single wrong PIN guess would count TWICE against the backend's
+// 5-attempt lockout counter (ADR-DATA-008 PIN akışı §5), tripping the
+// lockout after roughly half as many real mistakes as the ADR specifies.
+//
+// Implemented by calling doWithHeadersAttempt with retried=true: that flag
+// is what gates the recovery branch (`!retried`), so passing it pre-set
+// skips recovery without duplicating the request/response plumbing. This
+// is an internal reuse of that flag's effect, not a claim that a retry
+// already happened.
+func (c *Client) doWithHeadersNoRecovery(ctx context.Context, method, path string, body, out any, headers map[string]string) error {
+	var encoded []byte
+	if body != nil {
+		var err error
+		encoded, err = json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode request body: %w", err)
+		}
+	}
+	return c.doWithHeadersAttempt(ctx, method, path, encoded, out, headers, true)
+}
+
+// doIdempotentNoRecovery is doIdempotent routed through
+// doWithHeadersNoRecovery instead of doWithHeaders — see that method's doc
+// comment for why SwitchCashier needs this. Retry semantics (same
+// idempotency key/body replayed on transport errors and 5xx, any 4xx
+// including 401 returned immediately) are otherwise identical to
+// doIdempotent.
+func (c *Client) doIdempotentNoRecovery(ctx context.Context, method, path string, body, out any) error {
+	key := uuid.NewString()
+	headers := map[string]string{idempotencyHeader: key}
+
+	var lastErr error
+	for attempt := 0; attempt < maxIdempotentAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(idempotentRetryBase * time.Duration(1<<uint(attempt-1))):
+			}
+		}
+
+		err := c.doWithHeadersNoRecovery(ctx, method, path, body, out, headers)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode < 500 {
+			return err
+		}
+		// Transport error or 5xx: safe to retry with the same key/body.
+	}
+	return lastErr
+}
+
 // doWithBearer performs a pre-context HTTP request authenticated with an
 // explicit bearer token (the Keycloak access token) instead of the
 // client's own CTX token — used only by FetchKeycloakContexts and

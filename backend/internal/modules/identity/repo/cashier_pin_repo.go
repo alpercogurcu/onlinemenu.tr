@@ -51,6 +51,19 @@ func (r *CashierPinRepo) GetHash(ctx context.Context, tx pgx.Tx, tenantID, perso
 	return salt, hash, nil
 }
 
+// Exists reports whether a PIN row is present for (tenantID, personID),
+// without ever selecting pin_salt/pin_hash — unlike GetHash, this is safe to
+// expose transitively through a "does this person have a PIN" question that
+// carries no verification semantics.
+func (r *CashierPinRepo) Exists(ctx context.Context, tx pgx.Tx, tenantID, personID uuid.UUID) (bool, error) {
+	const q = `SELECT EXISTS(SELECT 1 FROM cashier_pins WHERE tenant_id = $1 AND person_id = $2)`
+	var exists bool
+	if err := tx.QueryRow(ctx, q, tenantID, personID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("identity/repo/cashier_pin: exists: %w", err)
+	}
+	return exists, nil
+}
+
 // Delete removes personID's PIN row for tenantID (manager reset). It is not
 // an error for the row to already be absent — resetting an unset PIN is a
 // no-op, not a conflict; the caller must never be able to tell from this

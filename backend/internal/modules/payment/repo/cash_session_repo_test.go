@@ -236,6 +236,77 @@ func TestCashSessionRepo_Close_RejectsFromOpened(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Participants (ADR-DATA-008 PIN akışı §4)
+// ---------------------------------------------------------------------------
+
+// TestCashSessionRepo_ListParticipants_OrderedByJoinedAt proves ListParticipants
+// returns every joined participant ordered earliest-first, and that a re-join
+// (UpsertParticipant's ON CONFLICT DO UPDATE) refreshes joined_at rather than
+// duplicating the row.
+func TestCashSessionRepo_ListParticipants_OrderedByJoinedAt(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewCashSessionRepo()
+	sessionID, branchID := uuid.New(), uuid.New()
+	first, second := uuid.New(), uuid.New()
+
+	join := func(personID uuid.UUID) {
+		err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+			return r.UpsertParticipant(ctx, tx, domain.CashSessionParticipant{
+				TenantID: tenantA, SessionID: sessionID, BranchID: branchID, PersonID: personID,
+			})
+		})
+		require.NoError(t, err)
+	}
+
+	join(first)
+	time.Sleep(10 * time.Millisecond) // ensure joined_at strictly orders first < second
+	join(second)
+
+	var participants []domain.CashSessionParticipant
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		participants, err = r.ListParticipants(ctx, tx, tenantA, sessionID)
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, participants, 2)
+	assert.Equal(t, first, participants[0].PersonID)
+	assert.Equal(t, second, participants[1].PersonID)
+
+	// Re-join `first` — must still report exactly 2 rows (upsert, not insert),
+	// and `first` must now sort last since its joined_at was just refreshed.
+	join(first)
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		participants, err = r.ListParticipants(ctx, tx, tenantA, sessionID)
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, participants, 2, "re-join must update the existing row, not insert a duplicate")
+	assert.Equal(t, second, participants[0].PersonID)
+	assert.Equal(t, first, participants[1].PersonID)
+}
+
+// TestCashSessionRepo_ListParticipants_NoParticipants_ReturnsEmpty guards
+// against a nil-vs-empty surprise at the HTTP layer: a session nobody has
+// joined must produce a zero-length slice, not an error.
+func TestCashSessionRepo_ListParticipants_NoParticipants_ReturnsEmpty(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewCashSessionRepo()
+
+	var participants []domain.CashSessionParticipant
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		participants, err = r.ListParticipants(ctx, tx, tenantA, uuid.New())
+		return err
+	})
+	require.NoError(t, err)
+	assert.Empty(t, participants)
+}
+
+// ---------------------------------------------------------------------------
 // Movements
 // ---------------------------------------------------------------------------
 

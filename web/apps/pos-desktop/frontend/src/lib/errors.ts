@@ -73,6 +73,18 @@ export function describeError(err: unknown): string {
       break
   }
 
+  // ADR-DATA-008 PIN akışı (kasiyer değiştirme) — checked ahead of the
+  // generic 401 fallback: SwitchCashier's 401 is a deliberately generic,
+  // enumeration-safe verification failure (wrong pin / pin never set /
+  // locked / not a participant, all indistinguishable by design — see
+  // apiclient.ErrPinVerificationFailed's doc comment), never a "your
+  // session expired" situation. Showing "Oturum geçersiz — tekrar giriş
+  // yapın" here would be actively misleading: nobody needs to log back in,
+  // and it would not even be true (the CTX token this call was made with is
+  // untouched — see cash_session_pin_test.go's recovery-bypass proof).
+  if (raw.includes('pin verification failed')) {
+    return 'Doğrulama başarısız — isim ve PIN’i kontrol edin.'
+  }
   if (raw.includes('status 401')) return 'Oturum geçersiz — tekrar giriş yapın.'
   if (raw.includes('status 403')) return 'Bu işlem için yetkiniz yok (şube/rol uyuşmazlığı).'
   if (raw.includes('status 404')) return 'Kayıt bulunamadı — sayfayı yenileyin.'

@@ -33,11 +33,27 @@ func (stubCashierPinService) VerifyPin(context.Context, uuid.UUID, uuid.UUID, st
 	return nil
 }
 func (stubCashierPinService) ResetPin(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (stubCashierPinService) HasPin(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
+}
 
 type stubMembershipResolver struct{}
 
 func (stubMembershipResolver) ActiveRoleIDsAt(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) {
 	return nil, nil
+}
+
+// stubPersonReader satisfies identitypub.PersonReader for graph-resolution
+// only — CashSessionPinService.ListParticipants (ADR-DATA-008 participant
+// list) added this dependency; see supplyExternals below.
+type stubPersonReader struct{}
+
+func (stubPersonReader) GetByID(context.Context, uuid.UUID) (identitypub.Person, error) {
+	return identitypub.Person{}, nil
+}
+
+func (stubPersonReader) GetByKeycloakSub(context.Context, string) (identitypub.Person, error) {
+	return identitypub.Person{}, nil
 }
 
 // supplyExternals provides the dependencies cmd/api/main.go injects into this
@@ -59,6 +75,7 @@ func supplyExternals(cfg FiscalConfig) fx.Option {
 		chi.NewMux(),
 		fx.Annotate(stubCashierPinService{}, fx.As(new(identitypub.CashierPinService))),
 		fx.Annotate(stubMembershipResolver{}, fx.As(new(identitypub.MembershipResolver))),
+		fx.Annotate(stubPersonReader{}, fx.As(new(identitypub.PersonReader))),
 	)
 }
 

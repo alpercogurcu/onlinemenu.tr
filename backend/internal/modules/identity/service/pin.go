@@ -95,6 +95,22 @@ func (s *PinService) VerifyPin(ctx context.Context, tenantID, personID uuid.UUID
 	}
 }
 
+// HasPin reports whether personID has a PIN set for tenantID. See
+// pub.CashierPinService for why this carries no verification semantics —
+// it never touches pin_salt/pin_hash, only the row's existence.
+func (s *PinService) HasPin(ctx context.Context, tenantID, personID uuid.UUID) (bool, error) {
+	var exists bool
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		exists, err = s.pins.Exists(ctx, tx, tenantID, personID)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("identity/service/pin: has pin: %w", err)
+	}
+	return exists, nil
+}
+
 // ResetPin deletes personID's PIN row (manager action). See
 // pub.CashierPinService for why this never reads or accepts a PIN value.
 func (s *PinService) ResetPin(ctx context.Context, tenantID, personID uuid.UUID) error {

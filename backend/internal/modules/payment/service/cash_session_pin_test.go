@@ -68,6 +68,44 @@ func (f *fakeCashierPinService) ResetPin(_ context.Context, tenantID, personID u
 	return nil
 }
 
+func (f *fakeCashierPinService) HasPin(_ context.Context, tenantID, personID uuid.UUID) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.pins[[2]uuid.UUID{tenantID, personID}]
+	return ok, nil
+}
+
+// fakePersonReader is an in-memory stand-in for identity's real PersonReader.
+// Only GetByID is exercised by CashSessionPinService.ListParticipants.
+type fakePersonReader struct {
+	mu      sync.Mutex
+	persons map[uuid.UUID]identitypub.Person
+}
+
+func newFakePersonReader() *fakePersonReader {
+	return &fakePersonReader{persons: map[uuid.UUID]identitypub.Person{}}
+}
+
+func (f *fakePersonReader) set(personID uuid.UUID, fullName string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.persons[personID] = identitypub.Person{ID: personID, FullName: fullName, Email: "should-never-be-read@example.test"}
+}
+
+func (f *fakePersonReader) GetByID(_ context.Context, personID uuid.UUID) (identitypub.Person, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.persons[personID]
+	if !ok {
+		return identitypub.Person{}, identitypub.ErrNotFound
+	}
+	return p, nil
+}
+
+func (f *fakePersonReader) GetByKeycloakSub(context.Context, string) (identitypub.Person, error) {
+	return identitypub.Person{}, identitypub.ErrNotFound
+}
+
 // fakeMembershipResolver always returns a fixed non-empty role set — the pin
 // service under test does not make authorization decisions based on the
 // resolved roles, it only needs to embed something into the issued token.
@@ -95,6 +133,7 @@ func newTestSigner(t *testing.T) *auth.ContextTokenSigner {
 type pinTestDeps struct {
 	svc      *service.CashSessionPinService
 	pins     *fakeCashierPinService
+	persons  *fakePersonReader
 	signer   *auth.ContextTokenSigner
 	observed *observer.ObservedLogs
 }
@@ -103,6 +142,7 @@ func newCashSessionPinService(t *testing.T) pinTestDeps {
 	t.Helper()
 	core, observed := observer.New(zapcore.DebugLevel)
 	pins := newFakeCashierPinService()
+	persons := newFakePersonReader()
 	signer := newTestSigner(t)
 
 	svc := service.NewCashSessionPinService(service.CashSessionPinParams{
@@ -110,11 +150,12 @@ func newCashSessionPinService(t *testing.T) pinTestDeps {
 		Sessions:    repo.NewCashSessionRepo(),
 		Pins:        pins,
 		Memberships: &fakeMembershipResolver{roleIDs: []uuid.UUID{uuid.New()}},
+		Persons:     persons,
 		Signer:      signer,
 		Redis:       newTestRedis(t),
 		Logger:      zap.New(core),
 	})
-	return pinTestDeps{svc: svc, pins: pins, signer: signer, observed: observed}
+	return pinTestDeps{svc: svc, pins: pins, persons: persons, signer: signer, observed: observed}
 }
 
 // newTestScope creates one (tenantID, branchID) pair and two staff
@@ -350,4 +391,112 @@ func TestCashSessionPinService_PinNeverLogged(t *testing.T) {
 			assert.NotContains(t, f.Key, pin, "pin leaked into a structured log field key")
 		}
 	}
+}
+
+// --- ListParticipants ------------------------------------------------------
+
+func (s testScope) staffPrincipal(roleID string) auth.Principal {
+	return auth.Principal{
+		PersonID: uuid.New(), Ctx: auth.ContextStaff,
+		TenantID: s.tenantID, BranchID: s.branchID,
+		RoleIDs: []uuid.UUID{uuid.MustParse(roleID)},
+	}
+}
+
+// TestCashSessionPinService_ListParticipants_ReflectsHasPinAndLocked covers
+// the three signals the POS switch picker needs per participant: the
+// resolved display name (never email — fakePersonReader.set stashes an email
+// ListParticipants must never surface), has_pin (whether they can be
+// selected at all), and locked (whether the PIN path is currently closed for
+// them on this session).
+func TestCashSessionPinService_ListParticipants_ReflectsHasPinAndLocked(t *testing.T) {
+	requireDB(t)
+	scope := newTestScope()
+	sessionID := scope.openSession(t)
+	deps := newCashSessionPinService(t)
+
+	deps.persons.set(scope.cashier.PersonID, "Ayşe Yılmaz")
+	require.NoError(t, deps.svc.Join(t.Context(), scope.cashier, sessionID, "1234"))
+
+	noPinCashier := scope.staffPrincipal(cashierRoleID)
+	deps.persons.set(noPinCashier.PersonID, "Mehmet Demir")
+	require.NoError(t, deps.svc.Join(t.Context(), noPinCashier, sessionID, "")) // joins, never sets a pin
+
+	views, err := deps.svc.ListParticipants(t.Context(), scope.manager, sessionID)
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+
+	byPerson := map[uuid.UUID]service.CashSessionParticipantView{}
+	for _, v := range views {
+		byPerson[v.PersonID] = v
+	}
+
+	withPin := byPerson[scope.cashier.PersonID]
+	assert.Equal(t, "Ayşe Yılmaz", withPin.FullName)
+	assert.True(t, withPin.HasPin)
+	assert.False(t, withPin.Locked)
+
+	withoutPin := byPerson[noPinCashier.PersonID]
+	assert.Equal(t, "Mehmet Demir", withoutPin.FullName)
+	assert.False(t, withoutPin.HasPin, "a participant who joined without setting a pin must report has_pin=false")
+	assert.False(t, withoutPin.Locked)
+
+	// Lock the pin-holder out with 5 wrong attempts, then re-list.
+	for i := 0; i < 5; i++ {
+		_, err := deps.svc.Switch(t.Context(), scope.manager, sessionID, scope.cashier.PersonID, "0000")
+		require.Error(t, err)
+	}
+	views, err = deps.svc.ListParticipants(t.Context(), scope.manager, sessionID)
+	require.NoError(t, err)
+	for _, v := range views {
+		if v.PersonID == scope.cashier.PersonID {
+			assert.True(t, v.Locked, "must reflect the lockout after 5 failed attempts")
+		}
+	}
+}
+
+// TestCashSessionPinService_ListParticipants_NoParticipants_ReturnsEmpty
+// guards the "nobody has joined yet" shape a freshly opened session starts
+// in — it must be an empty list, not an error.
+func TestCashSessionPinService_ListParticipants_NoParticipants_ReturnsEmpty(t *testing.T) {
+	requireDB(t)
+	scope := newTestScope()
+	sessionID := scope.openSession(t)
+	deps := newCashSessionPinService(t)
+
+	views, err := deps.svc.ListParticipants(t.Context(), scope.manager, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, views)
+}
+
+// TestCashSessionPinService_ListParticipants_OtherBranch_Forbidden proves the
+// ADR-AUTH-001 layer 3 branch guard applies to the read path too — a staff
+// principal scoped to a different branch must not enumerate who is on shift
+// elsewhere.
+func TestCashSessionPinService_ListParticipants_OtherBranch_Forbidden(t *testing.T) {
+	requireDB(t)
+	scope := newTestScope()
+	sessionID := scope.openSession(t)
+	deps := newCashSessionPinService(t)
+
+	outsider := auth.Principal{
+		PersonID: uuid.New(), Ctx: auth.ContextStaff,
+		TenantID: scope.tenantID, BranchID: uuid.New(), // different branch
+		RoleIDs: []uuid.UUID{uuid.MustParse(cashierRoleID)},
+	}
+
+	_, err := deps.svc.ListParticipants(t.Context(), outsider, sessionID)
+	assert.ErrorIs(t, err, pub.ErrBranchForbidden)
+}
+
+// TestCashSessionPinService_ListParticipants_UnknownSession_NotFound proves a
+// session ID from another tenant (or one that never existed) surfaces
+// ErrNotFound rather than an empty list or a 500.
+func TestCashSessionPinService_ListParticipants_UnknownSession_NotFound(t *testing.T) {
+	requireDB(t)
+	scope := newTestScope()
+	deps := newCashSessionPinService(t)
+
+	_, err := deps.svc.ListParticipants(t.Context(), scope.manager, uuid.New())
+	assert.ErrorIs(t, err, pub.ErrNotFound)
 }

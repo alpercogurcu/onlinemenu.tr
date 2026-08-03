@@ -50,6 +50,7 @@ type CashSessionPinService struct {
 	sessions    *repo.CashSessionRepo
 	pins        identitypub.CashierPinService
 	memberships identitypub.MembershipResolver
+	persons     identitypub.PersonReader
 	signer      *auth.ContextTokenSigner
 	redis       *redis.Client
 	logger      *zap.Logger
@@ -63,6 +64,7 @@ type CashSessionPinParams struct {
 	Sessions    *repo.CashSessionRepo
 	Pins        identitypub.CashierPinService
 	Memberships identitypub.MembershipResolver
+	Persons     identitypub.PersonReader
 	Signer      *auth.ContextTokenSigner
 	Redis       *redis.Client
 	Logger      *zap.Logger
@@ -72,7 +74,7 @@ type CashSessionPinParams struct {
 func NewCashSessionPinService(p CashSessionPinParams) *CashSessionPinService {
 	return &CashSessionPinService{
 		db: p.DB, sessions: p.Sessions, pins: p.Pins, memberships: p.Memberships,
-		signer: p.Signer, redis: p.Redis, logger: p.Logger,
+		persons: p.Persons, signer: p.Signer, redis: p.Redis, logger: p.Logger,
 	}
 }
 
@@ -261,6 +263,80 @@ func (s *CashSessionPinService) Switch(ctx context.Context, principal auth.Princ
 		zap.String("acting_person_id", principal.PersonID.String()),
 		zap.String("switched_to_person_id", targetPersonID.String()))
 	return token, nil
+}
+
+// CashSessionParticipantView is the read-only projection ListParticipants
+// returns. FullName is the ONLY person field carried across from
+// identitypub.PersonReader — never Email or anything else. That is safe to
+// do specifically for THIS endpoint because the caller is already an
+// authenticated participant of this very session (ADR-AUTH-001 layer 4 DTO
+// projection is what enforces the field-level cut, not a general licence to
+// expose PersonReader's fields elsewhere).
+type CashSessionParticipantView struct {
+	PersonID uuid.UUID
+	FullName string
+	HasPin   bool
+	Locked   bool
+}
+
+// ListParticipants returns every person who has joined sessionID, for a
+// cashier-switch picker (ADR-DATA-008 PIN akışı §3: "listeden isim seç").
+// Only participants can ever appear here — the PIN path can select nobody
+// who has not joined via the full Keycloak flow at least once.
+//
+// This issues one identitypub.PersonReader.GetByID call and one
+// identitypub.CashierPinService.HasPin call PER participant, each opening
+// its own transaction (WithAllTenantsReadTx / WithTenantReadTx
+// respectively) — see those methods' implementations. A cash session
+// realistically has a handful of participants (one drawer, one shift), so
+// N small round-trips is an accepted cost here, not batched into a single
+// query; this is called out explicitly so the cost is on record rather than
+// discovered later if this ever needs to scale beyond a handful of people.
+func (s *CashSessionPinService) ListParticipants(ctx context.Context, principal auth.Principal, sessionID uuid.UUID) ([]CashSessionParticipantView, error) {
+	if !principal.IsStaff() {
+		return nil, pub.ErrBranchForbidden
+	}
+
+	session, err := s.getSession(ctx, principal.TenantID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireBranch(ctx, principal, session.BranchID); err != nil {
+		return nil, err
+	}
+
+	var participants []domain.CashSessionParticipant
+	err = s.db.WithTenantReadTx(ctx, principal.TenantID, func(tx pgx.Tx) error {
+		var err error
+		participants, err = s.sessions.ListParticipants(ctx, tx, principal.TenantID, sessionID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: list cash session participants: %w", err)
+	}
+
+	views := make([]CashSessionParticipantView, 0, len(participants))
+	for _, p := range participants {
+		person, err := s.persons.GetByID(ctx, p.PersonID)
+		if err != nil {
+			return nil, fmt.Errorf("payment/service: list cash session participants: resolve person: %w", err)
+		}
+		hasPin, err := s.pins.HasPin(ctx, principal.TenantID, p.PersonID)
+		if err != nil {
+			return nil, fmt.Errorf("payment/service: list cash session participants: has pin: %w", err)
+		}
+		locked, err := s.isLocked(ctx, sessionID, p.PersonID)
+		if err != nil {
+			return nil, fmt.Errorf("payment/service: list cash session participants: check lockout: %w", err)
+		}
+		views = append(views, CashSessionParticipantView{
+			PersonID: p.PersonID,
+			FullName: person.FullName,
+			HasPin:   hasPin,
+			Locked:   locked,
+		})
+	}
+	return views, nil
 }
 
 // ResetPin clears targetPersonID's PIN (manager-only — see

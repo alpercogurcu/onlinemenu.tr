@@ -1,30 +1,64 @@
 package payment
 
 import (
+	"context"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	identitypub "onlinemenu.tr/internal/modules/identity/public"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 )
 
+// stubCashierPinService/stubMembershipResolver are zero-value structs that
+// satisfy identity's public interfaces for graph-resolution purposes only
+// (see supplyExternals below) — unlike the concrete pointer stubs above
+// them, an interface type cannot be "supplied as nil" and keep its static
+// type (a bare nil interface value loses its type the moment it is boxed),
+// so a real (if inert) implementation is the only way to fx.Supply one.
+// ValidateApp never calls these methods.
+type stubCashierPinService struct{}
+
+func (stubCashierPinService) SetOwnPin(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (stubCashierPinService) VerifyPin(context.Context, uuid.UUID, uuid.UUID, string) error {
+	return nil
+}
+func (stubCashierPinService) ResetPin(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+type stubMembershipResolver struct{}
+
+func (stubMembershipResolver) ActiveRoleIDsAt(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
 // supplyExternals provides the dependencies cmd/api/main.go injects into this
 // module. ValidateApp only resolves the graph — no constructor runs and no hook
-// fires — so the nil pointers are never dereferenced.
+// fires — so the nil pointers (and the stub interface impls above) are never
+// exercised.
+//
+// identitypub.CashierPinService/MembershipResolver and *auth.ContextTokenSigner
+// were added for ADR-DATA-008 PIN akışı (CashSessionPinService): this module
+// now depends one-way on identity_public.
 func supplyExternals(cfg FiscalConfig) fx.Option {
 	return fx.Supply(
 		cfg,
 		(*db.Pool)(nil),
 		(*redis.Client)(nil),
 		(*auth.Engine)(nil),
+		(*auth.ContextTokenSigner)(nil),
 		zap.NewNop(),
 		chi.NewMux(),
+		fx.Annotate(stubCashierPinService{}, fx.As(new(identitypub.CashierPinService))),
+		fx.Annotate(stubMembershipResolver{}, fx.As(new(identitypub.MembershipResolver))),
 	)
 }
 

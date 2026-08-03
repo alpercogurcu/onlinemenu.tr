@@ -51,6 +51,13 @@ type Principal struct {
 	// RoleIDs lists all active roles the person holds at TenantID+BranchID.
 	// Permissions are the union of all roles. Populated only in ContextStaff.
 	RoleIDs []uuid.UUID
+
+	// SessionID is the cash session this token was minted against
+	// (ADR-DATA-008 PIN akışı). uuid.Nil for every token issued via the
+	// normal Keycloak /auth/context flow (IssueStaff) — only a PIN-switched
+	// token (IssueStaffForSession) sets it. Its presence is what
+	// RequireOpenSession keys its live "is the session still open" check on.
+	SessionID uuid.UUID
 }
 
 // IsPreContext reports whether this is a Keycloak-only principal (no context selected yet).

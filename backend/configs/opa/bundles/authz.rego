@@ -310,6 +310,32 @@ allow if {
 	any_role({"cashier", "shift_manager"})
 }
 
+# -- Payment: cash session PIN akışı (ADR-DATA-008 "PIN akışının ayrıntıları").
+# Same shifts:create/update grant as cash_session_write_actions above covers
+# these too — joining a session and switching within it are the same class
+# of action as opening/closing the drawer, just finer-grained verbs, not a
+# new permission dictionary entry (see identity/000006's seed comment and
+# permission_wiring_test.go's {shifts,create}/{shifts,update} entries).
+allow if {
+	input.action == "payment.cash_session.join"
+	any_role({"cashier", "shift_manager"})
+}
+
+allow if {
+	input.action == "payment.cash_session.switch"
+	any_role({"cashier", "shift_manager"})
+}
+
+# pin_reset is deliberately NOT granted to cashier: ADR-DATA-008 PIN akışı §2
+# — a manager may only clear a PIN, never read or set one, and "manager" here
+# means shift_manager (the role actually present and running the shift; the
+# chain-wide "manager" role already gets this via the wildcard rule at the
+# top of this file).
+allow if {
+	input.action == "payment.cash_session.pin_reset"
+	has_role("shift_manager")
+}
+
 # -- Scope resolution for non-manager allows above: branch-scoped, since cashier/
 # shift_manager/kitchen/bar operate within a single branch (Principal.BranchID).
 scope := "branch" if {

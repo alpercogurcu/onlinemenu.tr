@@ -43,6 +43,31 @@ var ErrNoCashSessionOpen = errors.New("payment: branch has no open cash session"
 // error log fills with false alarms that mask real faults.
 var ErrInvalidInput = errors.New("payment: invalid input")
 
+// ErrCashSessionClosed is returned by CashSessionPinService.Join/Switch when
+// the target session is not open (ADR-DATA-008 PIN akışı §4: participation
+// and switching only make sense against an open drawer). Callers map it to
+// HTTP 409.
+var ErrCashSessionClosed = errors.New("payment: cash session is closed")
+
+// ErrSessionScopedPrincipal is returned by CashSessionPinService.Join when
+// the caller's own principal was itself issued via PIN-switching
+// (auth.Principal.SessionID != uuid.Nil). ADR-DATA-008 PIN akışı §2 requires
+// setting a PIN to happen at the "trusted moment" of a fresh Keycloak
+// authentication — a principal that is itself an impersonated identity is
+// not that moment, even though every other authorization check it carries
+// (branch, roles) is otherwise valid. Callers map it to HTTP 403.
+var ErrSessionScopedPrincipal = errors.New("payment: caller must be freshly Keycloak-authenticated (not pin-switched) to do this")
+
+// ErrPinVerificationFailed is returned by CashSessionPinService.Switch for
+// EVERY negative verification outcome: wrong PIN, PIN never set, person not
+// a participant of the session, and (as far as the caller can tell) a
+// nonexistent person all collapse into this one sentinel — see
+// identity/public.ErrPinVerificationFailed, which the service wraps here so
+// payment_http never needs to import identity/public directly (module
+// isolation: payment_http may only see payment_public). Callers map it to
+// HTTP 401 with a generic message.
+var ErrPinVerificationFailed = errors.New("payment: pin verification failed")
+
 // SaleReader is consumed by POS (and any other module that needs to verify
 // payment totals for a check).  Dependency direction: pos → payment.public.
 type SaleReader interface {

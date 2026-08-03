@@ -38,7 +38,16 @@ type contextTokenClaims struct {
 	TenantID string   `json:"tid,omitempty"`
 	BranchID string   `json:"bid,omitempty"`
 	RoleIDs  []string `json:"rids,omitempty"`
-	Exp      int64    `json:"exp"`
+	// Sid is the cash session UUID this token was minted against
+	// (ADR-DATA-008 PIN akışı §4). Empty for every token issued via the
+	// normal Keycloak /auth/context flow — only IssueStaffForSession sets
+	// it. Its presence is what tells RequireOpenSession (session_validator.go)
+	// to perform the live "is this session still open" check on every
+	// request; its absence is a free skip, not a weaker check, because a
+	// plain IssueStaff token was never derived from PIN-based cashier
+	// switching in the first place.
+	Sid string `json:"sid,omitempty"`
+	Exp int64  `json:"exp"`
 }
 
 // ContextTokenSigner issues and verifies platform-signed context tokens.
@@ -71,6 +80,48 @@ func (s *ContextTokenSigner) IssueStaff(personID, tenantID, branchID uuid.UUID, 
 		BranchID: branchID.String(),
 		RoleIDs:  rids,
 		Exp:      time.Now().Add(contextTokenTTL).Unix(),
+	})
+}
+
+// IssueStaffForSession creates a context token for a cashier who was PIN-
+// switched into an already-open cash session (ADR-DATA-008 PIN akışı §4/§5).
+// It differs from IssueStaff only in that it also carries sessionID, and its
+// expiry is the earlier of the normal 8h TTL and sessionDeadline (if known).
+//
+// sessionDeadline is nil today: cash_sessions carries no scheduled-close
+// timestamp, so there is nothing to clamp against yet and min(8h, deadline)
+// resolves to plain 8h. The parameter exists so that whenever a scheduled
+// close bound is introduced (most likely alongside ADR-SEC-004 station
+// identity), this signature does not need to change — only the caller
+// starts passing a non-nil value. The bound that actually matters TODAY is
+// enforced separately and continuously: the caller is expected to reject
+// any token carrying Sid once that session's status flips to closed
+// (see RequireOpenSession) — a stateless HMAC token cannot be revoked by
+// shortening its exp after the fact, so that live check, not this clamp, is
+// what makes "closing the drawer invalidates every token derived from it"
+// true in practice.
+func (s *ContextTokenSigner) IssueStaffForSession(
+	personID, tenantID, branchID, sessionID uuid.UUID,
+	roleIDs []uuid.UUID,
+	sessionDeadline *time.Time,
+) (string, error) {
+	rids := make([]string, len(roleIDs))
+	for i, id := range roleIDs {
+		rids[i] = id.String()
+	}
+	exp := time.Now().Add(contextTokenTTL)
+	if sessionDeadline != nil && sessionDeadline.Before(exp) {
+		exp = *sessionDeadline
+	}
+	return s.sign(contextTokenClaims{
+		Iss:      contextTokenIssuer,
+		Sub:      personID.String(),
+		Ctx:      string(ContextStaff),
+		TenantID: tenantID.String(),
+		BranchID: branchID.String(),
+		RoleIDs:  rids,
+		Sid:      sessionID.String(),
+		Exp:      exp.Unix(),
 	})
 }
 
@@ -195,6 +246,17 @@ func claimsToContextPrincipal(c contextTokenClaims) (Principal, error) {
 				return Principal{}, fmt.Errorf("auth: invalid role id %q in context token: %w", raw, err)
 			}
 			p.RoleIDs = append(p.RoleIDs, id)
+		}
+
+		// Sid is absent on every token minted by IssueStaff (the normal
+		// Keycloak /auth/context flow) — that must decode to uuid.Nil, NOT a
+		// parse error, or every pre-existing staff token would fail to
+		// verify the moment this field was added.
+		if c.Sid != "" {
+			p.SessionID, err = uuid.Parse(c.Sid)
+			if err != nil {
+				return Principal{}, fmt.Errorf("auth: invalid sid in context token: %w", err)
+			}
 		}
 	}
 

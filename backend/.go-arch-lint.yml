@@ -191,8 +191,13 @@ deps:
     mayDependOn: [platform, payment_domain]
   payment_repo:
     mayDependOn: [platform, payment_domain, payment_repo]
+  # identity_public added for ADR-DATA-008 PIN akışı: CashSessionPinService
+  # (Join/Switch/ResetPin) drives identity's pub.CashierPinService (PIN
+  # storage/verification) and pub.MembershipResolver (role lookup for the
+  # PIN-switched token). Direction is one-way — identity_service does NOT
+  # depend on payment_public — so this is a new edge, not a cycle.
   payment_service:
-    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public, payment_service]
+    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public, identity_public, payment_service]
   # payment_fiscal is allowed here for ONE reason: the TokenX webhook endpoint
   # is definitionally the vendor's inbound edge, so the transport layer must
   # speak the vendor's wire format (tokenx.ParseWebhook / ParseLockEvent) to

@@ -31,6 +31,59 @@ type MembershipResolver interface {
 	ActiveRoleIDsAt(ctx context.Context, tenantID, personID, branchID uuid.UUID) ([]uuid.UUID, error)
 }
 
+// CashierPinService lets other modules drive PIN-based cashier switching
+// (ADR-DATA-008 PIN akışı) without importing identity internals. PIN storage
+// and verification are identity's responsibility (the pin scope is
+// (person, tenant), an identity-owned concept per the ADR); this is the
+// narrow surface the payment module's cash-session join/switch/reset flows
+// need. It never returns a PIN or its hash, in any form, to any caller.
+type CashierPinService interface {
+	// SetOwnPin sets/replaces personID's PIN for tenantID. Callers MUST
+	// have already established that this is the ADR's "trusted moment" —
+	// personID authenticated via the full Keycloak flow just now, not via a
+	// PIN-derived session token — before calling this; the interface itself
+	// performs no such check and trusts the caller completely.
+	SetOwnPin(ctx context.Context, tenantID, personID uuid.UUID, pin string) error
+
+	// VerifyPin reports whether pin matches personID's stored PIN for
+	// tenantID. It returns ErrPinVerificationFailed for EVERY negative
+	// outcome — wrong PIN, no PIN ever set, and (as far as the caller can
+	// tell) a nonexistent personID all look identical, in error value AND
+	// in the CPU time spent, by construction (see
+	// identity/service/pin.go's DummyPinCost use). Callers must not layer
+	// their own distinguishing error handling on top of this — e.g. do not
+	// short-circuit on "person not found" before calling VerifyPin, or the
+	// timing distinction VerifyPin itself avoids leaks back in at the
+	// call site.
+	VerifyPin(ctx context.Context, tenantID, personID uuid.UUID, pin string) error
+
+	// ResetPin deletes personID's PIN row for tenantID (manager action —
+	// ADR-DATA-008 PIN akışı §2: a manager may only clear, never read or
+	// set). The person sets a fresh PIN at their next full-Keycloak join.
+	// Resetting an already-unset PIN is not an error.
+	ResetPin(ctx context.Context, tenantID, personID uuid.UUID) error
+}
+
+// ErrPinVerificationFailed is the single sentinel VerifyPin returns for
+// every negative outcome (wrong PIN, unset PIN, unknown person). Callers map
+// it to HTTP 401 with a generic message — never a message or status that
+// would let a caller distinguish "wrong PIN" from "no such cashier".
+var ErrPinVerificationFailed = identityPinVerificationFailedError{}
+
+type identityPinVerificationFailedError struct{}
+
+func (identityPinVerificationFailedError) Error() string { return "identity: pin verification failed" }
+
+// ErrPinFormatInvalid is returned by SetOwnPin when pin fails the 4-6 digit
+// format rule. Unlike ErrPinVerificationFailed this IS a caller-input
+// problem (maps to 422), not an auth outcome — the two must stay distinct so
+// a malformed PIN and a wrong PIN don't collapse into the same status code.
+var ErrPinFormatInvalid = identityPinFormatInvalidError{}
+
+type identityPinFormatInvalidError struct{}
+
+func (identityPinFormatInvalidError) Error() string { return "identity: pin must be 4-6 digits" }
+
 // ErrNotFound is returned when a requested resource does not exist.
 // Callers should use errors.Is to check for this condition.
 var ErrNotFound = identityNotFoundError{}

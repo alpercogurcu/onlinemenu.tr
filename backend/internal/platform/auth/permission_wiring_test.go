@@ -229,7 +229,11 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 		Wired: true, CheckRole: "cashier", CheckAction: "payment.cash_session.close",
 		Reason: "seed 'update' covers the cash session lifecycle mutations " +
 			"payment.cash_session.movement / payment.cash_session.submit_closing / " +
-			"payment.cash_session.close; evidenced via close.",
+			"payment.cash_session.close / payment.cash_session.join / " +
+			"payment.cash_session.switch; evidenced via close. " +
+			"payment.cash_session.pin_reset is the one write verb in this family " +
+			"NOT covered by this grant — it stays shift_manager-only " +
+			"(ADR-DATA-008 PIN akışı §2: a cashier may never clear a PIN).",
 	},
 
 	// -- staff --------------------------------------------------------------

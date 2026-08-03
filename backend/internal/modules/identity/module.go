@@ -23,6 +23,7 @@ var Module = fx.Module("identity",
 		repo.NewRoleRepo,
 		repo.NewMembershipRepo,
 		repo.NewPermissionRepo,
+		repo.NewCashierPinRepo,
 		service.NewPersonService,
 		service.NewRoleService,
 		service.NewMembershipService,
@@ -33,6 +34,11 @@ var Module = fx.Module("identity",
 		// Adapters expose the services through the public interfaces consumed by other modules.
 		fx.Annotate(newPersonReader, fx.As(new(pub.PersonReader))),
 		fx.Annotate(newMembershipResolver, fx.As(new(pub.MembershipResolver))),
+		// PinService already satisfies pub.CashierPinService directly (its
+		// method set matches exactly) — no adapter struct needed, unlike
+		// PersonReader/MembershipResolver above which project onto a
+		// narrower/reshaped surface.
+		fx.Annotate(service.NewPinService, fx.As(new(pub.CashierPinService))),
 	),
 	fx.Invoke(func(h *identityhttp.Handler, r *chi.Mux) {
 		h.RegisterRoutes(r)

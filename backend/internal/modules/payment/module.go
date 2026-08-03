@@ -42,6 +42,8 @@ var Module = fx.Module("payment",
 		repo.NewFiscalAdminRepo,
 		repo.NewCashSessionRepo,
 		service.NewCashSessionService,
+		service.NewCashSessionPinService,
+		newCashSessionOpenChecker,
 		// Bind the concrete admin repo to the interface the HTTP layer declares
 		// at its point of use, so payment_http never imports payment_repo.
 		func(r *repo.FiscalAdminRepo) paymenthttp.FiscalAdminStore { return r },
@@ -147,4 +149,23 @@ func (a *saleReaderAdapter) TotalPaidForCheck(ctx context.Context, tenantID, che
 
 func (a *saleReaderAdapter) PendingTotalForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
 	return a.svc.PendingTotalForCheck(ctx, tenantID, checkID)
+}
+
+// CashSessionOpenChecker adapts CashSessionPinService.IsOpen to a type
+// exported from this package (not payment/public — nothing else in the
+// module graph needs it; only cmd/api/main.go's composition root does, to
+// wire auth.RequireOpenSession). It structurally satisfies
+// auth.SessionValidator without importing platform/auth's interface type —
+// see session_validator.go's doc comment for why that import direction is
+// deliberately avoided.
+type CashSessionOpenChecker struct {
+	svc *service.CashSessionPinService
+}
+
+func newCashSessionOpenChecker(svc *service.CashSessionPinService) *CashSessionOpenChecker {
+	return &CashSessionOpenChecker{svc: svc}
+}
+
+func (c *CashSessionOpenChecker) IsOpen(ctx context.Context, tenantID, sessionID uuid.UUID) (bool, error) {
+	return c.svc.IsOpen(ctx, tenantID, sessionID)
 }

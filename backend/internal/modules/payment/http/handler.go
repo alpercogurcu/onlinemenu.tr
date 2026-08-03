@@ -23,21 +23,23 @@ import (
 
 // Handler exposes payment REST endpoints.
 type Handler struct {
-	payments *service.PaymentService
-	sessions *service.CashSessionService
-	logger   *zap.Logger
-	engine   *auth.Engine
+	payments   *service.PaymentService
+	sessions   *service.CashSessionService
+	sessionPin *service.CashSessionPinService
+	logger     *zap.Logger
+	engine     *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
 type Params struct {
 	fx.In
 
-	Payments *service.PaymentService
-	Sessions *service.CashSessionService
-	Logger   *zap.Logger
-	Cache    *redis.Client
-	Engine   *auth.Engine
+	Payments   *service.PaymentService
+	Sessions   *service.CashSessionService
+	SessionPin *service.CashSessionPinService
+	Logger     *zap.Logger
+	Cache      *redis.Client
+	Engine     *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client needed for idempotency middleware.
@@ -48,7 +50,7 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{payments: p.Payments, sessions: p.Sessions, logger: p.Logger, engine: p.Engine},
+		h:     &Handler{payments: p.Payments, sessions: p.Sessions, sessionPin: p.SessionPin, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
@@ -92,6 +94,15 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 			Post("/cash-sessions/{id}/closing-count", hwc.h.submitClosingCount)
 		r.With(hwc.h.permit("payment.cash_session.close")).
 			Post("/cash-sessions/{id}/close", hwc.h.closeCashSession)
+
+		// ADR-DATA-008 PIN akışı: participation join, PIN-based switching,
+		// and manager-driven PIN reset. See cash_session_pin_handler.go.
+		r.With(hwc.h.permit("payment.cash_session.join")).
+			Post("/cash-sessions/{id}/participants", hwc.h.joinCashSession)
+		r.With(hwc.h.permit("payment.cash_session.switch"), httpx.Idempotency(hwc.cache)).
+			Post("/cash-sessions/{id}/switch", hwc.h.switchCashier)
+		r.With(hwc.h.permit("payment.cash_session.pin_reset")).
+			Post("/cash-sessions/{id}/participants/{personID}/pin-reset", hwc.h.resetCashierPin)
 	})
 }
 

@@ -25,7 +25,7 @@ import (
 	"onlinemenu.tr/internal/modules/catalog"
 	"onlinemenu.tr/internal/modules/identity"
 	"onlinemenu.tr/internal/modules/inventory"
-	"onlinemenu.tr/internal/modules/payment"
+	paymentmod "onlinemenu.tr/internal/modules/payment"
 	"onlinemenu.tr/internal/modules/payment/fiscal/tokenx"
 	paymenthttp "onlinemenu.tr/internal/modules/payment/http"
 	"onlinemenu.tr/internal/modules/pos"
@@ -81,7 +81,7 @@ func main() {
 		tenant.Module,
 		catalog.Module,
 		pos.Module,
-		payment.Module,
+		paymentmod.Module,
 		inventory.Module,
 
 		// HTTP server
@@ -118,7 +118,24 @@ type httpConfig struct {
 	IdleTimeout  time.Duration
 }
 
-func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier, pool *db.Pool) *chi.Mux {
+// routerParams groups newRouter's fx-injected dependencies. SessionValidator
+// is optional: cmd/api is the only binary today that wires both identity and
+// payment (see session_validator.go's doc comment), so it is the only one
+// that can supply a real one. If payment.Module is ever removed from this
+// binary's module list, fx leaves this nil rather than failing to start —
+// RequireOpenSession's nil-validator path then fails closed on any
+// session-scoped token instead of silently trusting it.
+type routerParams struct {
+	fx.In
+
+	Signer           *auth.ContextTokenSigner
+	Verifier         auth.TokenVerifier
+	Pool             *db.Pool
+	Logger           *zap.Logger
+	SessionValidator *paymentmod.CashSessionOpenChecker `optional:"true"`
+}
+
+func newRouter(p routerParams) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
@@ -135,12 +152,26 @@ func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier, poo
 	// Auth middleware is applied to every path except /healthz and /dev/*.
 	// The middleware accepts both platform CTX tokens and Keycloak JWTs,
 	// so identity pre-context endpoints work without a separate auth chain.
-	authMW := auth.Middleware(verifier, signer)
+	authMW := auth.Middleware(p.Verifier, p.Signer)
+
+	// RequireOpenSession chains right after authMW: it only ever acts on a
+	// principal authMW already populated, and only when that principal
+	// carries a non-nil SessionID (ADR-DATA-008 PIN akışı §4 — a PIN-
+	// switched token). See session_validator.go for the nil-interface trap
+	// this guard avoids: a nil *CashSessionOpenChecker boxed into the
+	// auth.SessionValidator interface would compare != nil, so the check
+	// must happen on the concrete pointer before boxing it.
+	var sessionValidator auth.SessionValidator
+	if p.SessionValidator != nil {
+		sessionValidator = p.SessionValidator
+	}
+	openSessionMW := auth.RequireOpenSession(sessionValidator, p.Logger)
+
 	r.Use(func(next http.Handler) http.Handler {
-		protected := authMW(next)
+		protected := authMW(openSessionMW(next))
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p := r.URL.Path
-			if p == "/healthz" || (isDev && strings.HasPrefix(p, "/dev/")) {
+			path := r.URL.Path
+			if path == "/healthz" || (isDev && strings.HasPrefix(path, "/dev/")) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -153,7 +184,7 @@ func newRouter(signer *auth.ContextTokenSigner, verifier auth.TokenVerifier, poo
 	})
 
 	if isDev {
-		r.Post("/dev/login", devLoginHandler(pool, signer))
+		r.Post("/dev/login", devLoginHandler(p.Pool, p.Signer))
 	}
 
 	return r
@@ -439,8 +470,8 @@ func newPosWSConfig() posws.Config {
 // FISCAL_DEVICE_TYPE defaults to mock for dev/CI; production deployments set
 // beko_x30tr_cloud plus the TOKENX_* credentials. The Token client secret will
 // move to Vault dynamic secrets together with the other runtime credentials.
-func newFiscalConfig() payment.FiscalConfig {
-	cfg := payment.FiscalConfig{
+func newFiscalConfig() paymentmod.FiscalConfig {
+	cfg := paymentmod.FiscalConfig{
 		DeviceType:    envOr("FISCAL_DEVICE_TYPE", "mock"),
 		WebhookSecret: envOr("TOKENX_WEBHOOK_SECRET", ""),
 	}

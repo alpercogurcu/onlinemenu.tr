@@ -133,6 +133,56 @@ func (r *CashSessionRepo) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, tenan
 	return s, err
 }
 
+// GetByID loads a session row with no lock — for reads that only need the
+// current status/branch (the PIN-switch flow's session lookup, and
+// CashSessionOpenChecker's per-request liveness check), as opposed to
+// GetByIDForUpdate's FOR UPDATE lock which is only needed by writers.
+func (r *CashSessionRepo) GetByID(ctx context.Context, tx pgx.Tx, tenantID, id uuid.UUID) (domain.CashSession, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT `+cashSessionColumns+`
+		FROM cash_sessions
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, id)
+	s, err := scanCashSession(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.CashSession{}, domain.ErrNotFound
+	}
+	return s, err
+}
+
+// UpsertParticipant records that personID joined sessionID (ADR-DATA-008 PIN
+// akışı §4). ON CONFLICT refreshes joined_at rather than doing nothing: a
+// re-join is the ADR §5 mechanism that clears a person's PIN lockout for
+// this session (see service.CashSessionPinService.Join), so the row must
+// visibly reflect "joined again", not silently stay at its first join time.
+func (r *CashSessionRepo) UpsertParticipant(ctx context.Context, tx pgx.Tx, p domain.CashSessionParticipant) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO cash_session_participants (tenant_id, session_id, branch_id, person_id, joined_at)
+		VALUES ($1, $2, $3, $4, now())
+		ON CONFLICT (tenant_id, session_id, person_id)
+		DO UPDATE SET joined_at = now()
+	`, p.TenantID, p.SessionID, p.BranchID, p.PersonID)
+	if err != nil {
+		return fmt.Errorf("payment/repo: upsert cash session participant: %w", err)
+	}
+	return nil
+}
+
+// IsParticipant reports whether personID has ever joined sessionID.
+func (r *CashSessionRepo) IsParticipant(ctx context.Context, tx pgx.Tx, tenantID, sessionID, personID uuid.UUID) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM cash_session_participants
+			WHERE tenant_id = $1 AND session_id = $2 AND person_id = $3
+		)
+	`, tenantID, sessionID, personID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("payment/repo: is cash session participant: %w", err)
+	}
+	return exists, nil
+}
+
 // SubmitClosingCount persists a (possibly amended) closing count and moves the
 // session to closing_control. from must be the status already read under
 // FOR UPDATE in the same transaction; the WHERE clause re-asserts it so a

@@ -149,6 +149,19 @@ type CashSession struct {
 	UpdatedAt time.Time
 }
 
+// CashSessionParticipant records that a person joined a cash session at
+// least once via the full Keycloak flow (ADR-DATA-008 PIN akışı §4). Its
+// existence is the ONLY thing that makes a person selectable for PIN-based
+// switching into that session — the PIN itself grants nothing to someone who
+// never joined, even if the PIN happens to be correct.
+type CashSessionParticipant struct {
+	TenantID  uuid.UUID
+	SessionID uuid.UUID
+	BranchID  uuid.UUID
+	PersonID  uuid.UUID
+	JoinedAt  time.Time
+}
+
 // CashMovement is one in-shift cash in/out record.
 type CashMovement struct {
 	ID          uuid.UUID

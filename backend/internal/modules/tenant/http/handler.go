@@ -63,13 +63,23 @@ func (h *Handler) tenantAccessMiddleware(next http.Handler) http.Handler {
 }
 
 // branchAccessMiddleware verifies that the authenticated principal has access to the
-// branch indicated in the URL path. Applied at the /{branchID} sub-router level so
-// every branch-scoped endpoint is protected without per-handler duplication.
+// branch indicated in the URL path, and that the branch actually belongs to the path
+// tenant. Mounted per-route (via r.With, after h.permit) rather than once via r.Use on
+// the /{branchID} sub-router — see routes.go for why.
+//
+// principal.HasBranchAccess trusts a chain-wide principal (BranchID == uuid.Nil) for
+// ANY branch id — it has no way to know a branch's tenant and fails OPEN by design
+// (see its doc comment). tenantAccessMiddleware (mounted above this one on the route
+// tree) has already confirmed principal.TenantID == the path tenantID, but that alone
+// doesn't confirm the path branchID belongs to that tenant. So after the branch-scope
+// check, we also confirm branch ownership by attempting a tenant-scoped read: RLS
+// (tenant_id = app.tenant_id) plus GetBranch's own WHERE tenant_id = $1 make a foreign
+// tenant's branch invisible, so a mismatched branchID comes back as pub.ErrNotFound —
+// a clean 404 that doesn't leak whether the branch exists under a different tenant.
 func (h *Handler) branchAccessMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		branchID, err := pathUUID(r, "branchID")
-		if err != nil {
-			h.writeError(w, r, http.StatusBadRequest, "invalid branch id")
+		tenantID, branchID, ok := tenantBranchIDs(h, w, r)
+		if !ok {
 			return
 		}
 		principal, err := auth.FromContext(r.Context())
@@ -79,6 +89,10 @@ func (h *Handler) branchAccessMiddleware(next http.Handler) http.Handler {
 		}
 		if !principal.HasBranchAccess(branchID) {
 			h.writeError(w, r, http.StatusForbidden, "branch access denied")
+			return
+		}
+		if _, err := h.svc.GetBranch(r.Context(), tenantID, branchID); err != nil {
+			h.handleServiceErr(w, r, err, "branch not found")
 			return
 		}
 		next.ServeHTTP(w, r)

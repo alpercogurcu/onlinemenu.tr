@@ -150,7 +150,7 @@ func (r *HoursRepo) UpsertSpecialHours(ctx context.Context, tx pgx.Tx, tenantID,
 			tenant_id, branch_id, special_date, name, open_time, close_time,
 			crosses_midnight, is_closed
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (branch_id, special_date)
+		ON CONFLICT (tenant_id, branch_id, special_date)
 		DO UPDATE SET
 			name = EXCLUDED.name,
 			open_time = EXCLUDED.open_time,

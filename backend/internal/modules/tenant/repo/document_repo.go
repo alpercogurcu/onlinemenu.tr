@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,53 @@ import (
 
 	pub "onlinemenu.tr/internal/modules/tenant/public"
 )
+
+// allowedDocumentTransitions is the single source of truth for legal document
+// status transitions (docs/lessons-from-b2b.md item 2: status assigned from
+// ~10 scattered call sites, with no allowedTransitions map or single
+// Transition() chokepoint, was a repeat b2b defect). Both UpdateDocumentStatus
+// and UpdateBranchDocumentStatus route every mutation through validateTransition
+// below instead of assigning the target status directly.
+//
+//	pending  -> verified | rejected : initial review outcome.
+//	verified -> expired | rejected  : expired is the background validity-sweep
+//	                                  transition (valid_until elapsed, see
+//	                                  migration 000002's comment); rejected is a
+//	                                  manual revocation of a document later found
+//	                                  invalid (e.g. forged) — it requires the
+//	                                  same non-empty rejection_note as the
+//	                                  initial pending -> rejected path.
+//	rejected -> (none)              : terminal. Re-submission uploads a NEW
+//	                                  document via CreateDocument; it does not
+//	                                  resurrect the rejected row.
+//	expired  -> (none)              : terminal for the same reason — renewal is
+//	                                  a new document, not a status flip back.
+//
+// Same-state "transitions" (e.g. pending -> pending) are deliberately absent:
+// a status update that doesn't change status isn't a transition, and a caller
+// asking for one almost certainly has a bug (or is retrying blind — which
+// should surface as an error, not silently succeed).
+var allowedDocumentTransitions = map[pub.DocumentStatus][]pub.DocumentStatus{
+	pub.DocStatusPending:  {pub.DocStatusVerified, pub.DocStatusRejected},
+	pub.DocStatusVerified: {pub.DocStatusExpired, pub.DocStatusRejected},
+}
+
+// validateTransition rejects any status change not present in
+// allowedDocumentTransitions, and rejects a transition INTO "rejected" that
+// carries no rejection_note — a tenant is always entitled to know why their
+// document was refused.
+func validateTransition(current, target pub.DocumentStatus, note string) error {
+	for _, allowed := range allowedDocumentTransitions[current] {
+		if allowed == target {
+			if target == pub.DocStatusRejected && strings.TrimSpace(note) == "" {
+				return fmt.Errorf("tenant/repo: transition %s -> %s requires a non-empty rejection_note: %w",
+					current, target, pub.ErrInvalid)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("tenant/repo: illegal document status transition %s -> %s: %w", current, target, pub.ErrInvalid)
+}
 
 // DocumentRepo provides data access for tenant_documents and branch_documents tables.
 type DocumentRepo struct{}
@@ -93,12 +141,24 @@ func (r *DocumentRepo) CreateDocument(ctx context.Context, tx pgx.Tx, doc pub.Do
 	return created, nil
 }
 
-// UpdateDocumentStatus changes the verification status and optional rejection note.
+// UpdateDocumentStatus validates the requested change against
+// allowedDocumentTransitions and, if legal, changes the verification status
+// and optional rejection note. The current status is read with FOR UPDATE so
+// a concurrent status change on the same row can't race past the transition
+// check between the read and the write.
 func (r *DocumentRepo) UpdateDocumentStatus(
 	ctx context.Context, tx pgx.Tx,
 	tenantID, docID uuid.UUID,
 	status pub.DocumentStatus, note string,
 ) error {
+	current, err := currentDocumentStatus(ctx, tx, tenantID, docID)
+	if err != nil {
+		return err
+	}
+	if err := validateTransition(current, status, note); err != nil {
+		return err
+	}
+
 	const q = `
 		UPDATE tenant_documents
 		SET status = $1, rejection_note = $2, updated_at = NOW()
@@ -112,6 +172,25 @@ func (r *DocumentRepo) UpdateDocumentStatus(
 		return pub.ErrNotFound
 	}
 	return nil
+}
+
+// currentDocumentStatus reads and locks the current status of a tenant_documents
+// row so UpdateDocumentStatus can validate the requested transition before
+// applying it.
+func currentDocumentStatus(ctx context.Context, tx pgx.Tx, tenantID, docID uuid.UUID) (pub.DocumentStatus, error) {
+	const q = `
+		SELECT status FROM tenant_documents
+		WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+		FOR UPDATE`
+
+	var status string
+	if err := tx.QueryRow(ctx, q, tenantID, docID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", pub.ErrNotFound
+		}
+		return "", fmt.Errorf("tenant/repo: get document status: %w", err)
+	}
+	return pub.DocumentStatus(status), nil
 }
 
 // DeleteDocument performs a soft delete by setting deleted_at to the current timestamp.
@@ -186,13 +265,23 @@ func (r *DocumentRepo) CreateBranchDocument(ctx context.Context, tx pgx.Tx, doc 
 	return created, nil
 }
 
-// UpdateBranchDocumentStatus changes the verification status and optional rejection note.
-// branchID is required to prevent cross-branch mutations within the same tenant.
+// UpdateBranchDocumentStatus validates the requested change against
+// allowedDocumentTransitions and, if legal, changes the verification status
+// and optional rejection note. branchID is required to prevent cross-branch
+// mutations within the same tenant.
 func (r *DocumentRepo) UpdateBranchDocumentStatus(
 	ctx context.Context, tx pgx.Tx,
 	tenantID, branchID, docID uuid.UUID,
 	status pub.DocumentStatus, note string,
 ) error {
+	current, err := currentBranchDocumentStatus(ctx, tx, tenantID, branchID, docID)
+	if err != nil {
+		return err
+	}
+	if err := validateTransition(current, status, note); err != nil {
+		return err
+	}
+
 	const q = `
 		UPDATE branch_documents
 		SET status = $1, rejection_note = $2, updated_at = NOW()
@@ -206,6 +295,25 @@ func (r *DocumentRepo) UpdateBranchDocumentStatus(
 		return pub.ErrNotFound
 	}
 	return nil
+}
+
+// currentBranchDocumentStatus reads and locks the current status of a
+// branch_documents row so UpdateBranchDocumentStatus can validate the
+// requested transition before applying it.
+func currentBranchDocumentStatus(ctx context.Context, tx pgx.Tx, tenantID, branchID, docID uuid.UUID) (pub.DocumentStatus, error) {
+	const q = `
+		SELECT status FROM branch_documents
+		WHERE tenant_id = $1 AND branch_id = $2 AND id = $3 AND deleted_at IS NULL
+		FOR UPDATE`
+
+	var status string
+	if err := tx.QueryRow(ctx, q, tenantID, branchID, docID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", pub.ErrNotFound
+		}
+		return "", fmt.Errorf("tenant/repo: get branch document status: %w", err)
+	}
+	return pub.DocumentStatus(status), nil
 }
 
 // DeleteBranchDocument performs a soft delete on a branch document.

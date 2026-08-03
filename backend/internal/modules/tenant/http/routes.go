@@ -18,24 +18,29 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 			r.With(h.permit("tenant.branch.create")).Post("/", h.CreateBranch)
 
 			r.Route("/{branchID}", func(r chi.Router) {
-				// branchAccessMiddleware enforces that the principal has access to this branch.
-				r.Use(h.branchAccessMiddleware)
+				// branchAccessMiddleware enforces that the principal has access to this branch
+				// AND that the branch actually belongs to the path tenant. It is applied
+				// per-route, after h.permit, rather than once via r.Use: OPA's cheap
+				// role/permission check should reject an unauthorized caller before we pay
+				// for the DB round trip branchAccessMiddleware needs to verify branch
+				// ownership, and mounting it inline keeps chi.Walk-based wiring-audit tests
+				// (authz_smoke_test.go) exercising the permission check for every route.
 
-				r.With(h.permit("tenant.branch.read")).Get("/", h.GetBranch)
+				r.With(h.permit("tenant.branch.read"), h.branchAccessMiddleware).Get("/", h.GetBranch)
 
 				r.Route("/documents", func(r chi.Router) {
-					r.With(h.permit("tenant.branch_document.read")).Get("/", h.ListBranchDocuments)
-					r.With(h.permit("tenant.branch_document.create")).Post("/", h.CreateBranchDocument)
-					r.With(h.permit("tenant.branch_document.update")).Patch("/{docID}/status", h.UpdateBranchDocumentStatus)
-					r.With(h.permit("tenant.branch_document.delete")).Delete("/{docID}", h.DeleteBranchDocument)
+					r.With(h.permit("tenant.branch_document.read"), h.branchAccessMiddleware).Get("/", h.ListBranchDocuments)
+					r.With(h.permit("tenant.branch_document.create"), h.branchAccessMiddleware).Post("/", h.CreateBranchDocument)
+					r.With(h.permit("tenant.branch_document.update"), h.branchAccessMiddleware).Patch("/{docID}/status", h.UpdateBranchDocumentStatus)
+					r.With(h.permit("tenant.branch_document.delete"), h.branchAccessMiddleware).Delete("/{docID}", h.DeleteBranchDocument)
 				})
 
 				r.Route("/hours", func(r chi.Router) {
-					r.With(h.permit("tenant.hours.read")).Get("/regular", h.GetRegularHours)
-					r.With(h.permit("tenant.hours.update")).Put("/regular", h.SetRegularHours)
-					r.With(h.permit("tenant.hours.read")).Get("/special", h.GetSpecialHours)
-					r.With(h.permit("tenant.hours.update")).Put("/special", h.UpsertSpecialHours)
-					r.With(h.permit("tenant.hours.delete")).Delete("/special/{date}", h.DeleteSpecialHours)
+					r.With(h.permit("tenant.hours.read"), h.branchAccessMiddleware).Get("/regular", h.GetRegularHours)
+					r.With(h.permit("tenant.hours.update"), h.branchAccessMiddleware).Put("/regular", h.SetRegularHours)
+					r.With(h.permit("tenant.hours.read"), h.branchAccessMiddleware).Get("/special", h.GetSpecialHours)
+					r.With(h.permit("tenant.hours.update"), h.branchAccessMiddleware).Put("/special", h.UpsertSpecialHours)
+					r.With(h.permit("tenant.hours.delete"), h.branchAccessMiddleware).Delete("/special/{date}", h.DeleteSpecialHours)
 				})
 			})
 		})

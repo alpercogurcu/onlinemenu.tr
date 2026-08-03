@@ -1,28 +1,41 @@
 package repo_test
 
 // This file documents CONFIRMED defects found while writing the invariant
-// suite. Per the task's instructions, these are not fixed here (production
-// code is out of scope) and the tests are not weakened to pass — each is
-// t.Skip'd with the ideal/secure assertion left in place and a comment
-// naming the defect precisely, so the suite stays green and a future fix
-// can simply delete the t.Skip line. See the accompanying report for full
-// detail, reproduction, and severity.
+// suite. See the accompanying report for full detail, reproduction, and
+// severity. Fixed defects are marked FIXED below with a live regression test
+// (t.Skip removed); the fix is not to weaken an assertion to make it pass.
 //
 // Root cause common to the three "AcceptsMismatchedTenantBranch" tests
 // below: BranchRepo/DocumentRepo/HoursRepo/IntegratorRepo mutation methods
-// that take a (tenantID, branchID) pair NEVER verify branchID actually
-// belongs to tenantID before writing. RLS only checks that the ROW BEING
+// that take a (tenantID, branchID) pair NEVER verified branchID actually
+// belonged to tenantID before writing. RLS only checks that the ROW BEING
 // WRITTEN carries tenant_id = the active app.tenant_id GUC — it has no way
-// to know, and does not check, whether branch_id references a branch that
-// itself belongs to a different tenant (branches.tenant_id is not consulted
-// at all). Nothing in the schema enforces it either: branch_regular_hours,
-// branch_special_hours and branch_documents/billing_integrators.branch_id
-// are plain FKs to branches(id) — "does this branch exist", not "does this
-// branch belong to tenant_id on this row". This is exactly the b2b "child
-// entity id mutation not re-checked" class from docs/lessons-from-b2b.md
-// item 2, just with the roles reversed: instead of a stolen/reused id
-// silently reading another tenant's row, it lets a caller silently WRITE a
-// row that references another tenant's real branch.
+// to know, and did not check, whether branch_id references a branch that
+// itself belongs to a different tenant (branches.tenant_id was not
+// consulted at all). Nothing in the schema enforced it either:
+// branch_regular_hours, branch_special_hours and
+// branch_documents/billing_integrators.branch_id were plain FKs to
+// branches(id) — "does this branch exist", not "does this branch belong to
+// tenant_id on this row". This is exactly the b2b "child entity id mutation
+// not re-checked" class from docs/lessons-from-b2b.md item 2, just with the
+// roles reversed: instead of a stolen/reused id silently reading another
+// tenant's row, it let a caller silently WRITE a row that references
+// another tenant's real branch.
+//
+// FIXED (migration tenant/000006_branch_composite_fk): branches now carries
+// a UNIQUE (id, tenant_id), and branch_documents.branch_id,
+// billing_integrators.branch_id, branch_regular_hours.branch_id and
+// branch_special_hours.branch_id are now composite FOREIGN KEY (branch_id,
+// tenant_id) REFERENCES branches (id, tenant_id) — Postgres itself now
+// rejects a caller's INSERT/UPDATE if the (branch_id, tenant_id) pair on the
+// row being written doesn't match a real branch, closing the class at the
+// schema layer regardless of which repo method or future call site writes
+// the row. branch_regular_hours_unique and branch_special_hours_unique were
+// additionally widened to include tenant_id, both for defense in depth and
+// because branch_id alone already pins a single tenant once the FK holds.
+// The HTTP-layer half of this defect (branchAccessMiddleware failing OPEN
+// for chain-wide principals) is fixed separately in
+// tenant/http/handler.go — see the report.
 
 import (
 	"context"
@@ -56,9 +69,9 @@ import (
 // force of a v4 UUID space if ever exposed) can attach documents/hours/
 // integrators to tenant A's branch that are tagged as tenant B's own data.
 func TestDocumentRepo_Defect_BranchDocumentAcceptsMismatchedTenantBranch(t *testing.T) {
-	t.Skip("DEFECT: DocumentRepo.CreateBranchDocument (repo/document_repo.go) does not verify " +
-		"that branchID belongs to tenantID before inserting; see file-level comment for repro and impact")
-
+	// FIXED: branch_documents.branch_id is now a composite FK (branch_id,
+	// tenant_id) REFERENCES branches(id, tenant_id) — see file-level comment
+	// and migration tenant/000006_branch_composite_fk. Live regression test.
 	ctx := context.Background()
 	r := repo.NewDocumentRepo()
 
@@ -97,11 +110,13 @@ func TestDocumentRepo_Defect_BranchDocumentAcceptsMismatchedTenantBranch(t *test
 // denial-of-service on the branch's own opening-hours configuration, not
 // merely a data-integrity nuisance.
 func TestHoursRepo_Defect_SetRegularHoursAcceptsMismatchedTenantBranch(t *testing.T) {
-	t.Skip("DEFECT: HoursRepo.SetRegularHours (repo/hours_repo.go) does not verify that branchID " +
-		"belongs to tenantID; a foreign tenant can pre-empt a (day_of_week, sort_order) slot on " +
-		"another tenant's real branch and block that tenant's own legitimate write " +
-		"(branch_regular_hours_unique is not tenant-scoped) — see file-level comment for repro")
-
+	// FIXED: branch_regular_hours.branch_id is now a composite FK (branch_id,
+	// tenant_id) REFERENCES branches(id, tenant_id), so tenant B's INSERT for
+	// branchA.ID now fails outright — no slot to squat, so tenant A's own
+	// later write can never be blocked by it. branch_regular_hours_unique was
+	// also widened to (tenant_id, branch_id, day_of_week, sort_order). See
+	// file-level comment and migration tenant/000006_branch_composite_fk.
+	// Live regression test.
 	ctx := context.Background()
 	hr := repo.NewHoursRepo()
 
@@ -131,9 +146,12 @@ func TestHoursRepo_Defect_SetRegularHoursAcceptsMismatchedTenantBranch(t *testin
 // TestIntegratorRepo_Defect_CreateIntegratorAcceptsMismatchedTenantBranch:
 // same root cause, for billing_integrators.branch_id.
 func TestIntegratorRepo_Defect_CreateIntegratorAcceptsMismatchedTenantBranch(t *testing.T) {
-	t.Skip("DEFECT: IntegratorRepo.CreateIntegrator (repo/integrator_repo.go) does not verify that " +
-		"branch_id belongs to tenant_id before inserting; see file-level comment for repro and impact")
-
+	// FIXED: billing_integrators.branch_id is now a composite FK (branch_id,
+	// tenant_id) REFERENCES branches(id, tenant_id), MATCH SIMPLE (the
+	// default): a NULL branch_id (tenant-wide integrator) still skips the
+	// check entirely, exactly as before — only a NON-NULL, mismatched
+	// branch_id is now rejected. See file-level comment and migration
+	// tenant/000006_branch_composite_fk. Live regression test.
 	ctx := context.Background()
 	r := repo.NewIntegratorRepo()
 
@@ -173,11 +191,11 @@ func TestIntegratorRepo_Defect_CreateIntegratorAcceptsMismatchedTenantBranch(t *
 // only re-checks that the target status is one of the four enum values, it
 // adds no transition logic on top of what's shown failing here.
 func TestDocumentRepo_Defect_UpdateDocumentStatus_NoTransitionGuard(t *testing.T) {
-	t.Skip("DEFECT: DocumentRepo.UpdateDocumentStatus (repo/document_repo.go) and its only caller, " +
-		"service.UpdateDocumentStatus (service/service.go), have no state-transition guard — any " +
-		"status accepts any status, including backward transitions, and 'rejected' does not require " +
-		"a non-empty rejection_note; see file-level comment for repro")
-
+	// FIXED: DocumentRepo.UpdateDocumentStatus now routes through
+	// validateTransition against the allowedDocumentTransitions map
+	// (document_repo.go) — backward and skip-ahead transitions are rejected,
+	// and any transition into "rejected" requires a non-empty
+	// rejection_note. Live regression test.
 	ctx := context.Background()
 	r := repo.NewDocumentRepo()
 	tenant := createTenant(t, ctx)

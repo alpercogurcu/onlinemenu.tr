@@ -117,8 +117,8 @@ func TestHoursRepo_SpecialHours_UpsertAndDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Upsert again on the SAME date with different content — must update in
-	// place (branch_special_hours_unique on (branch_id, special_date)), not
-	// duplicate.
+	// place (branch_special_hours_unique on (tenant_id, branch_id, special_date)),
+	// not duplicate.
 	sh.Name = "Kısaltılmış Mesai"
 	sh.IsClosed = false
 	sh.OpenTime = tod(10, 0)

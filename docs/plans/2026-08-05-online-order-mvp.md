@@ -429,7 +429,7 @@ var ErrTableNotReady = errors.New("pos: table not ready")   // cleaning — D4
   ```go
   r.Route("/api/v1/storefront", func(r chi.Router) {
       r.With(h.permit("storefront.qr.read")).Get("/qr-codes", h.listQRCodes)      // ?branch_id=
-      r.With(h.permit("storefront.qr.manage")).Post("/qr-codes", h.createQRCode)  // {table_id}
+      r.With(h.permit("storefront.qr.manage")).Post("/qr-codes", h.createQRCode)  // {branch_id, table_id, table_label}
       r.With(h.permit("storefront.qr.read")).Get("/qr-codes/{id}", h.getQRCode)
       r.With(h.permit("storefront.qr.manage")).Post("/qr-codes/{id}/revoke", h.revokeQRCode)
       r.With(h.permit("storefront.qr.manage")).Post("/qr-codes/{id}/rotate", h.rotateQRCode)
@@ -481,8 +481,13 @@ rego kuralı yalnız `cashier`/`shift_manager` alır, `manager` wildcard'la kaps
 
 ### Frontend (admin)
 
-- `web/apps/admin/src/app/(main)/pos/tables/page.tsx` — masa kartına "QR"
-  aksiyonu → dialog.
+- `web/apps/admin/src/app/(main)/pos/tables/page.tsx` — sayfa adisyon-tabanlı
+  görünümden masa ızgarasına çevrilir (`GET /api/v1/pos/tables?branch_id=`;
+  şube seçici `settings/fiscal-sections` deseni; adisyon bilgisi
+  `active_check_id`/`status` ile korunur) — boş masaya da QR basılabilmeli.
+  Her masa kartına "QR" aksiyonu → dialog. `use-pos.ts`'e `useTables` eklenir.
+  Not: create body'deki branch/table tutarlılığının güvenlik ağı, misafir
+  session açılışındaki pos/public doğrulamasıdır (yanlış eşleşme → 404).
 - `web/apps/admin/src/components/storefront/qr-code-dialog.tsx` — QR görseli
   (`qrcode.react`), yazdır, iptal, yenile. Ham token yalnız üretim anında
   bellekte; state/localStorage'a yazılmaz (`lib/api.ts:19` gerekçesi).

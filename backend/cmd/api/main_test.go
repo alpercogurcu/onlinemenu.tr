@@ -22,6 +22,7 @@ import (
 	"onlinemenu.tr/internal/modules/payment"
 	paymenthttp "onlinemenu.tr/internal/modules/payment/http"
 	"onlinemenu.tr/internal/modules/pos"
+	"onlinemenu.tr/internal/modules/storefront"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
@@ -37,6 +38,7 @@ import (
 // without starting any lifecycle hooks (no network, no DB required).
 func TestFxGraphValidation(t *testing.T) {
 	t.Setenv("CTX_TOKEN_SECRET", "test-secret-32-bytes-long-padding!")
+	t.Setenv("STOREFRONT_GUEST_TOKEN_SECRET", "guest-secret-32-bytes-long-paddin!")
 	t.Setenv("DATABASE_URL", "pgx5://app_runtime:runtime@localhost:5432/testdb?sslmode=disable")
 	t.Setenv("NATS_URL", "nats://localhost:4222")
 	t.Setenv("VAULT_ADDR", "http://localhost:8200")
@@ -65,6 +67,7 @@ func TestFxGraphValidation(t *testing.T) {
 		keycloak.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
+		fx.Provide(newGuestTokenSigner),
 		fx.Provide(newTokenVerifier),
 
 		identity.Module,
@@ -73,6 +76,7 @@ func TestFxGraphValidation(t *testing.T) {
 		pos.Module,
 		payment.Module,
 		inventory.Module,
+		storefront.Module,
 
 		fx.Provide(newRouter),
 		fx.Invoke(registerHTTPServer),

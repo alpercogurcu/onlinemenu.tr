@@ -59,6 +59,13 @@ components:
   pos_events:    { in: "internal/modules/pos/events/**" }
   pos_ws:        { in: "internal/modules/pos/ws/**" }
 
+  # Storefront (public QR dine-in surface — ADR-ARCH-006)
+  storefront_domain:  { in: "internal/modules/storefront/domain/**" }
+  storefront_repo:    { in: "internal/modules/storefront/repo/**" }
+  storefront_service: { in: "internal/modules/storefront/service/**" }
+  storefront_http:    { in: "internal/modules/storefront/http/**" }
+  storefront_public:  { in: "internal/modules/storefront/public/**" }
+
   # Payment
   payment_domain:   { in: "internal/modules/payment/domain/**" }
   payment_repo:     { in: "internal/modules/payment/repo/**" }
@@ -184,6 +191,23 @@ deps:
   # convention used by every other module's *_test.go (see e.g. pos_domain).
   pos_ws:
     mayDependOn: [platform, pos_domain, pos_service, pos_public, pos_ws]
+
+  # --- Storefront ---
+  # storefront is the customer-facing surface: it owns QR codes and guest
+  # session/order bookkeeping, and reaches the menu and the order machine only
+  # through catalog_public / pos_public — it never writes a pos row itself.
+  storefront_domain:
+    mayDependOn: [platform, storefront_domain]
+  storefront_repo:
+    mayDependOn: [platform, storefront_domain, storefront_repo]
+  storefront_service:
+    mayDependOn: [platform, storefront_domain, storefront_repo, storefront_public,
+                  catalog_public, pos_public, storefront_service]
+  storefront_http:
+    mayDependOn: [platform, storefront_domain, storefront_service, storefront_public,
+                  catalog_public, pos_public, storefront_http]
+  storefront_public:
+    mayDependOn: [platform, storefront_public]
 
   # --- Payment ---
   # payment must NOT import any pos or billing internals.

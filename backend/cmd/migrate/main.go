@@ -20,12 +20,16 @@ import (
 )
 
 // moduleOrder defines the sequence in which module migrations are applied.
-// tenant → identity → catalog → pos → payment → inventory
+// tenant → identity → catalog → pos → storefront → payment → inventory
+//
+// storefront follows pos because its tables carry (unenforced, cross-module)
+// references to pos tables and its migration assumes pos/000006 has landed.
 var moduleOrder = []string{
 	"tenant",
 	"identity",
 	"catalog",
 	"pos",
+	"storefront",
 	"payment",
 	"inventory",
 }

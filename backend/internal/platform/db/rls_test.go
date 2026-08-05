@@ -80,7 +80,7 @@ func bootstrapSchemaMain(ctx context.Context, superDSN string) {
 	}
 	defer conn.Close(ctx)
 
-	stmts := bootstrapStmts()
+	stmts := append(bootstrapStmts(), storefrontBootstrapStmts()...)
 	for _, stmt := range stmts {
 		if _, err := conn.Exec(ctx, stmt); err != nil {
 			fmt.Fprintf(os.Stderr, "bootstrap stmt failed: %s\n  error: %v\n", truncate(stmt, 80), err)
@@ -198,6 +198,84 @@ func bootstrapStmts() []string {
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE platform_items TO app_runtime`,
 		`GRANT SELECT ON TABLE platform_items TO app_migrator`,
 	}
+}
+
+// storefrontBootstrapStmts mirrors migrations/storefront/000001's RLS setup for
+// storefront_qr_codes, plus minimal stand-ins for three tenant-scoped tables
+// that WithQRTokenLookupTx must NOT open (pos's products/orders/checks).
+//
+// The real migrations are deliberately not run in this container: every
+// TestRLS* test shares one synthetic schema via TestMain, and pulling the full
+// migration set in would couple these policy assertions to unrelated schema
+// churn. The cost is that the policy text below is a COPY — if
+// migrations/storefront/000001's qr_codes_read policy changes, this must change
+// with it or the test starts asserting a policy that no longer ships.
+//
+// The stub tables carry only the ordinary tenant_isolation policy, so a
+// "count == 0" assertion in the lookup transaction means "the policy denied
+// it", not "the table does not exist" (a missing table would error, not
+// return zero, but a typo'd name in a WHERE-less count would be easy to
+// mis-read otherwise).
+func storefrontBootstrapStmts() []string {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS storefront_qr_codes (
+			id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+			tenant_id   UUID        NOT NULL,
+			branch_id   UUID        NOT NULL,
+			table_id    UUID        NOT NULL,
+			table_label TEXT        NOT NULL DEFAULT '',
+			token_hash  TEXT        NOT NULL,
+			status      TEXT        NOT NULL DEFAULT 'active'
+			                        CHECK (status IN ('active', 'revoked')),
+			created_by  UUID        NOT NULL,
+			revoked_at  TIMESTAMPTZ,
+			revoked_by  UUID,
+			created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+
+		`CREATE UNIQUE INDEX IF NOT EXISTS storefront_qr_codes_token_hash_uidx
+			ON storefront_qr_codes (token_hash)`,
+
+		`ALTER TABLE storefront_qr_codes ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE storefront_qr_codes FORCE ROW LEVEL SECURITY`,
+
+		`DROP POLICY IF EXISTS qr_codes_read ON storefront_qr_codes`,
+		`DROP POLICY IF EXISTS qr_codes_write ON storefront_qr_codes`,
+
+		`CREATE POLICY qr_codes_read ON storefront_qr_codes
+			FOR SELECT TO app_runtime
+			USING (
+				tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid
+				OR token_hash = NULLIF(current_setting('app.storefront_qr_token_hash', TRUE), '')
+			)`,
+
+		`CREATE POLICY qr_codes_write ON storefront_qr_codes
+			FOR ALL TO app_runtime
+			USING      (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+			WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)`,
+
+		`GRANT SELECT, INSERT, UPDATE ON TABLE storefront_qr_codes TO app_runtime`,
+	}
+
+	// Stand-ins for the pos tables the bootstrap transaction must never see.
+	for _, table := range []string{"products", "orders", "checks"} {
+		stmts = append(stmts,
+			`CREATE TABLE IF NOT EXISTS `+table+` (
+				id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+				tenant_id UUID NOT NULL
+			)`,
+			`ALTER TABLE `+table+` ENABLE ROW LEVEL SECURITY`,
+			`ALTER TABLE `+table+` FORCE ROW LEVEL SECURITY`,
+			`DROP POLICY IF EXISTS tenant_isolation ON `+table,
+			`CREATE POLICY tenant_isolation ON `+table+`
+				FOR ALL TO app_runtime
+				USING      (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)
+				WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', TRUE), '')::uuid)`,
+			`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE `+table+` TO app_runtime`,
+		)
+	}
+	return stmts
 }
 
 func truncate(s string, n int) string {

@@ -30,6 +30,7 @@ import (
 	paymenthttp "onlinemenu.tr/internal/modules/payment/http"
 	"onlinemenu.tr/internal/modules/pos"
 	posws "onlinemenu.tr/internal/modules/pos/ws"
+	"onlinemenu.tr/internal/modules/storefront"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
@@ -74,6 +75,7 @@ func main() {
 		keycloak.Module,
 		fx.Provide(auth.NewEngine),
 		fx.Provide(newContextTokenSigner),
+		fx.Provide(newGuestTokenSigner),
 		fx.Provide(newTokenVerifier),
 
 		// Domain modules
@@ -83,6 +85,7 @@ func main() {
 		pos.Module,
 		paymentmod.Module,
 		inventory.Module,
+		storefront.Module,
 
 		// HTTP server
 		fx.Provide(newRouter),
@@ -545,6 +548,21 @@ func newContextTokenSigner() (*auth.ContextTokenSigner, error) {
 		return nil, errors.New("api: CTX_TOKEN_SECRET env var is required")
 	}
 	return auth.NewContextTokenSigner([]byte(secret))
+}
+
+// newGuestTokenSigner provides the storefront guest session signer.
+//
+// The secret is deliberately separate from CTX_TOKEN_SECRET: the guest signer
+// serves an unauthenticated public surface, so sharing a key with staff
+// context tokens would make a storefront-side key compromise a staff-side
+// compromise too (ADR-ARCH-006 §5). Startup fails when it is unset rather
+// than falling back to the staff secret.
+func newGuestTokenSigner() (*auth.GuestTokenSigner, error) {
+	secret := envOr("STOREFRONT_GUEST_TOKEN_SECRET", "")
+	if secret == "" {
+		return nil, errors.New("api: STOREFRONT_GUEST_TOKEN_SECRET env var is required")
+	}
+	return auth.NewGuestTokenSigner([]byte(secret))
 }
 
 // devTokenVerifier parses JWT claims without signature verification.

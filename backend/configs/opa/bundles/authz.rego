@@ -233,6 +233,35 @@ allow if {
 	has_role("shift_manager")
 }
 
+# -- Storefront: table QR codes (ADR-ARCH-006 §4). Mirrors the pos.table.*
+# split directly above, because a QR code is an attribute of a table: reading
+# the inventory (which table already has a live code, which were retired) is a
+# counter-facing read, while minting/revoking/rotating hands out or burns a
+# printed secret and stays with management.
+#
+# "waiter" is deliberately absent even though it appears in
+# pos_table_read_actions: the role is forward-declared in system_roles but NOT
+# seeded by identity/000006, so it cannot hold a role_permissions row, and
+# permission_wiring_test.go asserts CheckRole against roles the seed migrations
+# actually grant. Listing it here would be inert-but-misleading — it would read
+# as a granted permission that no principal can hold.
+storefront_qr_read_actions := {"storefront.qr.read"}
+
+allow if {
+	input.action in storefront_qr_read_actions
+	any_role({"cashier", "shift_manager"})
+}
+
+# Create, revoke and rotate are one action, not three: they are the same
+# judgement ("this table's printed token changes"), and splitting them would
+# invite a role that may mint but not revoke — the strictly worse half.
+storefront_qr_manage_actions := {"storefront.qr.manage"}
+
+allow if {
+	input.action in storefront_qr_manage_actions
+	has_role("shift_manager")
+}
+
 # -- Payment: cashier/shift_manager register sales at the counter (mirrors
 # role_permissions seed: payment.create for both). Listing/reading past
 # payments is reserved for shift reconciliation (shift_manager) and manager

@@ -302,6 +302,16 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 		Wired: true, CheckRole: "warehouse", CheckAction: "inventory.shipment.advance",
 		Reason: "seed 'update' covers advance/receive/cancel; evidenced via advance.",
 	},
+
+	// -- storefront (storefront.qr.*) -----------------------------------------
+	{"storefront_qr", "read"}: {
+		Wired: true, CheckRole: "cashier", CheckAction: "storefront.qr.read",
+	},
+	{"storefront_qr", "manage"}: {
+		Wired: true, CheckRole: "shift_manager", CheckAction: "storefront.qr.manage",
+		Reason: "QR üretme/iptal/yenileme tek bir storefront.qr.manage aksiyonunda " +
+			"toplanır (pos.table.manage'in create+update+status'ü topladığı gibi).",
+	},
 }
 
 // seedPermissionRowRe matches a single VALUES row inside an

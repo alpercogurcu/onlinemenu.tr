@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,24 +64,84 @@ const (
 	cacheHitDifferentBody
 )
 
-// Idempotency returns a chi middleware that enforces ADR-SEC-003.
+// IdempotencyScopeFunc derives the namespace an Idempotency-Key is unique
+// within. It returns an error when the request carries no usable identity, in
+// which case the middleware answers 401 without touching Redis.
+//
+// The scope is what keeps two callers' identical keys apart, so it must
+// include every identity dimension that could legitimately collide: tenant
+// for staff, and additionally the QR code and guest session for anonymous
+// diners (two diners at the same table are different callers).
+type IdempotencyScopeFunc func(*http.Request) (string, error)
+
+// ErrNoIdempotencyScope is returned by a scope function when the request has
+// no identity to scope on.
+var ErrNoIdempotencyScope = errors.New("httpx: no idempotency scope in request context")
+
+// principalTenantScope is the staff scope: the authenticated tenant.
+//
+// The produced string is part of the Redis key format ("idem:<scope>:<key>"),
+// which entries written by earlier releases already use — changing it would
+// orphan every in-flight entry inside the 24h TTL window, so it must stay
+// exactly the tenant UUID.
+func principalTenantScope(r *http.Request) (string, error) {
+	principal, err := auth.FromContext(r.Context())
+	if err != nil {
+		return "", ErrNoIdempotencyScope
+	}
+	return principal.TenantID.String(), nil
+}
+
+// GuestSessionScope scopes an Idempotency-Key to one anonymous diner
+// (ADR-ARCH-006 §5 + ADR-SEC-003).
+//
+// tenant + qr code + guest session, in that order: tenant keeps two
+// restaurants apart, the QR code keeps two tables apart, and the session id
+// keeps two phones at the SAME table apart — without it, two diners
+// submitting their carts with a client-generated key that happened to collide
+// would see one order silently swallowed as a "replay" of the other's.
+//
+// It lives in platform/httpx rather than the storefront module because the
+// middleware it feeds does, and a platform package cannot import a module.
+func GuestSessionScope(r *http.Request) (string, error) {
+	g, ok := auth.GuestFromContext(r.Context())
+	if !ok {
+		return "", ErrNoIdempotencyScope
+	}
+	return "guest:" + g.TenantID.String() + ":" + g.QRCodeID.String() + ":" + g.SessionID.String(), nil
+}
+
+// Idempotency returns a chi middleware that enforces ADR-SEC-003 for
+// authenticated staff callers, scoped to the principal's tenant.
+//
+// It is a thin alias for IdempotencyWithScope so that every existing pos /
+// payment call site — and the wire format of every cached entry — is
+// unaffected by the storefront's addition of a second scope.
+//
+// This middleware must be placed after auth.Middleware in the chain so that
+// the principal is available in the request context.
+func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
+	return IdempotencyWithScope(cache, principalTenantScope)
+}
+
+// IdempotencyWithScope returns a chi middleware that enforces ADR-SEC-003
+// within the namespace produced by scope.
 //
 // On the first request with a given Idempotency-Key it acquires a short-lived
 // Redis lock, executes the handler, then records the response — together with
 // a hash of the request body — for 24 hours. Concurrent duplicate requests
-// (same key, same tenant) receive 409 Conflict while the first request is
+// (same key, same scope) receive 409 Conflict while the first request is
 // in-flight. A subsequent retry with the same key AND the same body receives
 // the cached response without re-executing the handler. A subsequent request
 // reusing the same key with a DIFFERENT body is rejected with 422: an
 // Idempotency-Key identifies one logical request, not a slot that can be
 // silently repointed at different input.
 //
-// The cache key is scoped to the authenticated tenant to prevent cross-tenant
-// key collisions in the multi-tenant environment.
-//
-// This middleware must be placed after auth.Middleware in the chain so that
-// the principal is available in the request context.
-func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
+// Whatever chain populates the identity the scope reads (auth.Middleware for
+// staff, the storefront guest guard for diners) must run BEFORE this
+// middleware; a request that reaches it without one is refused with 401
+// rather than sharing a global namespace.
+func IdempotencyWithScope(cache *redis.Client, scope IdempotencyScopeFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := r.Header.Get(idempotencyHeader)
@@ -89,9 +150,9 @@ func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
 				return
 			}
 
-			principal, err := auth.FromContext(r.Context())
+			scopeValue, err := scope(r)
 			if err != nil {
-				// Auth middleware must precede idempotency middleware in the chain.
+				// The identity chain must precede idempotency middleware.
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -105,7 +166,7 @@ func Idempotency(cache *redis.Client) func(http.Handler) http.Handler {
 			}
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-			cacheKey := fmt.Sprintf("%s%s:%s", idempotencyCachePrefix, principal.TenantID, key)
+			cacheKey := fmt.Sprintf("%s%s:%s", idempotencyCachePrefix, scopeValue, key)
 			lockKey := cacheKey + idempotencyLockSuffix
 
 			switch entry, result := lookupCachedEntry(r.Context(), cache, cacheKey, bodyHash); result {

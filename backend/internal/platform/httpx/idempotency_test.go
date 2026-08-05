@@ -246,6 +246,161 @@ func TestIdempotency_NoPrincipal_Returns401(t *testing.T) {
 	assert.Equal(t, 0, h.calls)
 }
 
+// ---------------------------------------------------------------------------
+// Guest scope (ADR-ARCH-006 §5): the storefront's anonymous diners reuse the
+// same middleware through IdempotencyWithScope, so these cases assert the
+// scope swap did not weaken any ADR-SEC-003 guarantee.
+// ---------------------------------------------------------------------------
+
+func newGuestRouter(cache *redis.Client, h http.Handler) http.Handler {
+	r := chi.NewRouter()
+	r.With(httpx.IdempotencyWithScope(cache, httpx.GuestSessionScope)).Post("/orders", h.ServeHTTP)
+	return r
+}
+
+func newGuestOrderRequest(t *testing.T, session auth.GuestSession, body string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewBufferString(body))
+	return req.WithContext(auth.WithGuestSession(req.Context(), session))
+}
+
+func newGuestSession(tenantID uuid.UUID) auth.GuestSession {
+	return auth.GuestSession{
+		TenantID:  tenantID,
+		BranchID:  uuid.New(),
+		TableID:   uuid.New(),
+		QRCodeID:  uuid.New(),
+		SessionID: uuid.New(),
+	}
+}
+
+func TestIdempotency_GuestScope_SameKeySameBody_Replays(t *testing.T) {
+	cache := newTestCache(t)
+	h := &countingHandler{}
+	router := newGuestRouter(cache, h)
+
+	session := newGuestSession(uuid.New())
+	body := `{"lines":[{"product_id":"p","quantity":1}]}`
+
+	req1 := newGuestOrderRequest(t, session, body)
+	req1.Header.Set("Idempotency-Key", "guest-key-1")
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusCreated, rec1.Code)
+	require.Equal(t, 1, h.calls)
+
+	req2 := newGuestOrderRequest(t, session, body)
+	req2.Header.Set("Idempotency-Key", "guest-key-1")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	assert.Equal(t, http.StatusCreated, rec2.Code)
+	assert.Equal(t, "true", rec2.Header().Get("Idempotency-Replayed"))
+	assert.Equal(t, 1, h.calls, "a retried cart submission must not place a second order")
+}
+
+func TestIdempotency_GuestScope_SameKeyDifferentBody_Returns422(t *testing.T) {
+	cache := newTestCache(t)
+	h := &countingHandler{}
+	router := newGuestRouter(cache, h)
+
+	session := newGuestSession(uuid.New())
+
+	req1 := newGuestOrderRequest(t, session, `{"lines":[{"quantity":1}]}`)
+	req1.Header.Set("Idempotency-Key", "guest-key-2")
+	router.ServeHTTP(httptest.NewRecorder(), req1)
+	require.Equal(t, 1, h.calls)
+
+	req2 := newGuestOrderRequest(t, session, `{"lines":[{"quantity":99}]}`)
+	req2.Header.Set("Idempotency-Key", "guest-key-2")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec2.Code)
+	assert.Equal(t, 1, h.calls)
+}
+
+// TestIdempotency_GuestScope_TwoSessionsSameKey_BothExecute is the collision
+// case guest scoping exists for: two phones at (potentially) the same table
+// generate keys independently, so an overlap must not swallow one order.
+func TestIdempotency_GuestScope_TwoSessionsSameKey_BothExecute(t *testing.T) {
+	cache := newTestCache(t)
+	h := &countingHandler{}
+	router := newGuestRouter(cache, h)
+
+	tenantID := uuid.New()
+	sessionA := newGuestSession(tenantID)
+	sessionB := newGuestSession(tenantID)
+	sessionB.QRCodeID = sessionA.QRCodeID
+	sessionB.TableID = sessionA.TableID
+	body := `{"lines":[{"quantity":1}]}`
+
+	reqA := newGuestOrderRequest(t, sessionA, body)
+	reqA.Header.Set("Idempotency-Key", "shared-key")
+	recA := httptest.NewRecorder()
+	router.ServeHTTP(recA, reqA)
+	require.Equal(t, http.StatusCreated, recA.Code)
+
+	reqB := newGuestOrderRequest(t, sessionB, body)
+	reqB.Header.Set("Idempotency-Key", "shared-key")
+	recB := httptest.NewRecorder()
+	router.ServeHTTP(recB, reqB)
+
+	assert.Equal(t, http.StatusCreated, recB.Code)
+	assert.Empty(t, recB.Header().Get("Idempotency-Replayed"))
+	assert.Equal(t, 2, h.calls, "two diners at one table are two callers, not one retrying caller")
+}
+
+func TestIdempotency_GuestScope_TwoTenantsSameKey_DoNotCollide(t *testing.T) {
+	cache := newTestCache(t)
+	h := &countingHandler{}
+	router := newGuestRouter(cache, h)
+
+	body := `{"lines":[{"quantity":1}]}`
+
+	for range 2 {
+		req := newGuestOrderRequest(t, newGuestSession(uuid.New()), body)
+		req.Header.Set("Idempotency-Key", "cross-tenant-key")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusCreated, rec.Code)
+	}
+	assert.Equal(t, 2, h.calls)
+}
+
+// TestIdempotency_GuestScope_StaffPrincipalOnly_Returns401 proves the guest
+// scope cannot be satisfied by a staff token: the two identities live under
+// different context keys and do not convert.
+func TestIdempotency_GuestScope_StaffPrincipalOnly_Returns401(t *testing.T) {
+	cache := newTestCache(t)
+	h := &countingHandler{}
+	router := newGuestRouter(cache, h)
+
+	req := newTenantRequest(t, http.MethodPost, "/orders", `{}`)
+	req.Header.Set("Idempotency-Key", "staff-on-guest-route")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, 0, h.calls)
+}
+
+// TestIdempotency_StaffScope_GuestSessionOnly_Returns401 is the mirror image:
+// a guest session must not satisfy a staff-scoped idempotency guard either.
+func TestIdempotency_StaffScope_GuestSessionOnly_Returns401(t *testing.T) {
+	cache := newTestCache(t)
+	h := &countingHandler{}
+	router := newRouter(cache, h)
+
+	req := newGuestOrderRequest(t, newGuestSession(uuid.New()), `{}`)
+	req.Header.Set("Idempotency-Key", "guest-on-staff-route")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, 0, h.calls)
+}
+
 // Sanity: context.Background() is used for the async cache writes in the
 // middleware, so this test only needs to confirm no goroutine/context panic
 // occurs when the request context is cancelled immediately after the

@@ -70,6 +70,30 @@ tasks:
     cmds:
       - pnpm typecheck
 
+  menu:dev:
+    desc: "Misafir QR menü uygulaması dev server (Next.js, :3001)"
+    dir: web/apps/menu
+    cmds:
+      - pnpm dev
+
+  menu:build:
+    desc: "Misafir QR menü uygulaması production build"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/menu build
+
+  menu:typecheck:
+    desc: "Misafir QR menü uygulaması tip kontrolü (tsc --noEmit)"
+    dir: web/apps/menu
+    cmds:
+      - pnpm typecheck
+
+  menu:test:
+    desc: "Misafir QR menü uygulaması testleri (vitest — sepet, modifier, para, hata eşleme)"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/menu test:run
+
   pos:dev:
     desc: "POS desktop dev (Wails)"
     dir: web/apps/pos-desktop

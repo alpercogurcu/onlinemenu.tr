@@ -57,9 +57,12 @@ web/apps/*/node_modules/
 web/packages/*/node_modules/
 .pnpm-store/
 
-# Next.js
-web/apps/admin/.next/
-web/apps/admin/out/
+# Next.js — app adı başına tek tek değil, apps/* kalıbıyla: yeni bir Next
+# uygulaması (web/apps/menu, ARCH-006 WP4) eklendiğinde build çıktısı
+# .gitignore güncellenmezse sessizce commit'e girmeye aday oluyordu.
+web/apps/*/.next/
+web/apps/*/out/
+web/apps/*/next-env.d.ts
 
 # Wails build output
 web/apps/pos-desktop/build/bin/

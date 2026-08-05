@@ -1,0 +1,130 @@
+{
+  "app": {
+    "title": "Menü",
+    "titleTemplate": "%s | Menü",
+    "description": "Masanızdan sipariş verin."
+  },
+  "common": {
+    "close": "Kapat",
+    "back": "Geri",
+    "retry": "Tekrar dene",
+    "loading": "Yükleniyor…",
+    "otherCategory": "Diğer",
+    "quantity": "Adet",
+    "increase": "Bir adet artır",
+    "decrease": "Bir adet azalt",
+    "remove": "Kaldır"
+  },
+  "landing": {
+    "title": "Hoş geldiniz",
+    "description": "Sipariş vermek için masanızdaki QR kodu telefonunuzun kamerasıyla okutun.",
+    "hint": "QR kodu okuttuğunuzda menü otomatik olarak açılır."
+  },
+  "header": {
+    "table": "{label}",
+    "menu": "Menü",
+    "cart": "Sepet",
+    "orders": "Siparişlerim"
+  },
+  "menu": {
+    "title": "Menü",
+    "empty": "Bu şubede şu anda görüntülenecek ürün yok.",
+    "emptyHint": "Lütfen personelden yardım isteyin.",
+    "unavailable": "Tükendi",
+    "categoryJump": "Kategoriye git",
+    "viewCart": "Sepeti gör",
+    "itemCount": "{count} ürün"
+  },
+  "product": {
+    "chooseOne": "Bir seçenek seçin",
+    "chooseOneRequired": "Bir seçenek seçin (zorunlu)",
+    "chooseMany": "İstediğiniz kadar seçebilirsiniz",
+    "chooseUpTo": "En fazla {count} seçenek",
+    "chooseAtLeast": "En az {count} seçenek",
+    "note": "Not",
+    "notePlaceholder": "Örn. az şekerli",
+    "add": "Sepete ekle",
+    "addWithPrice": "Sepete ekle · {price}",
+    "unavailable": "Bu ürün şu anda sipariş edilemiyor.",
+    "requiredMissing": "Zorunlu seçimleri tamamlayın: {groups}"
+  },
+  "cart": {
+    "title": "Sepet",
+    "empty": "Sepetiniz boş.",
+    "emptyHint": "Menüden ürün ekleyerek başlayın.",
+    "backToMenu": "Menüye dön",
+    "orderNote": "Sipariş notu",
+    "orderNotePlaceholder": "Örn. servis 10 dk sonra",
+    "total": "Toplam",
+    "totalHint": "Tutar kasada yeniden hesaplanır.",
+    "submit": "Siparişi gönder",
+    "submitting": "Gönderiliyor…",
+    "tooManyLines": "Sepetinizde çok fazla kalem var. Lütfen siparişi bölerek gönderin."
+  },
+  "confirmation": {
+    "title": "Siparişiniz alındı",
+    "description": "Siparişiniz mutfağa iletildi. Durumu bu sayfadan takip edebilirsiniz.",
+    "trackOrder": "Siparişi takip et",
+    "backToMenu": "Menüye dön"
+  },
+  "orders": {
+    "title": "Siparişlerim",
+    "empty": "Bu oturumda henüz sipariş vermediniz.",
+    "emptyHint": "Menüden ürün seçerek ilk siparişinizi verin.",
+    "detailTitle": "Sipariş durumu",
+    "placedAt": "{time} tarihinde verildi",
+    "updatedAt": "Son güncelleme: {time}",
+    "total": "Toplam",
+    "note": "Sipariş notu",
+    "items": "Ürünler",
+    "notFound": "Sipariş bulunamadı.",
+    "notFoundHint": "Bu sipariş bu oturuma ait değil ya da kaldırılmış olabilir.",
+    "viewDetail": "Detay",
+    "status": {
+      "pending": "Onay bekliyor",
+      "accepted": "Onaylandı",
+      "preparing": "Hazırlanıyor",
+      "ready": "Hazır",
+      "delivered": "Teslim edildi",
+      "rejected": "Reddedildi",
+      "cancelled": "İptal edildi",
+      "unknown": "Bilinmiyor"
+    },
+    "statusHint": {
+      "pending": "Personel siparişinizi onaylıyor.",
+      "accepted": "Siparişiniz mutfağa iletildi.",
+      "preparing": "Siparişiniz hazırlanıyor.",
+      "ready": "Siparişiniz hazır, masanıza geliyor.",
+      "delivered": "Afiyet olsun.",
+      "rejected": "Siparişiniz alınamadı. Lütfen personele danışın.",
+      "cancelled": "Siparişiniz iptal edildi.",
+      "unknown": ""
+    }
+  },
+  "errors": {
+    "title": "Bir sorun oluştu",
+    "rescanHint": "Masanızdaki QR kodu tekrar okutun.",
+    "staffHint": "Sorun devam ederse lütfen personele danışın.",
+    "invalid_qr": "Bu QR kod geçerli değil.",
+    "session_expired": "Oturumunuzun süresi doldu.",
+    "rate_limited": "Çok fazla istek gönderildi. Lütfen birkaç saniye sonra tekrar deneyin.",
+    "unavailable": "Sipariş servisi şu anda kullanılamıyor. Lütfen birkaç dakika içinde tekrar deneyin.",
+    "network_error": "Bağlantı kurulamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.",
+    "internal_error": "Beklenmeyen bir hata oluştu.",
+    "invalid_request": "İstek geçersiz.",
+    "validation_failed": "Sepetinizde sipariş edilemeyen bir ürün var. Lütfen sepeti gözden geçirin.",
+    "table_not_ready": "Masanız hazırlanıyor, birkaç dakika içinde tekrar deneyin.",
+    "table_occupied": "Masanız şu anda sipariş alınabilir durumda değil. Lütfen personele danışın.",
+    "table_branch_mismatch": "Bu QR kod artık bu masaya ait değil. Lütfen personele danışın.",
+    "not_found": "Aradığınız kayıt bulunamadı.",
+    "unauthorized": "Oturumunuz bulunamadı.",
+    "unknown_error": "Beklenmeyen bir hata oluştu.",
+    "menuLoadFailed": "Menü yüklenemedi.",
+    "ordersLoadFailed": "Siparişler yüklenemedi."
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Aradığınız sayfa yok. Menüye dönebilirsiniz.",
+    "backToMenu": "Menüye dön"
+  }
+}

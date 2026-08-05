@@ -221,7 +221,7 @@ func openTestCheck(t *testing.T, ctx context.Context, svc *service.CheckService)
 	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableLabel: "Masa Concurrency",
-		OpenedBy:   staffA,
+		OpenedBy:   &staffA,
 	})
 	require.NoError(t, err)
 	return c
@@ -318,7 +318,7 @@ func TestCheckService_Open_DefaultsPaxToOne(t *testing.T) {
 	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
 		BranchID:   branchA,
 		TableLabel: "Masa Pax Default",
-		OpenedBy:   staffA,
+		OpenedBy:   &staffA,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, c.Pax)
@@ -337,7 +337,7 @@ func TestCheckService_Open_ExplicitPax_Preserved(t *testing.T) {
 		BranchID:   branchA,
 		TableLabel: "Masa Pax Explicit",
 		Pax:        4,
-		OpenedBy:   staffA,
+		OpenedBy:   &staffA,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 4, c.Pax)
@@ -354,7 +354,7 @@ func TestCheckService_Open_NonPositivePax_FallsBackToOne(t *testing.T) {
 			BranchID:   branchA,
 			TableLabel: "Masa Pax Nonpositive",
 			Pax:        pax,
-			OpenedBy:   staffA,
+			OpenedBy:   &staffA,
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, c.Pax, "pax=%d must fall back to 1", pax)

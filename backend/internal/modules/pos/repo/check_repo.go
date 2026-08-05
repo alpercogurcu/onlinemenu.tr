@@ -16,6 +16,14 @@ type CheckRepo struct{}
 
 func NewCheckRepo() *CheckRepo { return &CheckRepo{} }
 
+// checkColumns is the single projection every check query selects, in the
+// exact order scanCheck reads them. It is shared rather than repeated per
+// query because scanCheck takes ...any: a column list that drifts out of sync
+// with the scan targets compiles fine and only fails at runtime.
+const checkColumns = `id, tenant_id, branch_id, table_id, table_label, pax, status,
+	          opened_by, opened_by_kind, source, closed_by, note, opened_at, closed_at,
+	          created_at, updated_at`
+
 // Create inserts a new open check and returns it with server-assigned fields.
 //
 // A unique_violation on checks_open_table_id_uidx is translated to
@@ -24,15 +32,34 @@ func NewCheckRepo() *CheckRepo { return &CheckRepo{} }
 // (TableService.SetStatus) while some other check still held it open — a
 // state CheckService.Open's row lock cannot observe, since the lock is on
 // the table row, not on "does any check already reference this table".
+//
+// OpenedByKind and Source are normalized to their 'staff'/'pos' defaults when
+// the caller leaves them empty. The INSERT lists both columns explicitly, so
+// an unset Go string would be written as an empty string and violate the CHECK
+// rather than falling back to the column DEFAULT — the same reasoning that
+// makes CheckService.Open own the Pax default (see domain.Check.Pax).
 func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (domain.Check, error) {
 	const q = `
-		INSERT INTO checks (tenant_id, branch_id, table_id, table_label, pax, status, opened_by, note)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
-		          closed_by, note, opened_at, closed_at, created_at, updated_at`
+		INSERT INTO checks (tenant_id, branch_id, table_id, table_label, pax, status,
+		                    opened_by, opened_by_kind, source, note)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING ` + checkColumns
+
+	kind := c.OpenedByKind
+	if kind == "" {
+		kind = domain.OpenedByKindStaff
+	}
+	if (kind == domain.OpenedByKindStaff) != (c.OpenedBy != nil) {
+		return domain.Check{}, ErrOpenedByKindMismatch
+	}
+	source := c.Source
+	if source == "" {
+		source = domain.SourcePOS
+	}
 
 	row := tx.QueryRow(ctx, q,
-		c.TenantID, c.BranchID, c.TableID, c.TableLabel, c.Pax, string(c.Status), c.OpenedBy, c.Note,
+		c.TenantID, c.BranchID, c.TableID, c.TableLabel, c.Pax, string(c.Status),
+		c.OpenedBy, string(kind), string(source), c.Note,
 	)
 	created, err := scanCheck(row)
 	if err != nil {
@@ -46,10 +73,7 @@ func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (doma
 
 // GetByID returns a check visible to the current tenant context.
 func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
-	const q = `
-		SELECT id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
-		       closed_by, note, opened_at, closed_at, created_at, updated_at
-		FROM checks WHERE id = $1`
+	const q = `SELECT ` + checkColumns + ` FROM checks WHERE id = $1`
 
 	c, err := scanCheck(tx.QueryRow(ctx, q, id))
 	if err != nil {
@@ -67,10 +91,7 @@ func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 // second caller blocks here until the first commits or rolls back, then
 // observes the already-updated status.
 func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Check, error) {
-	const q = `
-		SELECT id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
-		       closed_by, note, opened_at, closed_at, created_at, updated_at
-		FROM checks WHERE id = $1 FOR UPDATE`
+	const q = `SELECT ` + checkColumns + ` FROM checks WHERE id = $1 FOR UPDATE`
 
 	c, err := scanCheck(tx.QueryRow(ctx, q, id))
 	if err != nil {
@@ -100,8 +121,7 @@ type ListFilter struct {
 // ListFilter's doc comment.
 func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx, filter ListFilter) ([]domain.Check, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
-		       closed_by, note, opened_at, closed_at, created_at, updated_at
+		SELECT ` + checkColumns + `
 		FROM checks
 		WHERE ($1::text IS NULL OR status = $1::text)
 		  AND ($2::uuid IS NULL OR branch_id = $2::uuid)
@@ -217,8 +237,7 @@ func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, s
 		                  closed_at = CASE WHEN $2 IN ('closed','cancelled') THEN NOW() ELSE closed_at END,
 		                  updated_at = NOW()
 		WHERE id = $1 AND status = $3
-		RETURNING id, tenant_id, branch_id, table_id, table_label, pax, status, opened_by,
-		          closed_by, note, opened_at, closed_at, created_at, updated_at`
+		RETURNING ` + checkColumns
 
 	c, err := scanCheck(tx.QueryRow(ctx, q, id, string(status), string(expectedStatus), closedBy))
 	if err != nil {
@@ -235,13 +254,16 @@ func scanCheck(s interface {
 	Scan(...any) error
 }) (domain.Check, error) {
 	var c domain.Check
-	var status string
+	var status, openedByKind, source string
 	if err := s.Scan(
-		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &c.Pax, &status, &c.OpenedBy,
-		&c.ClosedBy, &c.Note, &c.OpenedAt, &c.ClosedAt, &c.CreatedAt, &c.UpdatedAt,
+		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &c.Pax, &status,
+		&c.OpenedBy, &openedByKind, &source, &c.ClosedBy, &c.Note, &c.OpenedAt, &c.ClosedAt,
+		&c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return domain.Check{}, err
 	}
 	c.Status = domain.CheckStatus(status)
+	c.OpenedByKind = domain.OpenedByKind(openedByKind)
+	c.Source = domain.Source(source)
 	return c, nil
 }

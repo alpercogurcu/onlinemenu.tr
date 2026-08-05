@@ -449,7 +449,7 @@ func TestKitchenWS_Snapshot_Then_LiveOrderEvents(t *testing.T) {
 	chk, err := env.checks.Open(context.Background(), tenantID, principal, domain.Check{
 		BranchID:   branchID,
 		TableLabel: "Masa 7",
-		OpenedBy:   principal.PersonID,
+		OpenedBy:   &principal.PersonID,
 	})
 	require.NoError(t, err)
 
@@ -538,7 +538,7 @@ func TestKitchenWS_Snapshot_IncludesReadyOrder(t *testing.T) {
 	chk, err := env.checks.Open(context.Background(), tenantID, principal, domain.Check{
 		BranchID:   branchID,
 		TableLabel: "Masa 9",
-		OpenedBy:   principal.PersonID,
+		OpenedBy:   &principal.PersonID,
 	})
 	require.NoError(t, err)
 

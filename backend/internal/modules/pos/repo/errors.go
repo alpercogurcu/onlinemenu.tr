@@ -22,6 +22,13 @@ var ErrInvalidTransition = errors.New("pos: invalid status transition")
 // this mapping the unique violation would surface as an unmapped 500.
 var ErrTableOccupied = errors.New("pos: table already has an open check")
 
+// ErrOpenedByKindMismatch is returned by CheckRepo.Create when opened_by and
+// opened_by_kind disagree: 'staff' requires a person, 'guest_qr' forbids one.
+// The DB already enforces this (checks_opened_by_kind_chk), but a raw SQLSTATE
+// 23514 surfaces as an unmapped 500 with no hint about which of the two fields
+// the caller got wrong — this turns a wrong call into a readable error.
+var ErrOpenedByKindMismatch = errors.New("pos: opened_by must be set for staff checks and nil for guest checks")
+
 // isUniqueViolation reports whether err is a Postgres unique_violation
 // (SQLSTATE 23505), mirroring payment/repo's isUniqueViolation helper.
 func isUniqueViolation(err error) bool {

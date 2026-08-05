@@ -16,20 +16,35 @@ type OrderRepo struct{}
 
 func NewOrderRepo() *OrderRepo { return &OrderRepo{} }
 
+// orderColumns is the single projection every order query selects, in the
+// exact order scanOrder reads them. Shared rather than repeated per query
+// because scanOrder takes ...any: a drifting column list compiles fine and
+// only fails at runtime.
+const orderColumns = `id, tenant_id, branch_id, check_id, order_channel, source,
+		       delivery_integrator_id, status, accept_deadline_at,
+		       accepted_at, accepted_by, rejected_at, rejected_by,
+		       rejection_reason, note, created_at, updated_at`
+
 // Create inserts an order and its items in the same transaction.
+//
+// Source is normalized to SourcePOS when empty: the INSERT names the column
+// explicitly, so a zero-value Go string would be written as an empty string and violate the
+// column CHECK instead of falling back to the column DEFAULT.
 func (r *OrderRepo) Create(ctx context.Context, tx pgx.Tx, o domain.Order) (domain.Order, error) {
 	const qOrder = `
 		INSERT INTO orders
-		    (tenant_id, branch_id, check_id, order_channel, delivery_integrator_id,
+		    (tenant_id, branch_id, check_id, order_channel, source, delivery_integrator_id,
 		     status, accept_deadline_at, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		RETURNING id, tenant_id, branch_id, check_id, order_channel,
-		          delivery_integrator_id, status, accept_deadline_at,
-		          accepted_at, accepted_by, rejected_at, rejected_by,
-		          rejection_reason, note, created_at, updated_at`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING ` + orderColumns
+
+	source := o.Source
+	if source == "" {
+		source = domain.SourcePOS
+	}
 
 	row := tx.QueryRow(ctx, qOrder,
-		o.TenantID, o.BranchID, o.CheckID, string(o.OrderChannel),
+		o.TenantID, o.BranchID, o.CheckID, string(o.OrderChannel), string(source),
 		o.DeliveryIntegratorID, string(o.Status), o.AcceptDeadlineAt, o.Note,
 	)
 	created, err := scanOrder(row)
@@ -48,10 +63,7 @@ func (r *OrderRepo) Create(ctx context.Context, tx pgx.Tx, o domain.Order) (doma
 // GetByID returns an order with its items.
 func (r *OrderRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Order, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, check_id, order_channel,
-		       delivery_integrator_id, status, accept_deadline_at,
-		       accepted_at, accepted_by, rejected_at, rejected_by,
-		       rejection_reason, note, created_at, updated_at
+		SELECT ` + orderColumns + `
 		FROM orders WHERE id = $1`
 
 	o, err := scanOrder(tx.QueryRow(ctx, q, id))
@@ -75,10 +87,7 @@ func (r *OrderRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 // race-free against other transactions attempting the same transition.
 func (r *OrderRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Order, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, check_id, order_channel,
-		       delivery_integrator_id, status, accept_deadline_at,
-		       accepted_at, accepted_by, rejected_at, rejected_by,
-		       rejection_reason, note, created_at, updated_at
+		SELECT ` + orderColumns + `
 		FROM orders WHERE id = $1 FOR UPDATE`
 
 	o, err := scanOrder(tx.QueryRow(ctx, q, id))
@@ -94,10 +103,7 @@ func (r *OrderRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (
 // ListByCheck returns all orders for a given check, oldest first.
 func (r *OrderRepo) ListByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) ([]domain.Order, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, check_id, order_channel,
-		       delivery_integrator_id, status, accept_deadline_at,
-		       accepted_at, accepted_by, rejected_at, rejected_by,
-		       rejection_reason, note, created_at, updated_at
+		SELECT ` + orderColumns + `
 		FROM orders WHERE check_id = $1 ORDER BY created_at`
 
 	rows, err := tx.Query(ctx, q, checkID)
@@ -138,10 +144,7 @@ func (r *OrderRepo) ListByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUI
 // comment.
 func (r *OrderRepo) ListActiveByBranch(ctx context.Context, tx pgx.Tx, branchID uuid.UUID) ([]domain.Order, error) {
 	const q = `
-		SELECT id, tenant_id, branch_id, check_id, order_channel,
-		       delivery_integrator_id, status, accept_deadline_at,
-		       accepted_at, accepted_by, rejected_at, rejected_by,
-		       rejection_reason, note, created_at, updated_at
+		SELECT ` + orderColumns + `
 		FROM orders
 		WHERE branch_id = $1 AND status = ANY($2)
 		ORDER BY created_at`
@@ -185,10 +188,7 @@ func (r *OrderRepo) Accept(ctx context.Context, tx pgx.Tx, id uuid.UUID, accepte
 		UPDATE orders
 		SET status = 'accepted', accepted_at = NOW(), accepted_by = $2, updated_at = NOW()
 		WHERE id = $1 AND status = $3
-		RETURNING id, tenant_id, branch_id, check_id, order_channel,
-		          delivery_integrator_id, status, accept_deadline_at,
-		          accepted_at, accepted_by, rejected_at, rejected_by,
-		          rejection_reason, note, created_at, updated_at`
+		RETURNING ` + orderColumns
 
 	o, err := scanOrder(tx.QueryRow(ctx, q, id, acceptedBy, string(expectedStatus)))
 	if err != nil {
@@ -207,10 +207,7 @@ func (r *OrderRepo) Reject(ctx context.Context, tx pgx.Tx, id uuid.UUID, rejecte
 		SET status = 'rejected', rejected_at = NOW(), rejected_by = $2,
 		    rejection_reason = $3, updated_at = NOW()
 		WHERE id = $1 AND status = $4
-		RETURNING id, tenant_id, branch_id, check_id, order_channel,
-		          delivery_integrator_id, status, accept_deadline_at,
-		          accepted_at, accepted_by, rejected_at, rejected_by,
-		          rejection_reason, note, created_at, updated_at`
+		RETURNING ` + orderColumns
 
 	o, err := scanOrder(tx.QueryRow(ctx, q, id, rejectedBy, reason, string(expectedStatus)))
 	if err != nil {
@@ -228,10 +225,7 @@ func (r *OrderRepo) AdvanceStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, 
 	const q = `
 		UPDATE orders SET status = $2, updated_at = NOW()
 		WHERE id = $1 AND status = $3
-		RETURNING id, tenant_id, branch_id, check_id, order_channel,
-		          delivery_integrator_id, status, accept_deadline_at,
-		          accepted_at, accepted_by, rejected_at, rejected_by,
-		          rejection_reason, note, created_at, updated_at`
+		RETURNING ` + orderColumns
 
 	o, err := scanOrder(tx.QueryRow(ctx, q, id, string(status), string(expectedStatus)))
 	if err != nil {
@@ -307,9 +301,9 @@ func scanOrder(s interface {
 	Scan(...any) error
 }) (domain.Order, error) {
 	var o domain.Order
-	var channel, status string
+	var channel, source, status string
 	if err := s.Scan(
-		&o.ID, &o.TenantID, &o.BranchID, &o.CheckID, &channel,
+		&o.ID, &o.TenantID, &o.BranchID, &o.CheckID, &channel, &source,
 		&o.DeliveryIntegratorID, &status, &o.AcceptDeadlineAt,
 		&o.AcceptedAt, &o.AcceptedBy, &o.RejectedAt, &o.RejectedBy,
 		&o.RejectionReason, &o.Note, &o.CreatedAt, &o.UpdatedAt,
@@ -317,6 +311,7 @@ func scanOrder(s interface {
 		return domain.Order{}, err
 	}
 	o.OrderChannel = domain.OrderChannel(channel)
+	o.Source = domain.Source(source)
 	o.Status = domain.OrderStatus(status)
 	return o, nil
 }

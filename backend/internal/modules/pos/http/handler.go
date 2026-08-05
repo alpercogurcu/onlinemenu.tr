@@ -183,12 +183,14 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c, err := h.checks.Open(r.Context(), p.TenantID, p, domain.Check{
-		BranchID:   req.BranchID,
-		TableID:    req.TableID,
-		TableLabel: req.TableLabel,
-		Pax:        req.Pax,
-		Note:       req.Note,
-		OpenedBy:   p.PersonID,
+		BranchID:     req.BranchID,
+		TableID:      req.TableID,
+		TableLabel:   req.TableLabel,
+		Pax:          req.Pax,
+		Note:         req.Note,
+		OpenedBy:     &p.PersonID,
+		OpenedByKind: domain.OpenedByKindStaff,
+		Source:       domain.SourcePOS,
 	})
 	if err != nil {
 		h.error(w, r, err)

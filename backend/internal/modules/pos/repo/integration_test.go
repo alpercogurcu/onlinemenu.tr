@@ -194,7 +194,7 @@ func TestCheckRepo_CRUD(t *testing.T) {
 			BranchID:   branchA,
 			TableLabel: "Masa 5",
 			Status:     domain.CheckStatusOpen,
-			OpenedBy:   staffA,
+			OpenedBy:   &staffA,
 		})
 		return err
 	})
@@ -241,14 +241,14 @@ func TestCheckRepo_List_FiltersByStatusAndBranch(t *testing.T) {
 		var err error
 		openA, err = checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchA, TableLabel: "Masa Open A",
-			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		if err != nil {
 			return err
 		}
 		closedA, err = checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchA, TableLabel: "Masa Closed A",
-			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		if err != nil {
 			return err
@@ -259,7 +259,7 @@ func TestCheckRepo_List_FiltersByStatusAndBranch(t *testing.T) {
 		}
 		openOther, err = checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchOther, TableLabel: "Masa Other Branch",
-			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		return err
 	})
@@ -348,7 +348,7 @@ func TestCheckRepo_RLSIsolation(t *testing.T) {
 			BranchID:   branchA,
 			TableLabel: "RLS Masa",
 			Status:     domain.CheckStatusOpen,
-			OpenedBy:   staffA,
+			OpenedBy:   &staffA,
 		})
 		return err
 	})
@@ -379,7 +379,7 @@ func TestCheckRepo_Create_SecondOpenCheckOnSameTable_MapsUniqueViolation(t *test
 	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
 		_, err := checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchA, TableID: &tbl.ID, TableLabel: tbl.Name,
-			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		return err
 	})
@@ -388,7 +388,7 @@ func TestCheckRepo_Create_SecondOpenCheckOnSameTable_MapsUniqueViolation(t *test
 	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
 		_, err := checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchA, TableID: &tbl.ID, TableLabel: tbl.Name,
-			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		return err
 	})
@@ -609,7 +609,7 @@ func TestCheckRepo_Pax_RoundTrips(t *testing.T) {
 		var err error
 		created, err = checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchA, TableLabel: "Masa Pax",
-			Pax: 6, Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Pax: 6, Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		return err
 	})
@@ -743,7 +743,7 @@ func newTestCheck(t *testing.T, ctx context.Context, tenantID uuid.UUID) domain.
 			BranchID:   branchA,
 			TableLabel: "Test Masa",
 			Status:     domain.CheckStatusOpen,
-			OpenedBy:   staffA,
+			OpenedBy:   &staffA,
 		})
 		return err
 	})
@@ -1138,7 +1138,7 @@ func TestTableRepo_ListTablesByBranch_ReportsActiveCheckID(t *testing.T) {
 		var err error
 		openCheck, err = checkRepo.Create(ctx, tx, domain.Check{
 			TenantID: tenantA, BranchID: branchA, TableID: &tbl.ID, TableLabel: tbl.Name,
-			Status: domain.CheckStatusOpen, OpenedBy: staffA,
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA,
 		})
 		return err
 	})

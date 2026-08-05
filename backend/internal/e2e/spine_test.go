@@ -317,7 +317,7 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T1",
-		OpenedBy:   staffID,
+		OpenedBy:   &staffID,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, posdomain.CheckStatusOpen, check.Status)
@@ -396,7 +396,7 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T2",
-		OpenedBy:   staffID,
+		OpenedBy:   &staffID,
 	})
 	require.NoError(t, err)
 
@@ -452,7 +452,7 @@ func TestPOSSpine_ClosePaysOnlyForActiveOrders(t *testing.T) {
 	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T4",
-		OpenedBy:   staffID,
+		OpenedBy:   &staffID,
 	})
 	require.NoError(t, err)
 
@@ -525,7 +525,7 @@ func TestPOSSpine_CloseBlockedWhileFiscalPending(t *testing.T) {
 	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T5",
-		OpenedBy:   staffID,
+		OpenedBy:   &staffID,
 	})
 	require.NoError(t, err)
 
@@ -574,7 +574,7 @@ func TestPOSSpine_IdempotentPayment(t *testing.T) {
 	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T3",
-		OpenedBy:   staffID,
+		OpenedBy:   &staffID,
 	})
 	require.NoError(t, err)
 

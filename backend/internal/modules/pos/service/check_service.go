@@ -127,13 +127,18 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 		if err != nil {
 			return err
 		}
+		// opened_by is now nullable (null for a guest_qr check), so
+		// opened_by_kind travels with it: a consumer reading only opened_by
+		// could not otherwise tell "anonymous guest" from "field missing".
 		return repo.InsertOutbox(ctx, tx, tenantID, "check", created.ID.String(), "check.opened", map[string]any{
-			"tenant_id":   tenantID,
-			"check_id":    created.ID,
-			"branch_id":   created.BranchID,
-			"table_id":    created.TableID,
-			"table_label": created.TableLabel,
-			"opened_by":   created.OpenedBy,
+			"tenant_id":      tenantID,
+			"check_id":       created.ID,
+			"branch_id":      created.BranchID,
+			"table_id":       created.TableID,
+			"table_label":    created.TableLabel,
+			"opened_by":      created.OpenedBy,
+			"opened_by_kind": string(created.OpenedByKind),
+			"source":         string(created.Source),
 		})
 	})
 	if err != nil {

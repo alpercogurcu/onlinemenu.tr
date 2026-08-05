@@ -114,7 +114,8 @@ func TestCheckAuthz_Open(t *testing.T) {
 	svc := newCheckService()
 
 	newReq := func() domain.Check {
-		return domain.Check{BranchID: branchA, TableLabel: "Masa Authz", OpenedBy: uuid.New()}
+		openedBy := uuid.New()
+		return domain.Check{BranchID: branchA, TableLabel: "Masa Authz", OpenedBy: &openedBy}
 	}
 
 	t.Run("own branch may open", func(t *testing.T) {

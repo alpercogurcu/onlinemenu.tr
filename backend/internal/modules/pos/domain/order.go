@@ -113,11 +113,15 @@ type OrderItem struct {
 
 // Order is a kitchen ticket for one fulfillment event (one channel, one round).
 type Order struct {
-	ID                   uuid.UUID
-	TenantID             uuid.UUID
-	BranchID             uuid.UUID
-	CheckID              *uuid.UUID
-	OrderChannel         OrderChannel
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	BranchID     uuid.UUID
+	CheckID      *uuid.UUID
+	OrderChannel OrderChannel
+	// Source is who created the order (pos terminal vs. QR storefront), not
+	// how it is fulfilled — that is OrderChannel. Defaults to SourcePOS when
+	// left empty; see OrderRepo.Create.
+	Source               Source
 	DeliveryIntegratorID *uuid.UUID
 	Status               OrderStatus
 	AcceptDeadlineAt     *time.Time

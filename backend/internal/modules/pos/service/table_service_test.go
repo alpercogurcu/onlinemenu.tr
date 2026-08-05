@@ -67,7 +67,7 @@ func TestCheckService_Open_WithTable_OccupiesTableAndDerivesLabel(t *testing.T) 
 		BranchID:   branchA,
 		TableID:    &tbl.ID,
 		TableLabel: "ignored client value",
-		OpenedBy:   staffA,
+		OpenedBy:   &staffA,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, tbl.ID, *c.TableID)
@@ -90,12 +90,12 @@ func TestCheckService_Open_TableAlreadyOccupied_Returns409(t *testing.T) {
 	tbl := newOpenTestTable(t, ctx, branchA)
 
 	_, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
+		BranchID: branchA, TableID: &tbl.ID, OpenedBy: &staffA,
 	})
 	require.NoError(t, err)
 
 	_, err = svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
+		BranchID: branchA, TableID: &tbl.ID, OpenedBy: &staffA,
 	})
 	assert.ErrorIs(t, err, pub.ErrTableOccupied)
 }
@@ -106,7 +106,7 @@ func TestCheckService_Open_TableBranchMismatch(t *testing.T) {
 	tableInBranchA := newOpenTestTable(t, ctx, branchA)
 
 	_, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-		BranchID: branchB, TableID: &tableInBranchA.ID, OpenedBy: staffA,
+		BranchID: branchB, TableID: &tableInBranchA.ID, OpenedBy: &staffA,
 	})
 	assert.ErrorIs(t, err, pub.ErrTableBranchMismatch)
 }
@@ -132,7 +132,7 @@ func TestCheckService_Open_ConcurrentSameTable_OneSucceeds(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-				BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
+				BranchID: branchA, TableID: &tbl.ID, OpenedBy: &staffA,
 			})
 			switch {
 			case err == nil:
@@ -157,7 +157,7 @@ func TestCheckService_Close_ReleasesTableToCleaning(t *testing.T) {
 	tbl := newOpenTestTable(t, ctx, branchA)
 
 	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
+		BranchID: branchA, TableID: &tbl.ID, OpenedBy: &staffA,
 	})
 	require.NoError(t, err)
 
@@ -181,7 +181,7 @@ func TestCheckService_Cancel_ReleasesTableToCleaning(t *testing.T) {
 	tbl := newOpenTestTable(t, ctx, branchA)
 
 	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
+		BranchID: branchA, TableID: &tbl.ID, OpenedBy: &staffA,
 	})
 	require.NoError(t, err)
 
@@ -210,7 +210,7 @@ func TestCheckService_Close_TableManuallyReset_StillSucceeds(t *testing.T) {
 	tbl := newOpenTestTable(t, ctx, branchA)
 
 	c, err := svc.Open(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Check{
-		BranchID: branchA, TableID: &tbl.ID, OpenedBy: staffA,
+		BranchID: branchA, TableID: &tbl.ID, OpenedBy: &staffA,
 	})
 	require.NoError(t, err)
 

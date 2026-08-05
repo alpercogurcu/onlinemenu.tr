@@ -17,7 +17,7 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 
 | Katman | Teknoloji |
 |---|---|
-| Backend | Go 1.26+, chi v5, sqlc 1.30, golang-migrate, asynq 0.26+ |
+| Backend | Go 1.26+, chi v5, elle yazılmış pgx repo katmanı (sqlc kullanılmıyor), golang-migrate, asynq 0.26+ |
 | DI | uber-go/fx (modül wiring, `backend/cmd/api/main.go`) |
 | Veritabanı | PostgreSQL 18 (RLS), Redis 8 |
 | Messaging | NATS JetStream 2.12+ (monolith), Kafka (Faz 2+ CDC) |

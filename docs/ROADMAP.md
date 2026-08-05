@@ -63,6 +63,10 @@ Türkiye pazarı için modüler, çok-kiracılı (multi-tenant) bir POS & işlet
 - [ ] `edge-sync` — local server binary, outbox/inbox, sync protokolü
 - [ ] Admin paneli (Next.js 16) — temel yönetim ekranları
 - [ ] POS istemcisi (Wails v2 + React) — masa, sipariş, kasa akışı
+- [x] `storefront` — QR dine-in online sipariş: public menü, misafir oturumu,
+      sipariş → KDS akışı, admin QR yönetimi, müşteri web uygulaması
+      (`web/apps/menu`) — ADR-ARCH-006 (2026-08-05'te kapsama alındı; ödeme
+      kasada, PayTR web ödemesi Faz 2'de bu modülün üstüne gelir)
 - [ ] k6 yük testi — 500 aktif POS simülasyonu
 
 ---

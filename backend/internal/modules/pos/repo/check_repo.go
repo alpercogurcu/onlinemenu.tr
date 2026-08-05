@@ -103,6 +103,27 @@ func (r *CheckRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (
 	return c, nil
 }
 
+// GetOpenByTableForUpdate locks and returns the table's currently open check,
+// or ErrNotFound when the table has none. At most one row can match:
+// checks_open_table_id_uidx (pos/000004) enforces one open check per table.
+//
+// Guest order placement calls this BEFORE locking the table row, on purpose.
+// CheckService.Close/Cancel take the locks in check → table order; a caller
+// taking them table → check would deadlock against a cashier closing the same
+// table's check while a diner submits a cart.
+func (r *CheckRepo) GetOpenByTableForUpdate(ctx context.Context, tx pgx.Tx, tableID uuid.UUID) (domain.Check, error) {
+	const q = `SELECT ` + checkColumns + ` FROM checks WHERE table_id = $1 AND status = 'open' FOR UPDATE`
+
+	c, err := scanCheck(tx.QueryRow(ctx, q, tableID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Check{}, ErrNotFound
+		}
+		return domain.Check{}, fmt.Errorf("pos/repo/check: get open by table for update: %w", err)
+	}
+	return c, nil
+}
+
 // ListFilter narrows CheckRepo.List's result set. Both fields are optional
 // (nil = no filter on that column) — mirroring service.ZonePatch/TablePatch's
 // pointer-field convention for "not supplied" — so a caller can filter on

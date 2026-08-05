@@ -102,44 +102,9 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 	c.Status = domain.CheckStatusOpen
 	var created domain.Check
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		if c.TableID != nil {
-			table, err := s.tableRepo.GetTableForUpdate(ctx, tx, *c.TableID)
-			if err != nil {
-				return err
-			}
-			if table.BranchID != c.BranchID {
-				return pub.ErrTableBranchMismatch
-			}
-			if table.Status != domain.TableStatusEmpty && table.Status != domain.TableStatusReserved {
-				return pub.ErrTableOccupied
-			}
-			if _, err := s.tableRepo.UpdateStatus(ctx, tx, table.ID, domain.TableStatusOccupied, table.Status); err != nil {
-				if errors.Is(err, repo.ErrInvalidTransition) {
-					return pub.ErrTableOccupied
-				}
-				return err
-			}
-			c.TableLabel = table.Name
-		}
-
 		var err error
-		created, err = s.checkRepo.Create(ctx, tx, c)
-		if err != nil {
-			return err
-		}
-		// opened_by is now nullable (null for a guest_qr check), so
-		// opened_by_kind travels with it: a consumer reading only opened_by
-		// could not otherwise tell "anonymous guest" from "field missing".
-		return repo.InsertOutbox(ctx, tx, tenantID, "check", created.ID.String(), "check.opened", map[string]any{
-			"tenant_id":      tenantID,
-			"check_id":       created.ID,
-			"branch_id":      created.BranchID,
-			"table_id":       created.TableID,
-			"table_label":    created.TableLabel,
-			"opened_by":      created.OpenedBy,
-			"opened_by_kind": string(created.OpenedByKind),
-			"source":         string(created.Source),
-		})
+		created, err = openCheckTx(ctx, tx, s.checkRepo, s.tableRepo, c, staffTableGuard)
+		return err
 	})
 	if err != nil {
 		if errors.Is(err, pub.ErrTableOccupied) || errors.Is(err, pub.ErrTableBranchMismatch) {
@@ -156,6 +121,96 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 			return domain.Check{}, pub.ErrNotFound
 		}
 		return domain.Check{}, fmt.Errorf("pos/service/check: open: %w", err)
+	}
+	return created, nil
+}
+
+// tableStatusGuard decides whether a table in its current state may receive a
+// new check. It is a parameter rather than a fixed rule because staff and
+// guests must be told different things about the same table: see
+// staffTableGuard / guestTableGuard.
+type tableStatusGuard func(domain.Table) error
+
+// staffTableGuard preserves CheckService.Open's pre-existing contract exactly:
+// anything that is not empty/reserved — cleaning included — is
+// pub.ErrTableOccupied.
+func staffTableGuard(t domain.Table) error {
+	if t.Status != domain.TableStatusEmpty && t.Status != domain.TableStatusReserved {
+		return pub.ErrTableOccupied
+	}
+	return nil
+}
+
+// guestTableGuard is staffTableGuard plus the cleaning carve-out (ADR-ARCH-006
+// plan note D4): a diner scanning the QR of a table still being cleared is not
+// looking at an occupied table, and "masa dolu" would be actively misleading.
+func guestTableGuard(t domain.Table) error {
+	if t.Status == domain.TableStatusCleaning {
+		return pub.ErrTableNotReady
+	}
+	return staffTableGuard(t)
+}
+
+// openCheckTx is the one place a check row is created.
+//
+// It is a package-level function, not a CheckService method, so the guest
+// order path (OrderService.PlaceGuest) can open a check inside its own
+// transaction without either duplicating this body or making OrderService
+// depend on CheckService. Duplicating it is what this extraction exists to
+// prevent: the table lock, the branch match, the label overwrite, the
+// status transition and the check.opened outbox event must stay one unit —
+// a second copy would drift, and the drift would only show up as a table
+// that is occupied by a check nobody can see.
+//
+// The caller supplies the transaction (both paths need other work committed
+// atomically with the check) and the table guard (staff and guests get
+// different answers for a cleaning table).
+func openCheckTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	checkRepo *repo.CheckRepo,
+	tableRepo *repo.TableRepo,
+	c domain.Check,
+	guard tableStatusGuard,
+) (domain.Check, error) {
+	if c.TableID != nil {
+		table, err := tableRepo.GetTableForUpdate(ctx, tx, *c.TableID)
+		if err != nil {
+			return domain.Check{}, err
+		}
+		if table.BranchID != c.BranchID {
+			return domain.Check{}, pub.ErrTableBranchMismatch
+		}
+		if err := guard(table); err != nil {
+			return domain.Check{}, err
+		}
+		if _, err := tableRepo.UpdateStatus(ctx, tx, table.ID, domain.TableStatusOccupied, table.Status); err != nil {
+			if errors.Is(err, repo.ErrInvalidTransition) {
+				return domain.Check{}, pub.ErrTableOccupied
+			}
+			return domain.Check{}, err
+		}
+		c.TableLabel = table.Name
+	}
+
+	created, err := checkRepo.Create(ctx, tx, c)
+	if err != nil {
+		return domain.Check{}, err
+	}
+	// opened_by is nullable (null for a guest_qr check), so opened_by_kind
+	// travels with it: a consumer reading only opened_by could not otherwise
+	// tell "anonymous guest" from "field missing".
+	if err := repo.InsertOutbox(ctx, tx, c.TenantID, "check", created.ID.String(), "check.opened", map[string]any{
+		"tenant_id":      c.TenantID,
+		"check_id":       created.ID,
+		"branch_id":      created.BranchID,
+		"table_id":       created.TableID,
+		"table_label":    created.TableLabel,
+		"opened_by":      created.OpenedBy,
+		"opened_by_kind": string(created.OpenedByKind),
+		"source":         string(created.Source),
+	}); err != nil {
+		return domain.Check{}, err
 	}
 	return created, nil
 }

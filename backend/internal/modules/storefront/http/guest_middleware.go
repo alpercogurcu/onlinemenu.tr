@@ -32,6 +32,10 @@ const (
 // is set from the composition root, not sniffed from the request (a proxy
 // that forgets X-Forwarded-Proto must not silently downgrade the cookie).
 func setGuestCookie(w http.ResponseWriter, token string, expiresAt time.Time, secure bool) {
+	// #nosec G124 -- Secure is a parameter fed from Config.CookieSecure at the
+	// composition root; gosec only accepts a literal true and cannot see that.
+	// Narrowed to this call rather than excluded repo-wide, so the same rule
+	// keeps guarding every other cookie in the codebase.
 	http.SetCookie(w, &http.Cookie{
 		Name:     guestCookieName,
 		Value:    token,

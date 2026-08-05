@@ -34,3 +34,14 @@ var ErrNotFound = errors.New("storefront: not found")
 // ErrInvalidTransition is returned when a QR code status change is not
 // allowed from its current status (e.g. revoking an already-revoked code).
 var ErrInvalidTransition = errors.New("storefront: invalid status transition")
+
+// ValidationError is returned when a diner's submission cannot be honoured as
+// sent — an empty cart, a product the branch does not currently sell, a
+// modifier that is not attached to its product. The HTTP layer checks for it
+// with errors.As and answers 422.
+//
+// Msg is diner-facing: it is rendered into the problem detail, so it must
+// stay free of internal identifiers beyond the ids the diner already sent.
+type ValidationError struct{ Msg string }
+
+func (e *ValidationError) Error() string { return "storefront: " + e.Msg }

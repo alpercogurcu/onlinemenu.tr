@@ -31,6 +31,7 @@ import (
 	"onlinemenu.tr/internal/modules/pos"
 	posws "onlinemenu.tr/internal/modules/pos/ws"
 	"onlinemenu.tr/internal/modules/storefront"
+	storefronthttp "onlinemenu.tr/internal/modules/storefront/http"
 	"onlinemenu.tr/internal/modules/tenant"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/cache"
@@ -41,6 +42,12 @@ import (
 	"onlinemenu.tr/internal/platform/outbox"
 	"onlinemenu.tr/internal/platform/vault"
 )
+
+// publicAPIPrefix is the storefront's anonymous surface. It is taken from the
+// module that serves it rather than re-declared, so the auth exemption, the
+// tracing filter and the actual routes can never disagree about which paths
+// are public.
+const publicAPIPrefix = storefronthttp.PublicAPIPrefix + "/"
 
 func main() {
 	// Context is cancelled on SIGINT or SIGTERM, triggering graceful shutdown.
@@ -65,6 +72,7 @@ func main() {
 		fx.Provide(newPosWSConfig),
 		fx.Provide(newFiscalConfig),
 		fx.Provide(newKeycloakConfig),
+		fx.Provide(newStorefrontConfig),
 
 		db.Module,
 		eventbus.Module,
@@ -174,7 +182,18 @@ func newRouter(p routerParams) *chi.Mux {
 		protected := authMW(openSessionMW(next))
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
-			if path == "/healthz" || (isDev && strings.HasPrefix(path, "/dev/")) {
+			// /api/public/v1/* skips the STAFF auth chain — it is not
+			// unauthenticated. Its callers are anonymous QR diners who have
+			// no Keycloak identity and no principal, so authMW would reject
+			// every one of them; their guard chain (IP rate limit → guest
+			// session cookie → per-session rate limit → idempotency) lives in
+			// storefronthttp.RegisterPublicRoutes and IS the boundary.
+			// storefront/http/public_guard_smoke_test.go is what keeps that
+			// claim true: it walks the registered routes and fails if any of
+			// them (bar /sessions) answers without a guest session.
+			if path == "/healthz" ||
+				strings.HasPrefix(path, publicAPIPrefix) ||
+				(isDev && strings.HasPrefix(path, "/dev/")) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -334,15 +353,33 @@ func devLoginHandler(pool *db.Pool, signer *auth.ContextTokenSigner) http.Handle
 	}
 }
 
-// webhookTracingFilter reports whether otelhttp should create a span for r.
-// otelhttp records the raw, unrouted request path as a span attribute before
-// chi even sees it, and the TokenX webhook's authenticity secret lives in
-// that path (see payment/http.WebhookPathPrefix — the vendor supports no
-// webhook signature, so the unguessable path segment is the only credential).
-// Excluding the route from tracing is the only way to keep the secret out of
-// every exported span.
-func webhookTracingFilter(r *http.Request) bool {
-	return !strings.HasPrefix(r.URL.Path, paymenthttp.WebhookPathPrefix)
+// secretBearingPathPrefixes lists the route prefixes whose raw request path
+// may carry a credential.
+//
+// otelhttp records that raw, unrouted path as a span attribute before chi
+// even sees it, so any secret in it is exported to the tracing backend:
+//
+//   - the TokenX webhook's authenticity secret is a path segment (the vendor
+//     supports no webhook signature, so the unguessable path IS the
+//     credential — see payment/http.WebhookPathPrefix);
+//   - the public storefront carries QR tokens. They are deliberately sent in
+//     the request BODY (ADR-ARCH-006 §3), so this entry is defense in depth:
+//     it means a future route that puts a token in the path — /q/{token},
+//     say — cannot leak it into spans before anyone notices.
+var secretBearingPathPrefixes = []string{
+	paymenthttp.WebhookPathPrefix,
+	publicAPIPrefix,
+}
+
+// tracingFilter reports whether otelhttp should create a span for r (true =
+// trace it; the polarity is otelhttp.WithFilter's, not "is untraced").
+func tracingFilter(r *http.Request) bool {
+	for _, prefix := range secretBearingPathPrefixes {
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 // tracedHandler wraps router with the otelhttp instrumentation used by the
@@ -350,7 +387,7 @@ func webhookTracingFilter(r *http.Request) bool {
 // as a span attribute. Extra opts are appended for tests (e.g. a fixed
 // TracerProvider so spans can be inspected without the global one).
 func tracedHandler(router http.Handler, opts ...otelhttp.Option) http.Handler {
-	return otelhttp.NewHandler(router, "api", append([]otelhttp.Option{otelhttp.WithFilter(webhookTracingFilter)}, opts...)...)
+	return otelhttp.NewHandler(router, "api", append([]otelhttp.Option{otelhttp.WithFilter(tracingFilter)}, opts...)...)
 }
 
 func registerHTTPServer(lc fx.Lifecycle, cfg httpConfig, router *chi.Mux, logger *zap.Logger) {
@@ -467,6 +504,22 @@ func newPosWSConfig() posws.Config {
 		}
 	}
 	return posws.Config{AllowedOriginPatterns: patterns}
+}
+
+// newStorefrontConfig wires the public QR surface's deployment knobs.
+//
+// CookieSecure is ON everywhere except APP_ENV=dev, and is decided here
+// rather than sniffed from the request: a reverse proxy that forgets
+// X-Forwarded-Proto would otherwise silently hand out a guest cookie that
+// travels in clear text. Dev is the single explicit exception, because the
+// menu app talks plain HTTP to localhost there.
+//
+// The rate limits keep their in-module defaults unless overridden; see
+// storefronthttp.Config.
+func newStorefrontConfig() storefronthttp.Config {
+	return storefronthttp.Config{
+		CookieSecure: envOr("APP_ENV", "") != "dev",
+	}
 }
 
 // newFiscalConfig selects the fiscal device adapter (ADR-FISCAL-002).

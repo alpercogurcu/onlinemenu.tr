@@ -10,6 +10,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	pospub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/storefront/domain"
 	pub "onlinemenu.tr/internal/modules/storefront/public"
 	"onlinemenu.tr/internal/modules/storefront/repo"
@@ -21,6 +22,7 @@ import (
 type SessionService struct {
 	db     *db.Pool
 	qrRepo *repo.QRCodeRepo
+	tables pospub.GuestTableReader
 	signer *auth.GuestTokenSigner
 	logger *zap.Logger
 }
@@ -31,12 +33,19 @@ type SessionParams struct {
 
 	DB     *db.Pool
 	QRRepo *repo.QRCodeRepo
+	Tables pospub.GuestTableReader
 	Signer *auth.GuestTokenSigner
 	Logger *zap.Logger
 }
 
 func NewSessionService(p SessionParams) *SessionService {
-	return &SessionService{db: p.DB, qrRepo: p.QRRepo, signer: p.Signer, logger: p.Logger}
+	return &SessionService{
+		db:     p.DB,
+		qrRepo: p.QRRepo,
+		tables: p.Tables,
+		signer: p.Signer,
+		logger: p.Logger,
+	}
 }
 
 // ResolvedSession is what a successful QR scan yields.
@@ -63,11 +72,11 @@ type ResolvedSession struct {
 //     ignores status so a revoked scan stays observable (and loggable) rather
 //     than being indistinguishable from a nonexistent token at the DB level.
 //     Both outcomes still surface as 404 to the caller — see pub.ErrQRRevoked.
-//
-// Deliberately NOT done yet (WP2): verifying via pos/public that the code's
-// table still exists and still belongs to BranchID. Until that lands, a QR
-// code whose table was moved to another branch or deleted will still mint a
-// session, and the mismatch is only caught at order placement.
+//  4. The code's table is re-verified through pos/public: it must still
+//     exist, still be active, and still belong to the branch the code was
+//     issued for. A sticker that outlived its table (deleted, deactivated, or
+//     moved to another branch) mints no session — otherwise the diner would
+//     browse a menu happily and only hit the wall at checkout.
 func (s *SessionService) ResolveToken(ctx context.Context, rawToken string) (ResolvedSession, error) {
 	if rawToken == "" {
 		return ResolvedSession{}, pub.ErrQRNotFound
@@ -99,10 +108,41 @@ func (s *SessionService) ResolveToken(ctx context.Context, rawToken string) (Res
 		return ResolvedSession{}, pub.ErrQRRevoked
 	}
 
+	table, err := s.tables.GetGuestTable(ctx, code.TenantID, code.TableID)
+	if err != nil {
+		if errors.Is(err, pospub.ErrTableNotFound) {
+			s.logger.Info("storefront: qr code points at a missing table",
+				zap.String("qr_code_id", code.ID.String()),
+				zap.String("table_id", code.TableID.String()),
+			)
+			return ResolvedSession{}, pub.ErrQRNotFound
+		}
+		return ResolvedSession{}, fmt.Errorf("storefront/service/session: read table: %w", err)
+	}
+	if table.BranchID != code.BranchID || !table.IsActive {
+		// The reason is logged, never returned: to an anonymous caller a
+		// misconfigured sticker and a made-up token must look identical.
+		s.logger.Warn("storefront: qr code no longer matches its table",
+			zap.String("qr_code_id", code.ID.String()),
+			zap.String("qr_branch_id", code.BranchID.String()),
+			zap.String("table_branch_id", table.BranchID.String()),
+			zap.Bool("table_active", table.IsActive),
+		)
+		return ResolvedSession{}, pub.ErrQRNotFound
+	}
+
 	sessionID := uuid.New()
 	token, err := s.signer.IssueGuest(code.TenantID, code.BranchID, code.TableID, code.ID, sessionID)
 	if err != nil {
 		return ResolvedSession{}, fmt.Errorf("storefront/service/session: issue guest token: %w", err)
+	}
+
+	// The live table name wins over storefront_qr_codes.table_label: the
+	// latter is a snapshot taken when the sticker was printed and drifts as
+	// soon as staff rename the table.
+	label := table.Label
+	if label == "" {
+		label = code.TableLabel
 	}
 
 	return ResolvedSession{
@@ -112,6 +152,6 @@ func (s *SessionService) ResolveToken(ctx context.Context, rawToken string) (Res
 		TableID:    code.TableID,
 		QRCodeID:   code.ID,
 		SessionID:  sessionID,
-		TableLabel: code.TableLabel,
+		TableLabel: label,
 	}, nil
 }

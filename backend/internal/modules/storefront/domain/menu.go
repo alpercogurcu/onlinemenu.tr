@@ -29,13 +29,23 @@ type GuestModifierGroup struct {
 // GuestProduct is a sellable item as the diner sees it. PriceAmount is the
 // effective sale price in kuruş, resolved server-side from
 // menu_items.price_override ?? products.price_amount.
+//
+// ImageKey (renamed from the WP1 draft's ImageURL) is products.image_key: an
+// object-storage key, not a URL. Nothing in this codebase mints signed or CDN
+// URLs yet, so a *_url name would have handed the storefront a string it
+// cannot put in an <img> tag; the menu app composes the URL from its own
+// media base.
+//
+// Allergens is always empty today: no allergen column exists anywhere in the
+// catalog schema. The field stays so adding one later does not reshape the
+// wire contract.
 type GuestProduct struct {
 	ID             uuid.UUID
 	Name           string
 	Description    string
 	PriceAmount    int64
 	Currency       string
-	ImageURL       string
+	ImageKey       string
 	Allergens      []string
 	IsAvailable    bool
 	ModifierGroups []GuestModifierGroup

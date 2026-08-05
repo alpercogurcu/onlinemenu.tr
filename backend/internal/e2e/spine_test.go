@@ -144,7 +144,10 @@ func runMigrations(superDSN string) error {
 		cfg.ConnConfig.Database,
 	)
 
-	for _, mod := range []string{"tenant", "identity", "pos", "payment"} {
+	// catalog and storefront join the list for storefront_test.go: the QR flow
+	// reads a real menu and resolves a real token, and both live in tables the
+	// POS spine never touches.
+	for _, mod := range []string{"tenant", "identity", "catalog", "pos", "payment", "storefront"} {
 		absPath := filepath.Join(migrationsBase(), mod)
 		src := fmt.Sprintf("file://%s", absPath)
 		dsn := fmt.Sprintf("%s&x-migrations-table=schema_migrations_%s", migratorDSN, mod)

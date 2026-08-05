@@ -142,6 +142,68 @@ func TestPlaceOrder_TableBeingCleaned_Returns409WithDistinctCode(t *testing.T) {
 	assert.NotContains(t, strings.ToLower(problem.Detail), "dolu")
 }
 
+// TestPlaceOrder_TableMovedToAnotherBranch_Returns409WithDistinctCode covers
+// the sticker that outlived its table: the code was printed for one branch and
+// the table now belongs to another. Unlike a scan (POST /sessions), which
+// collapses every failure into 404 to avoid a token oracle, an established
+// session that already passed the scan gets the actionable answer — the diner
+// must be told to call staff instead of retrying.
+func TestPlaceOrder_TableMovedToAnotherBranch_Returns409WithDistinctCode(t *testing.T) {
+	productID := uuid.New()
+	deps := &testDeps{
+		menuReader: &stubMenuReader{priced: []catalogpub.PricedLine{{
+			ProductID: productID, ProductName: "Çay", UnitPriceAmount: 1000, Quantity: 1,
+		}}},
+		orders: &stubOrderGateway{placeErr: pospub.ErrTableBranchMismatch},
+	}
+	router := newPublicRouter(t, deps)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/public/v1/orders",
+		strings.NewReader(`{"lines":[{"product_id":"`+productID.String()+`","quantity":1}]}`))
+	req.AddCookie(guestCookie(t, deps.signer))
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+
+	var problem struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &problem))
+	assert.Equal(t, "table_branch_mismatch", problem.Code)
+}
+
+// TestPlaceOrder_ProductNotOrderableHere_Returns422 is the transport half of
+// the cross-tenant/off-menu product rejection: catalog refuses to price a
+// product that is not on this branch's dine-in menu (another tenant's product
+// included), and that refusal must reach the diner as a 422, never as a 500.
+func TestPlaceOrder_ProductNotOrderableHere_Returns422(t *testing.T) {
+	deps := &testDeps{
+		menuReader: &stubMenuReader{
+			priceErr: &catalogpub.ValidationError{Msg: "ürün bu şubede sipariş edilemiyor"},
+		},
+	}
+	router := newPublicRouter(t, deps)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/public/v1/orders",
+		strings.NewReader(`{"lines":[{"product_id":"`+uuid.NewString()+`","quantity":1}]}`))
+	req.AddCookie(guestCookie(t, deps.signer))
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+
+	var problem struct {
+		Code   string `json:"code"`
+		Detail string `json:"detail"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &problem))
+	assert.Equal(t, "validation_failed", problem.Code)
+	assert.Contains(t, problem.Detail, "sipariş edilemiyor")
+}
+
 func TestPlaceOrder_EmptyCart_Returns422(t *testing.T) {
 	deps := &testDeps{}
 	router := newPublicRouter(t, deps)

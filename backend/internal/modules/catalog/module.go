@@ -26,17 +26,28 @@ var Module = fx.Module("catalog",
 		repo.NewProductModifierGroupRepo,
 		repo.NewMenuRepo,
 		repo.NewMenuItemRepo,
+		repo.NewStorefrontMenuRepo,
 		service.NewCategoryService,
 		service.NewProductService,
 		service.NewModifierService,
 		service.NewMenuService,
+		service.NewStorefrontMenuService,
 		cataloghttp.NewHandler,
 		fx.Annotate(newProductReader, fx.As(new(pub.ProductReader))),
+		// The storefront reaches the catalog only through this interface
+		// (ADR-ARCH-006 §2). No adapter struct is needed the way
+		// pub.ProductReader needs one: StorefrontMenuService already returns
+		// the public types, so exposing it is a plain interface provider.
+		newStorefrontMenuReader,
 	),
 	fx.Invoke(func(h *cataloghttp.Handler, r *chi.Mux) {
 		h.RegisterRoutes(r)
 	}),
 )
+
+func newStorefrontMenuReader(svc *service.StorefrontMenuService) pub.StorefrontMenuReader {
+	return svc
+}
 
 // productReaderAdapter satisfies pub.ProductReader using ProductService.
 type productReaderAdapter struct{ svc *service.ProductService }

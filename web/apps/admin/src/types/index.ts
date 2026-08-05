@@ -362,3 +362,55 @@ export interface Tenant {
   is_active: boolean
   created_at: string
 }
+
+// POS table plan — GET /api/v1/pos/tables?branch_id= returns the floor plan
+// already grouped by zone (backend zonePlanResponse), not a flat table list.
+export type PosTableStatus = "empty" | "occupied" | "reserved" | "cleaning"
+
+export interface PosTable {
+  id: string
+  branch_id: string
+  zone_id: string
+  name: string
+  capacity: number
+  status: PosTableStatus
+  layout_position: unknown
+  is_active: boolean
+  active_check_id: string | null
+}
+
+export interface PosZonePlan {
+  zone_id: string
+  zone_name: string
+  floor: number
+  tables: PosTable[]
+}
+
+// Storefront — table QR codes (ADR-ARCH-006).
+export type QRCodeStatus = "active" | "revoked"
+
+// Mirrors the backend qrCodeResponse exactly. There is deliberately no token
+// field: the raw token is returned ONCE, by create/rotate, inside
+// IssuedQRCode — and the hash is never exposed at all.
+export interface QRCode {
+  id: string
+  tenant_id: string
+  branch_id: string
+  table_id: string
+  table_label: string
+  status: QRCodeStatus
+  created_by: string
+  revoked_at: string | null
+  revoked_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Create/rotate response. `token` exists only in this response body and must
+// never be persisted (no localStorage, no query cache, no component state that
+// outlives the dialog) — the server keeps only its hash, so it cannot be
+// re-read, and anything that stores it becomes a second place it can leak from.
+export interface IssuedQRCode {
+  qr_code: QRCode
+  token: string
+}

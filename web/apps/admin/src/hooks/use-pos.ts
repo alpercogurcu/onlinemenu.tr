@@ -1,7 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { Check, Order, OrderStatus } from "@/types"
+import type { Check, Order, OrderStatus, PosZonePlan } from "@/types"
+
+// useTables returns the branch floor plan already grouped by zone — that is
+// the backend's response shape (zonePlanResponse), not a client-side grouping,
+// so a single request renders zone-labelled sections with no follow-up call to
+// GET /zones. branch_id is required by the endpoint (422 without it), hence the
+// enabled guard rather than an optional param.
+export function useTables(branchId: string, params?: { refetchInterval?: number }) {
+  return useQuery({
+    queryKey: ["pos-tables", branchId],
+    queryFn: async () => {
+      const { data } = await api.get<PosZonePlan[]>("/api/v1/pos/tables", {
+        params: { branch_id: branchId },
+      })
+      return data ?? []
+    },
+    enabled: branchId !== "",
+    refetchInterval: params?.refetchInterval,
+  })
+}
 
 export function useChecks(params?: {
   status?: string

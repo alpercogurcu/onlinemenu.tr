@@ -214,3 +214,30 @@
   /* WebKit */
   display: none;
 }
+
+/* QR yazdırma alanı (components/storefront/qr-code-dialog.tsx).
+   Yazdırırken sayfanın geri kalanı (sidebar, dialog overlay, butonlar)
+   gizlenir; yalnızca QR kartı basılır. `visibility` kullanılıyor çünkü
+   `display: none` dialog portal'ının içindeki elemanı da düşürürdü. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #qr-print-area,
+  #qr-print-area * {
+    visibility: visible;
+  }
+
+  #qr-print-area {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    background: #fff;
+    color: #000;
+  }
+}

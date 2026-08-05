@@ -58,6 +58,18 @@ tasks:
     cmds:
       - pnpm install
 
+  web:lint:
+    desc: "Frontend lint (CI ile aynı komut: web kökünde pnpm run lint)"
+    dir: web
+    cmds:
+      - pnpm run lint
+
+  web:typecheck:
+    desc: "Admin paneli tip kontrolü (tsc --noEmit)"
+    dir: web/apps/admin
+    cmds:
+      - pnpm typecheck
+
   pos:dev:
     desc: "POS desktop dev (Wails)"
     dir: web/apps/pos-desktop

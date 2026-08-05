@@ -35,5 +35,43 @@
     "integrations": "Entegrasyonlar",
     "fiscalTerminals": "Fiscal Terminaller",
     "fiscalSections": "Kısım Eşleme"
+  },
+  "posTables": {
+    "title": "Masalar",
+    "subtitle": "Masa durumlarını takip edin, masaya QR kodu basın.",
+    "branch": "Şube",
+    "branchPlaceholder": "Şube seçin",
+    "noBranch": "Önce bir şube seçin",
+    "empty": "Bu şubede tanımlı masa yok",
+    "capacity": "{count} kişilik",
+    "floor": "{floor}. kat",
+    "qrAction": "QR",
+    "hasOpenCheck": "Açık adisyon",
+    "status": {
+      "empty": "Boş",
+      "occupied": "Dolu",
+      "reserved": "Rezerve",
+      "cleaning": "Temizlikte"
+    }
+  },
+  "storefront": {
+    "qr": {
+      "title": "{table} — QR kodu",
+      "description": "Misafirler bu kodu okutarak masadan sipariş verir.",
+      "statusActive": "Aktif QR kodu var",
+      "noActiveCode": "Bu masanın aktif QR kodu yok.",
+      "tokenNotRecoverable": "Bu masanın aktif bir QR kodu var, ancak kodun kendisi yalnızca üretildiği anda bir kez gösterilir ve sunucuda saklanmaz. Basılı etiketi kaybettiyseniz \"Yenile\" ile yeni bir kod üretin — eski kod otomatik iptal olur.",
+      "oneTimeWarning": "Bu QR yalnızca şimdi gösterilir. Sayfayı kapattığınızda bir daha görüntülenemez; şimdi yazdırın.",
+      "create": "QR üret",
+      "rotate": "Yenile",
+      "revoke": "İptal et",
+      "print": "Yazdır",
+      "createdToast": "QR kodu üretildi",
+      "rotatedToast": "QR kodu yenilendi, eski kod iptal edildi",
+      "revokedToast": "QR kodu iptal edildi",
+      "createFailed": "QR kodu üretilemedi",
+      "rotateFailed": "QR kodu yenilenemedi",
+      "revokeFailed": "QR kodu iptal edilemedi"
+    }
   }
 }

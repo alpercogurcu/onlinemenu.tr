@@ -4,7 +4,7 @@
 // without a browser or a WebSocket.
 //
 // Wire contract mirrors backend/internal/modules/pos/ws/message.go exactly.
-import type { OrderStatus } from "@/types"
+import type { CheckSource, OrderStatus } from "@/types"
 
 export type KitchenEventType = "snapshot" | "order.placed" | "order.status_changed"
 
@@ -13,6 +13,12 @@ export interface KitchenOrderEvent {
   order_id: string
   check_id?: string | null
   table_label?: string
+  // Which surface created the order (backend domain.Source, projected onto
+  // the WS message in ws/hub.go — NOT read from the outbox payload).
+  // Optional because it is omitempty on the wire: an older backend, or a row
+  // predating the column's default, simply sends nothing and the board shows
+  // no source badge rather than mislabelling the ticket.
+  source?: CheckSource
   status: OrderStatus
   seq: number
   occurred_at: string
@@ -38,6 +44,7 @@ export interface KitchenOrder {
   orderId: string
   checkId: string | null
   tableLabel: string
+  source: CheckSource | null
   status: OrderStatus
   seq: number
   occurredAt: string
@@ -65,6 +72,7 @@ function toKitchenOrder(evt: KitchenOrderEvent, isNew: boolean): KitchenOrder {
     orderId: evt.order_id,
     checkId: evt.check_id ?? null,
     tableLabel: evt.table_label ?? "",
+    source: evt.source ?? null,
     status: evt.status,
     seq: evt.seq,
     occurredAt: evt.occurred_at,

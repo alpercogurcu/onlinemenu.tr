@@ -1,6 +1,17 @@
 "use client"
 
-import { AlertTriangle, ChefHat, Loader2, Maximize, Minimize, Volume2, VolumeX, Wifi, WifiOff } from "lucide-react"
+import {
+  AlertTriangle,
+  ChefHat,
+  Loader2,
+  Maximize,
+  Minimize,
+  QrCode,
+  Volume2,
+  VolumeX,
+  Wifi,
+  WifiOff,
+} from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
@@ -80,9 +91,18 @@ function playBeep() {
   }
 }
 
+// Beyond this the exact figure carries no kitchen signal — the ticket is
+// simply stale (a forgotten order, or dev/loadtest data left in the DB). It
+// is capped so the counter cannot render as "45308:58" and blow out the card
+// layout, while still reading as "far too old".
+const MAX_ELAPSED_MINUTES = 99
+
 function formatElapsed(occurredAt: string, now: number): string {
-  const elapsedSec = Math.max(0, Math.floor((now - new Date(occurredAt).getTime()) / 1000))
+  const occurredMs = new Date(occurredAt).getTime()
+  if (Number.isNaN(occurredMs)) return "—"
+  const elapsedSec = Math.max(0, Math.floor((now - occurredMs) / 1000))
   const minutes = Math.floor(elapsedSec / 60)
+  if (minutes >= MAX_ELAPSED_MINUTES) return `${MAX_ELAPSED_MINUTES}+ dk`
   const seconds = elapsedSec % 60
   return `${minutes}:${seconds.toString().padStart(2, "0")}`
 }
@@ -93,6 +113,14 @@ function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
       <Badge className="border-green-500/40 bg-green-500/15 text-green-400">
         <Wifi className="mr-1 size-3.5" />
         Canlı
+      </Badge>
+    )
+  }
+  if (status === "syncing") {
+    return (
+      <Badge className="border-sky-500/40 bg-sky-500/15 text-sky-300">
+        <Loader2 className="mr-1 size-3.5 animate-spin" />
+        Senkronize ediliyor
       </Badge>
     )
   }
@@ -142,9 +170,25 @@ function KitchenOrderCard({
       }`}
     >
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg">{order.tableLabel || "Masasız"}</CardTitle>
-          <span className="font-mono text-sm text-neutral-400">{formatElapsed(order.occurredAt, now)}</span>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex min-w-0 items-center gap-2 text-lg">
+            <span className="truncate">{order.tableLabel || "Masasız"}</span>
+            {/* Only "online_qr" is badged. A missing source (older backend,
+                omitempty on the wire) and the "pos" default both render
+                nothing — the absence of a badge is what means "staff-placed",
+                so an unknown value is never mislabelled as one or the other. */}
+            {order.source === "online_qr" && (
+              <Badge
+                variant="outline"
+                className="shrink-0 border-sky-500/40 bg-sky-500/15 text-sky-300"
+                title="QR ile müşteri siparişi"
+              >
+                <QrCode className="mr-1 size-3" />
+                QR
+              </Badge>
+            )}
+          </CardTitle>
+          <span className="shrink-0 font-mono text-sm text-neutral-400">{formatElapsed(order.occurredAt, now)}</span>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -298,8 +342,18 @@ export default function KitchenPage() {
         </div>
       </div>
 
-      {status === "error" && errorMessage && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+      {/* A transient failure now carries a message too (timeout / dropped
+          stream), so the banner is rendered for "reconnecting" as well —
+          amber rather than red, because that state recovers on its own. */}
+      {errorMessage && (status === "error" || status === "reconnecting") && (
+        <div
+          role="status"
+          className={
+            status === "error"
+              ? "mb-4 flex items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+              : "mb-4 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
+          }
+        >
           <AlertTriangle className="size-4 shrink-0" />
           {errorMessage}
         </div>

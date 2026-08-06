@@ -22,13 +22,9 @@ const (
 
 // systemRoleKeys are the templates cloned into every new tenant. A system role
 // missing from this list is seeded platform-wide but never reaches a tenant, so
-// nobody can be granted it — identity/000017 backfills existing tenants, but
-// only this list keeps future ones correct.
-//
-// NOTE: "warehouse" (identity/000010) is absent and has no backfill either, so
-// no tenant holds it today. That predates this list's waiter entry and is
-// tracked separately — adding it here silently changes onboarding for a role
-// that is already live.
+// nobody can be granted it — identity/000017 and identity/000018 backfill
+// existing tenants for "waiter" and "warehouse" respectively, but only this
+// list keeps future ones correct.
 var systemRoleKeys = []string{
 	"cashier",
 	"shift_manager",
@@ -37,6 +33,7 @@ var systemRoleKeys = []string{
 	"bar",
 	"manager",
 	"waiter",
+	"warehouse",
 }
 
 type tenantCreatedPayload struct {

@@ -90,6 +90,11 @@ function ProductSheetBody({
       side="bottom"
       closeLabel={tCommon("close")}
       className="max-h-[90dvh] rounded-t-2xl"
+      // A product with no description renders no SheetDescription, and Radix
+      // warns unless the opt-out is explicit. Spread conditionally: when a
+      // description IS rendered the prop must stay absent so Radix keeps its
+      // own aria-describedby wiring.
+      {...(product.description === "" ? { "aria-describedby": undefined } : {})}
     >
       <SheetHeader className="pr-12 text-left">
         <SheetTitle className="text-lg">{product.name}</SheetTitle>

@@ -1,6 +1,7 @@
 "use client"
 
-import { ClipboardList, Users } from "lucide-react"
+import { ClipboardList, QrCode, Users } from "lucide-react"
+import { useTranslations } from "next-intl"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,7 +17,12 @@ import {
 } from "@/components/ui/table"
 import { useCancelCheck, useChecks, useCloseCheck } from "@/hooks/use-pos"
 import { cn } from "@/lib/utils"
-import { formatCheckTotal, formatOpenDuration, isLongOpenCheck } from "@/lib/pos-format"
+import {
+  formatCheckDuration,
+  formatCheckTotal,
+  formatOpenDuration,
+  isLongOpenCheck,
+} from "@/lib/pos-format"
 import type { Check, CheckStatus } from "@/types"
 import { toast } from "sonner"
 
@@ -31,28 +37,21 @@ function statusBadgeClass(status: CheckStatus): string {
   }
 }
 
-function statusLabel(status: CheckStatus): string {
-  switch (status) {
-    case "open":
-      return "Açık"
-    case "closed":
-      return "Kapalı"
-    case "cancelled":
-      return "İptal"
-  }
-}
-
-// openDurationLabel shows how long a check has been (or was) open. For an
-// open check it's elapsed time up to now; for a closed/cancelled one it's
-// the span between opened_at and closed_at, so the column doesn't render a
-// duration that's still silently growing after the check is done.
-function openDurationLabel(check: Check): string {
+// durationFor renders the "Süre" column with two different formatters on
+// purpose. An open check is a live, still-growing figure and keeps the
+// relative-time reading ("az önce", "3s+" once it has been open too long).
+// A closed/cancelled one is a finished span measured opened_at -> closed_at,
+// so it must be a duration: a QR check that lived 14 seconds reads "14 sn",
+// where formatOpenDuration would have printed "az önce" — forever, including
+// a month later.
+function durationFor(check: Check): string {
   if (check.status === "open") return formatOpenDuration(check.opened_at)
   if (!check.closed_at) return "—"
-  return formatOpenDuration(check.opened_at, new Date(check.closed_at))
+  return formatCheckDuration(check.opened_at, new Date(check.closed_at))
 }
 
 export default function ChecksPage() {
+  const t = useTranslations("posChecks")
   const { data, isLoading } = useChecks({ refetchInterval: 30_000 })
   const closeCheck = useCloseCheck()
   const cancelCheck = useCancelCheck()
@@ -62,31 +61,31 @@ export default function ChecksPage() {
   const handleClose = async (id: string, label: string) => {
     try {
       await closeCheck.mutateAsync(id)
-      toast.success(`"${label}" adisyonu kapatıldı`)
+      toast.success(t("closed", { table: label }))
     } catch {
-      toast.error("Adisyon kapatılamadı")
+      toast.error(t("closeFailed"))
     }
   }
 
   const handleCancel = async (id: string, label: string) => {
     try {
       await cancelCheck.mutateAsync(id)
-      toast.success(`"${label}" adisyonu iptal edildi`)
+      toast.success(t("cancelled", { table: label }))
     } catch {
-      toast.error("Adisyon iptal edilemedi")
+      toast.error(t("cancelFailed"))
     }
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Adisyonlar</h1>
-        <p className="text-muted-foreground">Tüm adisyonları görüntüleyin ve yönetin.</p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
+        <p className="text-muted-foreground">{t("subtitle")}</p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Adisyon Listesi</CardTitle>
+          <CardTitle>{t("listTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -98,27 +97,45 @@ export default function ChecksPage() {
           ) : checks.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <ClipboardList className="size-12 text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold">Adisyon bulunamadı</h3>
+              <h3 className="text-lg font-semibold">{t("empty")}</h3>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Masa</TableHead>
-                  <TableHead className="text-center">Kişi</TableHead>
-                  <TableHead className="text-right">Tutar</TableHead>
-                  <TableHead>Not</TableHead>
-                  <TableHead>Durum</TableHead>
-                  <TableHead>Açılış</TableHead>
-                  <TableHead>Kapanış</TableHead>
-                  <TableHead>Süre</TableHead>
-                  <TableHead className="w-[160px]">İşlemler</TableHead>
+                  <TableHead>{t("columnTable")}</TableHead>
+                  <TableHead className="text-center">{t("columnPax")}</TableHead>
+                  <TableHead className="text-right">{t("columnTotal")}</TableHead>
+                  <TableHead>{t("columnNote")}</TableHead>
+                  <TableHead>{t("columnStatus")}</TableHead>
+                  <TableHead>{t("columnOpenedAt")}</TableHead>
+                  <TableHead>{t("columnClosedAt")}</TableHead>
+                  <TableHead>{t("columnDuration")}</TableHead>
+                  <TableHead className="w-[160px]">{t("columnActions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {checks.map((check) => (
                   <TableRow key={check.id}>
-                    <TableCell className="font-medium">{check.table_label}</TableCell>
+                    <TableCell className="font-medium">
+                      <span className="flex items-center gap-2">
+                        {check.table_label}
+                        {/* Rendered only when the API actually sends `source`.
+                            It does not today (checkResponse omits the field —
+                            see the CheckSource doc comment in types), so this
+                            badge stays invisible until the backend exposes it,
+                            rather than mislabelling every check as POS. */}
+                        {check.source === "online_qr" && (
+                          <Badge
+                            variant="outline"
+                            className="border-sky-200 bg-sky-50 text-sky-700"
+                          >
+                            <QrCode className="size-3" />
+                            {t("sourceOnlineQr")}
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-center tabular-nums">
                       <span className="inline-flex items-center gap-1">
                         <Users className="size-3.5 text-muted-foreground" />
@@ -131,7 +148,7 @@ export default function ChecksPage() {
                     <TableCell className="text-muted-foreground text-xs">{check.note || "—"}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className={statusBadgeClass(check.status)}>
-                        {statusLabel(check.status)}
+                        {t(`status.${check.status}`)}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">
@@ -150,7 +167,7 @@ export default function ChecksPage() {
                           : "text-muted-foreground",
                       )}
                     >
-                      {openDurationLabel(check)}
+                      {durationFor(check)}
                     </TableCell>
                     <TableCell>
                       {check.status === "open" && (
@@ -161,7 +178,7 @@ export default function ChecksPage() {
                             onClick={() => handleClose(check.id, check.table_label)}
                             disabled={closeCheck.isPending}
                           >
-                            Kapat
+                            {t("close")}
                           </Button>
                           <Button
                             variant="ghost"
@@ -170,7 +187,7 @@ export default function ChecksPage() {
                             disabled={cancelCheck.isPending}
                             className="text-destructive hover:text-destructive"
                           >
-                            İptal
+                            {t("cancel")}
                           </Button>
                         </div>
                       )}

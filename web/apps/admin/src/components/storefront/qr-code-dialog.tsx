@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertTriangle, Loader2, Printer, QrCode, RefreshCw, Trash2 } from "lucide-react"
+import { AlertTriangle, Check, Copy, Loader2, Printer, QrCode, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { QRCodeSVG } from "qrcode.react"
 import { useEffect, useState } from "react"
@@ -58,6 +58,7 @@ export function QRCodeDialog({
   // good and the sticker can only be replaced, never re-printed. Same in-memory
   // rule the CTX token follows in lib/api.ts.
   const [rawToken, setRawToken] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
 
   const { data: codes, isLoading } = useQRCodes(open ? branchId : "")
   const createQR = useCreateQRCode()
@@ -79,10 +80,29 @@ export function QRCodeDialog({
   useEffect(() => {
     if (open) return
     setRawToken(null)
+    setCopied(false)
     resetCreate()
     resetRotate()
     resetRevoke()
   }, [open, resetCreate, resetRotate, resetRevoke])
+
+  // The URL is shown as selectable text next to the QR image so the code can
+  // also be delivered without a printer (WhatsApp, a note on the table). It is
+  // derived from the same in-memory rawToken and dies with it — nothing new is
+  // persisted, and this block only ever renders in the moment right after the
+  // token was issued.
+  async function handleCopy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      toast.success(t("qr.urlCopied"))
+    } catch {
+      // Clipboard access is denied on insecure origins and in some embedded
+      // browsers; the URL itself is still on screen and selectable, so this is
+      // a degraded path, not a failure of the flow.
+      toast.error(t("qr.urlCopyFailed"))
+    }
+  }
 
   const busy = createQR.isPending || revokeQR.isPending || rotateQR.isPending
 
@@ -144,6 +164,25 @@ export function QRCodeDialog({
               <QRCodeSVG value={menuURLFor(rawToken)} size={220} level="M" marginSize={2} />
               <span className="text-sm font-semibold text-black">{tableLabel}</span>
             </div>
+
+            <div className="w-full space-y-1">
+              <span className="text-xs font-medium text-muted-foreground">{t("qr.urlLabel")}</span>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded-md border bg-muted px-2 py-1.5 text-xs select-all">
+                  {menuURLFor(rawToken)}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label={t("qr.copyUrl")}
+                  onClick={() => void handleCopy(menuURLFor(rawToken))}
+                >
+                  {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+                </Button>
+              </div>
+            </div>
+
             <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               {t("qr.oneTimeWarning")}
@@ -176,6 +215,11 @@ export function QRCodeDialog({
           <div className="flex gap-2">
             {activeCode ? (
               <>
+                {/* Only "İptal et" is destructive: it retires the printed
+                    sticker and leaves the table with no working code. "Yenile"
+                    also invalidates the old token, but it hands back a working
+                    replacement in the same step, so it must not wear the same
+                    red as the one-way action next to it. */}
                 <Button variant="destructive" onClick={handleRevoke} disabled={busy}>
                   {revokeQR.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -184,7 +228,7 @@ export function QRCodeDialog({
                   )}
                   {t("qr.revoke")}
                 </Button>
-                <Button onClick={handleRotate} disabled={busy}>
+                <Button variant="secondary" onClick={handleRotate} disabled={busy}>
                   {rotateQR.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (

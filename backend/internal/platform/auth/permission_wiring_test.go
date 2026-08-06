@@ -80,6 +80,11 @@ var seedRoleUUIDs = map[string]string{
 	// Its grants were invisible to this guard until the parser was widened to
 	// scan every identity up-migration rather than only 000006.
 	"00000001-0000-0000-0000-000000000007": "warehouse",
+	// waiter is seeded in identity/000017_seed_waiter_role, which closed the
+	// gap authz.rego's system_roles table had flagged since Sprint-5: the role
+	// was forward-declared and granted pos.table.read there, but no migration
+	// created it, so no principal could hold it.
+	"00000001-0000-0000-0000-000000000008": "waiter",
 }
 
 // permissionPair is a (resource, action) column pair as seeded into
@@ -177,8 +182,13 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 	},
 
 	// -- tables (pos.table.*) --------------------------------------------
+	// CheckRole is deliberately "waiter": identity/000017 widened this pair
+	// from the counter roles to the garson that authz.rego's
+	// pos_table_read_actions had listed all along. Asserting the newest holder
+	// is what proves that seed is actually enforced — cashier/shift_manager/
+	// kitchen/bar reach the same rule through the same any_role set.
 	{"tables", "read"}: {
-		Wired: true, CheckRole: "cashier", CheckAction: "pos.table.read",
+		Wired: true, CheckRole: "waiter", CheckAction: "pos.table.read",
 	},
 	{"tables", "create"}: {
 		Wired: true, CheckRole: "shift_manager", CheckAction: "pos.table.manage",

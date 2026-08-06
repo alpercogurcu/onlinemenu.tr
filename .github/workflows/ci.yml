@@ -57,23 +57,28 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
           cache-dependency-path: backend/go.sum
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        # Pinned: "@latest" would silently pick up whatever gosec ships the
+        # day CI happens to run, which is the same unpinned-dependency risk
+        # this repo forbids for container image tags.
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
 
       - name: Run gosec
         working-directory: backend
-        run: gosec -conf .gosec.yml -exclude-generated ./...
+        # -conf parses JSON only (gosec/config.go uses encoding/json). The
+        # former .gosec.yml was YAML, so this step failed while *loading* the
+        # config and never scanned anything. severity/confidence are CLI-only
+        # flags in gosec, not config keys — the intent of the old YAML fields
+        # lives here now; the exclusions live in backend/.gosec.json.
+        run: gosec -conf .gosec.json -exclude-generated -severity medium -confidence medium ./...
 
       - name: Run Trivy (filesystem)
-        uses: aquasecurity/trivy-action@master
+        # Pinned by commit SHA (tag v0.36.0), not "@master" — an Action pinned
+        # to a floating branch can change behavior/exit codes under CI without
+        # any change on this repo's side.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           severity: HIGH,CRITICAL
@@ -227,3 +232,28 @@ jobs:
       - name: Test (pos-desktop)
         working-directory: web
         run: pnpm --filter @onlinemenu/pos-desktop test:run
+
+      - name: Typecheck (menu)
+        working-directory: web
+        run: pnpm --filter @onlinemenu/menu typecheck
+
+      - name: Test (menu)
+        working-directory: web
+        run: pnpm --filter @onlinemenu/menu test:run
+
+      - name: Build (menu)
+        working-directory: web
+        # The root "build" script only covers admin + pos-desktop, so nothing
+        # in CI compiled this app before. It is built here and not via that
+        # script because the menu image is produced by deploy/menu/Dockerfile,
+        # not by the root script.
+        #
+        # PUBLIC_API_ORIGIN is set for the build on purpose: next.config.ts
+        # serialises the /api/public/v1 rewrite destination into
+        # routes-manifest.json at BUILD time. Leaving it unset here would still
+        # build, but it would hide the fact that this value is build-scoped.
+        # The placeholder is never deployed — the real value is a build arg in
+        # deploy/docker-compose.prod.yml.
+        env:
+          PUBLIC_API_ORIGIN: http://api:8080
+        run: pnpm --filter @onlinemenu/menu build

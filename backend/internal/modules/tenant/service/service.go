@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -127,6 +128,33 @@ func (s *Service) GetEffectiveIntegrator(ctx context.Context, tenantID, branchID
 
 // --- TenantWriter ---
 
+// defaultEnabledModules is the module set a tenant is born with when the
+// caller does not specify one explicitly (t.EnabledModules is empty/nil).
+// storefront (QR dine-in, ADR-ARCH-006) ships as a baseline feature rather
+// than an opt-in purchase, so every new tenant gets it without needing an
+// onboarding flow to know to ask for it.
+//
+// This only fills a gap — it is not unioned into a caller-supplied list.
+// enabled_modules is ADR-ARCH-001's billing/entitlement layer ("hangi
+// modüller satın alındı"); silently adding storefront to an explicit,
+// deliberately-chosen module list would override that purchase decision.
+// "Default when unspecified" is the only shape that adds storefront for new
+// tenants without doing that — see applyDefaultModules.
+var defaultEnabledModules = []string{"storefront"}
+
+// applyDefaultModules returns modules unchanged if the caller specified any
+// module at all, and defaultEnabledModules otherwise. Split out from Create
+// so the empty/non-empty decision is unit-testable without a database.
+func applyDefaultModules(modules []string) []string {
+	if len(modules) > 0 {
+		return modules
+	}
+	// Clone: callers must not receive the package-level backing array — an
+	// append() on the returned slice downstream would silently corrupt the
+	// default for every tenant created afterward in this process.
+	return slices.Clone(defaultEnabledModules)
+}
+
 // Create inserts a new tenant and publishes the tenant.created.v1 event.
 //
 // The tenant id is generated here (UUIDv7) rather than by the DB so that the
@@ -139,6 +167,7 @@ func (s *Service) Create(ctx context.Context, t pub.Tenant) (pub.Tenant, error) 
 		return pub.Tenant{}, fmt.Errorf("service: create tenant: generate id: %w", err)
 	}
 	t.ID = newID
+	t.EnabledModules = applyDefaultModules(t.EnabledModules)
 
 	var created pub.Tenant
 	err = s.db.WithTenantTx(ctx, newID, func(tx pgx.Tx) error {

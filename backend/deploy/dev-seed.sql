@@ -11,7 +11,7 @@ DECLARE
 BEGIN
     -- Tenant
     INSERT INTO tenants (id, name, slug, plan, enabled_modules, is_active)
-    VALUES (v_tenant_id, 'Test Restoran', 'test-restoran', 'starter', '["pos","catalog","inventory","billing","party","hr"]'::jsonb, TRUE)
+    VALUES (v_tenant_id, 'Test Restoran', 'test-restoran', 'starter', '["pos","catalog","inventory","billing","party","hr","storefront"]'::jsonb, TRUE)
     ON CONFLICT (id) DO NOTHING;
 
     -- Branch

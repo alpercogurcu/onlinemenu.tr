@@ -139,3 +139,38 @@ func TestWrapNotFound(t *testing.T) {
 		assert.Contains(t, err.Error(), "service: op:")
 	})
 }
+
+func TestApplyDefaultModules(t *testing.T) {
+	tests := []struct {
+		name    string
+		modules []string
+		want    []string
+	}{
+		{
+			name:    "nil modules fall back to the default set",
+			modules: nil,
+			want:    defaultEnabledModules,
+		},
+		{
+			name:    "empty slice falls back to the default set",
+			modules: []string{},
+			want:    defaultEnabledModules,
+		},
+		{
+			name:    "caller's explicit list is respected verbatim, not unioned with the default",
+			modules: []string{"pos", "catalog"},
+			want:    []string{"pos", "catalog"},
+		},
+		{
+			name:    "a caller who deliberately excludes storefront is not overridden",
+			modules: []string{"pos"},
+			want:    []string{"pos"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, applyDefaultModules(tt.modules))
+		})
+	}
+}

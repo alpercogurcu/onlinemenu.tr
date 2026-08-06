@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { Category, Menu, ModifierGroup, Product } from "@/types"
+import type { Category, Menu, MenuItem, ModifierGroup, Product } from "@/types"
 
 export function useProducts(params?: { limit?: number; offset?: number }) {
   return useQuery({
@@ -82,6 +82,51 @@ export function useMenus() {
     queryFn: async () => {
       const { data } = await api.get<Menu[]>("/api/v1/catalog/menus")
       return data ?? []
+    },
+  })
+}
+
+export function useMenuItems(menuId: string) {
+  return useQuery({
+    queryKey: ["menus", menuId, "items"],
+    queryFn: async () => {
+      const { data } = await api.get<MenuItem[]>(`/api/v1/catalog/menus/${menuId}/items`)
+      return data ?? []
+    },
+    enabled: Boolean(menuId),
+  })
+}
+
+// POST /menus/{id}/items is an upsert (ON CONFLICT (menu_id, product_id) DO
+// UPDATE in MenuItemRepo.AddItem), so the same call both adds a product and
+// edits an already-placed one's price override / active flag. It answers 204
+// with no body — nothing to return to the caller.
+export function useAddMenuItem() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      menuId,
+      ...body
+    }: {
+      menuId: string
+      product_id: string
+      price_override: number | null
+      is_active: boolean
+      sort_order?: number
+    }) => api.post(`/api/v1/catalog/menus/${menuId}/items`, body),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["menus", variables.menuId, "items"] })
+    },
+  })
+}
+
+export function useRemoveMenuItem() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ menuId, productId }: { menuId: string; productId: string }) =>
+      api.delete(`/api/v1/catalog/menus/${menuId}/items/${productId}`),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["menus", variables.menuId, "items"] })
     },
   })
 }

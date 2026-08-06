@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { Check, Order, OrderStatus, PosZonePlan } from "@/types"
+import type { Check, Order, OrderStatus, PosTable, PosTableStatus, PosZone, PosZonePlan } from "@/types"
 
 // useTables returns the branch floor plan already grouped by zone — that is
 // the backend's response shape (zonePlanResponse), not a client-side grouping,
@@ -19,6 +19,116 @@ export function useTables(branchId: string, params?: { refetchInterval?: number 
     },
     enabled: branchId !== "",
     refetchInterval: params?.refetchInterval,
+  })
+}
+
+// useZones lists the branch's zones, including the ones that have no table
+// yet — GET /tables cannot substitute for it (see the PosZone doc comment).
+export function useZones(branchId: string) {
+  return useQuery({
+    queryKey: ["pos-zones", branchId],
+    queryFn: async () => {
+      const { data } = await api.get<PosZone[]>("/api/v1/pos/zones", {
+        params: { branch_id: branchId },
+      })
+      return data ?? []
+    },
+    enabled: branchId !== "",
+  })
+}
+
+// Zone and table writes both change the floor plan the tables page renders,
+// so every mutation below invalidates BOTH caches: a renamed zone shows up in
+// the plan (zone_name is denormalised into it) and a new table shows up in the
+// zone it was attached to.
+function invalidatePlan(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: ["pos-zones"] })
+  void qc.invalidateQueries({ queryKey: ["pos-tables"] })
+}
+
+export function useCreateZone() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: { branch_id: string; name: string; floor: number }) => {
+      const { data } = await api.post<PosZone>("/api/v1/pos/zones", body)
+      return data
+    },
+    onSuccess: () => invalidatePlan(qc),
+  })
+}
+
+// PATCH semantics: only the keys present in `patch` are sent, so an omitted
+// field keeps its stored value (backend service.ZonePatch relies on this —
+// sending `is_active: undefined` is fine, JSON.stringify drops it, but sending
+// an explicit null would not be).
+export function useUpdateZone() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      id,
+      ...patch
+    }: {
+      id: string
+      name?: string
+      floor?: number
+      is_active?: boolean
+    }) => {
+      const { data } = await api.patch<PosZone>(`/api/v1/pos/zones/${id}`, patch)
+      return data
+    },
+    onSuccess: () => invalidatePlan(qc),
+  })
+}
+
+export function useCreateTable() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: {
+      branch_id: string
+      zone_id: string
+      name: string
+      capacity: number
+    }) => {
+      const { data } = await api.post<PosTable>("/api/v1/pos/tables", body)
+      return data
+    },
+    onSuccess: () => invalidatePlan(qc),
+  })
+}
+
+export function useUpdateTable() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      id,
+      ...patch
+    }: {
+      id: string
+      zone_id?: string
+      name?: string
+      capacity?: number
+      is_active?: boolean
+    }) => {
+      const { data } = await api.patch<PosTable>(`/api/v1/pos/tables/${id}`, patch)
+      return data
+    },
+    onSuccess: () => invalidatePlan(qc),
+  })
+}
+
+// "occupied" is deliberately not offerable by callers: the backend's
+// TableService.SetStatus rejects it outright (ErrManualOccupyForbidden) —
+// a table only becomes occupied as a side effect of opening a check.
+export type ManualTableStatus = Exclude<PosTableStatus, "occupied">
+
+export function useSetTableStatus() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: ManualTableStatus }) => {
+      const { data } = await api.post<PosTable>(`/api/v1/pos/tables/${id}/status`, { status })
+      return data
+    },
+    onSuccess: () => invalidatePlan(qc),
   })
 }
 

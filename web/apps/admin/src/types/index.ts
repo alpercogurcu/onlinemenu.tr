@@ -55,6 +55,18 @@ export interface Menu {
   updated_at: string
 }
 
+// A product placed on a menu (backend menuItemResponse). The row carries no
+// product name — the UI resolves it from the products list — and no
+// sort_order: the create endpoint accepts one, but the read DTO omits it.
+export interface MenuItem {
+  menu_id: string
+  product_id: string
+  tenant_id: string
+  // Kuruş (int64) or null when the menu uses the product's own price.
+  price_override: number | null
+  is_active: boolean
+}
+
 // POS
 export type CheckStatus = "open" | "closed" | "cancelled"
 export type OrderStatus =
@@ -65,11 +77,20 @@ export type OrderStatus =
   | "delivered"
   | "rejected"
   | "cancelled"
+// Which surface opened the check (backend domain.Source). OPTIONAL on
+// purpose: the value exists on the row and is set to "online_qr" by the
+// storefront flow, but the REST DTO (checkResponse in
+// backend/internal/modules/pos/http/handler.go) does not serialize it yet, so
+// today it is always undefined over the wire. The UI therefore renders the
+// source badge only when the field is actually present.
+export type CheckSource = "pos" | "online_qr"
+
 export interface Check {
   id: string
   tenant_id: string
   branch_id: string
   table_label: string
+  source?: CheckSource
   // Guest count (kişi sayısı). Always present — lives directly on
   // domain.Check, no extra query needed (see backend checkResponse doc).
   pax: number
@@ -384,6 +405,18 @@ export interface PosZonePlan {
   zone_name: string
   floor: number
   tables: PosTable[]
+}
+
+// GET /api/v1/pos/zones?branch_id= (backend zoneResponse). Needed in addition
+// to the zone plan above because the plan is built by grouping TABLE rows: a
+// zone with no tables yet never appears in it, and that is exactly the zone a
+// "add table" form has to offer right after the zone was created.
+export interface PosZone {
+  id: string
+  branch_id: string
+  name: string
+  floor: number
+  is_active: boolean
 }
 
 // Storefront — table QR codes (ADR-ARCH-006).

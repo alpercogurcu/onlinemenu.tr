@@ -229,6 +229,23 @@
         "basic",
         "onlinemenu-audience"
       ]
+    },
+    {
+      "clientId": "onlinemenu-admin-api",
+      "name": "Identity Admin API (service account, ADR-AUTH-003)",
+      "description": "Confidential client, client_credentials grant only. Backend uses this service account to write to Keycloak's Admin API for the staff-invite flow (POST /v1/identity/{tenantID}/staff). See deploy/keycloak/README.md § 'Personel Daveti'.",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "attributes": {},
+      "defaultClientScopes": [
+        "basic"
+      ],
+      "optionalClientScopes": []
     }
   ],
   "users": [
@@ -257,6 +274,18 @@
       "realmRoles": [
         "cashier"
       ]
+    },
+    {
+      "username": "service-account-onlinemenu-admin-api",
+      "enabled": true,
+      "serviceAccountClientId": "onlinemenu-admin-api",
+      "clientRoles": {
+        "realm-management": [
+          "create-user",
+          "query-users",
+          "manage-users"
+        ]
+      }
     }
   ]
 }

@@ -1,0 +1,724 @@
+# =============================================================================
+# Online Menu — PROD Docker Compose
+# Pilot hedefi: TEK restoran, TEK şube, TEK kasa, online-only (edge-sync yok).
+# Tek host üzerinde Docker Compose — Kubernetes Faz 2 (bkz. ADR'ler).
+#
+# Bu dosya docker-compose.dev.yml'nin bir KOPYASI DEĞİL, ayrı bir artefakt:
+#   - dev-only kolaylıklar yok: DB/Redis host'a açılmıyor, APP_ENV=dev yok,
+#     seed veri yok, izinli (permissive) CORS yok, /dev/login yok (kod zaten
+#     bunları APP_ENV=dev'e bağlıyor — bkz. backend/cmd/api/main.go:145-190).
+#   - İmaj tag'leri pin'li — "latest" hiçbir yerde yok.
+#   - Sırlar: yalnızca bu repo'nun zaten kullandığı iki mekanizma — Vault
+#     (runtime) ve .env.sops (bootstrap). Üçüncü bir mekanizma icat edilmedi.
+#   - Barındırma sağlayıcısı henüz seçilmedi: sağlayıcıya özgü hiçbir servis
+#     (yönetilen DB, yönetilen Vault/KMS, CDN, DNS...) varsayılmadı. Bu dosya
+#     yalnızca tek bir host + Docker Compose varsayıyor.
+#
+# ── İLK KURULUM SIRASI (bkz. ekip lideri raporu için tam liste) ─────────────
+#   1) cp deploy/.env.prod.example deploy/.env.prod  → gerçek değerleri doldur
+#      → sops -e deploy/.env.prod > deploy/.env.prod.sops (commit edilir)
+#      Deploy sırasında: sops -d deploy/.env.prod.sops > deploy/.env
+#   2) docker compose -f deploy/docker-compose.prod.yml up -d postgres redis nats vault
+#   3) Vault'u elle initialize + unseal et (bkz. aşağıda "vault" servisi notu —
+#      bu adım OTOMATİKE BAĞLANAMAZ, Shamir key'leri kimseye teslim edilemez)
+#   4) Vault'a runtime sırlarını yaz (keycloak/admin-client, vb.)
+#   5) docker compose -f deploy/docker-compose.prod.yml up -d keycloak
+#   6) Keycloak'ın ürettiği onlinemenu-admin-api client secret'ını al (bkz.
+#      deploy/keycloak/README.md) → adım 4'teki Vault path'ine yaz
+#   7) docker compose -f deploy/docker-compose.prod.yml build menu admin
+#      (menu/admin imajları api'den farklı olarak burada kaynaktan derlenir —
+#       sebebi ilgili servis notlarında; MENU_PUBLIC_URL ve KEYCLOAK_HOSTNAME
+#       derleme anında gömülür, sonradan değiştirmek yeniden build gerektirir)
+#   8) docker compose -f deploy/docker-compose.prod.yml up -d
+# =============================================================================
+
+name: onlinemenu-prod
+
+networks:
+  onlinemenu-prod:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  nats-data:
+  vault-data:
+  keycloak-data:
+  minio-data:
+  postgres-backups:
+  backup-tools-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 18 (pgvector/pg17) — tek stateful veri kaynağı.
+  # Host'a AÇILMIYOR — yalnızca compose ağı içinden erişilir (api, backup, kc).
+  # init.prod.sh: init.sql'in dev-only kopyası DEĞİL — bkz. o dosyadaki not.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD gerekli (.env.sops)}
+      POSTGRES_DB: ${POSTGRES_DB:-onlinemenu}
+      APP_MIGRATOR_PASSWORD: ${APP_MIGRATOR_PASSWORD:?APP_MIGRATOR_PASSWORD gerekli (.env.sops)}
+      APP_RUNTIME_PASSWORD: ${APP_RUNTIME_PASSWORD:?APP_RUNTIME_PASSWORD gerekli (.env.sops)}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.prod.sh:/docker-entrypoint-initdb.d/00_init_prod.sh:ro
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-onlinemenu}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  # ---------------------------------------------------------------------------
+  # Redis 8 — asynq/OPA cache/idempotency. Host'a AÇILMIYOR.
+  # Dev'de requirepass YOK — prod'da var (REDIS_PASSWORD zaten kod tarafında
+  # desteklenen bir alan, cache.Config.Password — üçüncü bir mekanizma değil).
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD gerekli (.env.sops)}
+    volumes:
+      - redis-data:/data
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # NATS JetStream — event bus. Host'a AÇILMIYOR (dev'de olduğu gibi auth'suz
+  # bırakıldı; tek koruma ağ izolasyonu — bkz. rapor "surprising" notu).
+  # ---------------------------------------------------------------------------
+  nats:
+    image: nats:2.12-alpine
+    restart: unless-stopped
+    command:
+      - "-js"
+      - "-sd=/data"
+      - "-m=8222"
+    volumes:
+      - nats-data:/data
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  # ---------------------------------------------------------------------------
+  # HashiCorp Vault — runtime sırların TEK kaynağı (DB credentials, Keycloak
+  # admin-api client secret). Dev'deki gibi "-dev" modu KULLANILMIYOR: file
+  # storage backend + kalıcı volume.
+  #
+  # ⚠️ MANUEL ADIM — otomatikleştirilemez: bu servis "server" modunda başlar
+  # ama İLK KURULUMDA SEALED'dir. Bir insan bir kere şunu çalıştırmalı:
+  #   docker compose -f docker-compose.prod.yml exec vault vault operator init
+  #   docker compose -f docker-compose.prod.yml exec vault vault operator unseal <key1>
+  #   ... (varsayılan eşik: 3/5 anahtar)
+  # Üretilen unseal key'leri ve root token GİT'E YAZILAMAZ, .env.sops'a DA
+  # YAZILAMAZ (bunlar Vault'un kendi kimlik doğrulama sırrı — Vault'u
+  # yapılandırmak için kullanılırlar, Vault'ta SAKLANAMAZLAR). Bunlar için
+  # ayrı, offline bir parola yöneticisi/güvenli kasa gerekir — bu repo'nun
+  # kapsamı dışında, bkz. rapor "insan ne yapmalı" listesi.
+  #
+  # Restart sonrası (host reboot, container restart) Vault yeniden SEALED
+  # olur — auto-unseal (KMS) barındırma sağlayıcısına özgü olduğu için
+  # BURADA KURULMADI (sağlayıcı henüz seçilmedi). Reboot sonrası unseal de
+  # manuel bir insan adımı.
+  # ---------------------------------------------------------------------------
+  vault:
+    image: hashicorp/vault:1.18
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_LOG_LEVEL: warn
+      VAULT_LOCAL_CONFIG: |
+        {
+          "listener": [{"tcp": {"address": "0.0.0.0:8200", "tls_disable": true}}],
+          "storage": [{"file": {"path": "/vault/data"}}],
+          "disable_mlock": false,
+          "ui": true
+        }
+    command: server
+    volumes:
+      - vault-data:/vault/data
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      # "Initialized:true" bekler — init edilmeden/unseal edilmeden bu servis
+      # HEALTHY olmaz ve api onu bekleyip başlamaz (depends_on: service_healthy).
+      # Bu bir hata değil: api gerçekten Vault olmadan ayağa kalkamaz.
+      test: ["CMD-SHELL", "vault status -address=http://localhost:8200 | grep -q 'Initialized.*true' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  # ---------------------------------------------------------------------------
+  # Keycloak 26.x — tek realm (ADR-AUTH-002). "start-dev" DEĞİL, "start".
+  # Realm importu idempotent: realm zaten varsa yeniden import etmez.
+  #
+  # ⚠️ Bu servis internetten doğrudan erişilebilir OLMALI (OIDC redirect akışı
+  # tarayıcıyı buraya yönlendirir) — ama realm'in sslRequired="external" ayarı
+  # (bkz. realm-onlinemenu.json) localhost DIŞINDAKİ HER bağlantıda HTTPS
+  # zorunlu kılar. Yani TLS'siz bu servis dıştan KULLANILAMAZ (fail-closed,
+  # kasıtlı). TLS'i burada kurmadık: domain/sertifika sağlayıcı kararı — bir
+  # insan bunun önüne bir ters proxy (Caddy/nginx/Traefik) koymalı. KC_PROXY_
+  # HEADERS bu ters proxy'yi bekleyecek şekilde ayarlı.
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:?KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME gerekli (.env.sops)}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD gerekli (.env.sops)}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD gerekli (.env.sops)}
+      # Barındırma kararı burada zorunlu hale geliyor: domain henüz yok, bu
+      # yüzden env değişkeni olarak bırakıldı, varsayılan verilmedi.
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:?KEYCLOAK_HOSTNAME gerekli — gerçek genel erişim domaini (ör. auth.example.com); TLS'i önündeki ters proxy sağlar}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HTTP_ENABLED: "true"
+      # Bu container HTTP dinler; TLS'i önündeki ters proxy sonlandırır ve
+      # X-Forwarded-* başlıklarını gönderir — reverse proxy KURULANA KADAR bu
+      # servis dıştan güvenle kullanılamaz (yukarıdaki not).
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_LOG_LEVEL: warn
+      KC_CACHE: local
+    command: start --import-realm --optimized=false
+    ports:
+      - "127.0.0.1:8090:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./keycloak:/opt/keycloak/data/import:ro
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-uyumlu nesne depolama. ŞU AN UYGULAMA KODU TARAFINDAN
+  # KULLANILMIYOR: internal/platform/storage/storage.go yalnızca bir arayüz,
+  # somut MinIO implementasyonu (minio.go) henüz yazılmadı. Buraya, buckets'ı
+  # gelecekteki implementasyon için hazır tutmak amacıyla eklendi — bugün
+  # üzerinden hiçbir veri akmıyor (bkz. rapor).
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER gerekli (.env.sops)}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD gerekli (.env.sops)}
+      MINIO_VOLUMES: /data
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local 2>/dev/null || curl -sf http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T13-07-22Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" &&
+        mc mb --ignore-existing local/invoices &&
+        mc mb --ignore-existing local/menu-images &&
+        mc mb --ignore-existing local/hr-documents &&
+        mc mb --ignore-existing local/tenant-documents &&
+        echo 'Buckets ready'
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER gerekli (.env.sops)}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD gerekli (.env.sops)}
+    networks:
+      - onlinemenu-prod
+
+  # ---------------------------------------------------------------------------
+  # api — Go monolit (cmd/api). Tüm domain modülleri burada (identity, tenant,
+  # catalog, pos, payment, inventory). Pilot ölçeği (tek şube) için tek
+  # binary yeterli; cmd/api-core/api-pos/api-finance ayrımı Faz 2 servis
+  # bölünmesi için var, bu pilotta kullanılmıyor.
+  #
+  # ⚠️ Sağlık kontrolü YOK: ko distroless imaj üretir (shell yok — CLAUDE.md
+  # "Container build: ko, Dockerfile yok"), bu yüzden CMD-SHELL/wget tabanlı
+  # bir HEALTHCHECK bu konteynerde ÇALIŞAMAZ. Doğrulanmadan yazılmadı — bkz.
+  # rapor. restart:unless-stopped ile telafi edilir; hiçbir başka servis
+  # api'nin HEALTHY olmasını beklemiyor — menu ve admin yalnızca
+  # service_started ile sıralanır, ki bu healthcheck gerektirmez.
+  # ---------------------------------------------------------------------------
+  api:
+    image: ${API_IMAGE:?API_IMAGE gerekli — ko build ile üretilip pushlanan pinned image (ör. registry.example.com/onlinemenu/api:v0.1.0), asla "latest"}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      APP_VERSION: ${API_IMAGE_TAG:-unknown}
+      HTTP_ADDR: ":8080"
+
+      DATABASE_URL: postgres://app_runtime:${APP_RUNTIME_PASSWORD:?APP_RUNTIME_PASSWORD gerekli (.env.sops)}@postgres:5432/${POSTGRES_DB:-onlinemenu}?sslmode=disable
+      # Outbox dispatcher ayrı bağlantı (app_migrator) — BOŞ BIRAKILAMAZ:
+      # boşsa dispatcher devre dışı kalır ve pos/payment/billing outbox
+      # event'leri NATS'a hiç yayınlanmadan DB'de birikir (sessiz, alarm yok
+      # — bkz. rapor madde 5).
+      OUTBOX_MIGRATOR_DSN: postgres://app_migrator:${APP_MIGRATOR_PASSWORD:?APP_MIGRATOR_PASSWORD gerekli (.env.sops)}@postgres:5432/${POSTGRES_DB:-onlinemenu}?sslmode=disable
+
+      NATS_URL: nats://nats:4222
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD gerekli (.env.sops)}
+
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:?VAULT_TOKEN gerekli — Vault init/unseal SONRASI üretilen bir token (root değil, uygun policy'li). Bkz. compose başındaki kurulum sırası}
+
+      CTX_TOKEN_SECRET: ${CTX_TOKEN_SECRET:?CTX_TOKEN_SECRET gerekli (.env.sops, openssl rand -hex 32)}
+
+      # Storefront misafir oturum anahtarı (ADR-ARCH-006 §5). CTX_TOKEN_SECRET
+      # ile AYNI değeri vermeyin: bu anahtar auth'suz public QR yüzeyine hizmet
+      # eder, personel token'larıyla anahtar paylaşması yanal geçiş yaratır.
+      STOREFRONT_GUEST_TOKEN_SECRET: ${STOREFRONT_GUEST_TOKEN_SECRET:?STOREFRONT_GUEST_TOKEN_SECRET gerekli (.env.sops, openssl rand -hex 32)}
+
+      # Keycloak — issuer PUBLIC domain olmalı (tarayıcının token aldığı yer),
+      # container-internal URL DEĞİL. KEYCLOAK_HOSTNAME zaten yukarıda zorunlu.
+      KEYCLOAK_ISSUER_URL: https://${KEYCLOAK_HOSTNAME:?KEYCLOAK_HOSTNAME gerekli}/realms/onlinemenu
+      KEYCLOAK_AUDIENCE: onlinemenu-backend
+      KEYCLOAK_REALM: onlinemenu
+      # Personel davet ucu (backlog-pilot.md madde 2) — bu client artık realm
+      # dosyasında (bkz. deploy/keycloak/README.md). İnternal URL kullanılır:
+      # bu, tarayıcı değil backend-to-backend Admin API çağrısı.
+      KEYCLOAK_ADMIN_CLIENT_ID: onlinemenu-admin-api
+      KEYCLOAK_ADMIN_BASE_URL: http://keycloak:8080
+
+      OPA_BUNDLE_PATH: /etc/onlinemenu/opa/bundles
+
+      # ADR-FISCAL-001: fiscal_device_type = 'none' üretimde yasak — burada
+      # env'den DEĞİL sabit değerden geliyor, "mock" hiçbir koşulda seçilemez.
+      FISCAL_DEVICE_TYPE: beko_x30tr_cloud
+      TOKENX_API_URL: ${TOKENX_API_URL:?TOKENX_API_URL gerekli (.env.sops)}
+      TOKENX_AUTH_URL: ${TOKENX_AUTH_URL:?TOKENX_AUTH_URL gerekli (.env.sops)}
+      TOKENX_CLIENT_ID: ${TOKENX_CLIENT_ID:?TOKENX_CLIENT_ID gerekli (.env.sops)}
+      TOKENX_CLIENT_SECRET: ${TOKENX_CLIENT_SECRET:?TOKENX_CLIENT_SECRET gerekli (.env.sops)}
+      TOKENX_BASKET_MODE: ${TOKENX_BASKET_MODE:-instant}
+      TOKENX_DEFAULT_TERMINAL: ${TOKENX_DEFAULT_TERMINAL:-}
+      # Boşsa webhook ucu sessizce (Warn log, süreç çökmez) devre dışı kalır —
+      # bkz. payment/http/webhook_handler.go:57 — burada zorunlu kılındı.
+      TOKENX_WEBHOOK_SECRET: ${TOKENX_WEBHOOK_SECRET:?TOKENX_WEBHOOK_SECRET gerekli (.env.sops, yüksek entropili rastgele değer)}
+
+      # Admin paneli farklı bir origin'den servis ediliyorsa doldurun; aynı
+      # origin/ters proxy path'i kullanılıyorsa boş bırakmak güvenli varsayılan.
+      POS_WS_ALLOWED_ORIGINS: ${POS_WS_ALLOWED_ORIGINS:-}
+
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+    volumes:
+      # OPA bundle: ko imajı yalnızca binary içerir (kodata/.ko.yaml yok) —
+      # bu yüzden bundle'ı repo checkout'undan bind-mount ediyoruz. Aksi halde
+      # OPA_BUNDLE_PATH konteyner içinde yok olur ve auth motoru boot'ta patlar
+      # (rego.Load bir dizin ister) — doğrulanmadan yazılmadı, bkz. rapor.
+      - ../backend/configs/opa/bundles:/etc/onlinemenu/opa/bundles:ro
+    ports:
+      # 127.0.0.1'e bağlı: gerçek dış trafik insan tarafından kurulacak bir
+      # TLS-sonlandıran ters proxy'den geçmeli (domain/sertifika kararı
+      # burada yok). Ters proxy bu porta yönlendirir.
+      - "127.0.0.1:8080:8080"
+    networks:
+      - onlinemenu-prod
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # menu — misafir QR vitrini (Next.js 16, web/apps/menu). ADR-ARCH-006.
+  #
+  # ⚠️ api'den FARKLI bir dağıtım modeli: api pinlenmiş, önceden üretilmiş bir
+  # ko imajını (${API_IMAGE}) ÇEKER; bu servis imajı BURADA, kaynaktan kurar.
+  # Sebep teknik, tercih değil: `next build` ürettiği çıktının içine derleme
+  # anındaki ayarları gömer (aşağıya bakın), yani "her ortamda aynı imaj"
+  # özelliği zaten sağlanamıyor. İmajın taşınabilir olmadığı bu asimetri
+  # bilinçli — bkz. rapor.
+  #
+  # ⚠️ PUBLIC_API_ORIGIN İKİ KEZ geçiyor ve ikisi de gerekli:
+  #   - build.args: next.config.ts'teki /api/public/v1 rewrite'ının hedefi
+  #     routes-manifest.json'a DERLEME anında yazılır. Yalnızca environment'a
+  #     koymak, prod imajında proxy'yi derleme-anı varsayılanına (localhost)
+  #     bakar halde bırakır — uygulamanın kendi config yorumu bunu gözlemlenmiş
+  #     bir hata olarak kaydediyor (her proxy çağrısı ECONNREFUSED).
+  #   - environment: /q/{token} route handler'ı bu değeri ÇALIŞMA anında okur.
+  # Değer aynı olmalı. `http://api:8080` yalnızca imaj bu compose ağının
+  # kurulacağı host'ta derlenirse doğrudur; başka yerde derlenmiş bir imaja
+  # gömülü adres taşınmaz.
+  #
+  # Dış trafik: 127.0.0.1'e bağlı — Keycloak ve api gibi, TLS sonlandıran ters
+  # proxy bir insan tarafından kurulur ve bu porta yönlendirir. Misafir çerezi
+  # `Secure` bayrağıyla yazıldığı için TLS'siz oturum kurulamaz (fail-closed).
+  # ---------------------------------------------------------------------------
+  menu:
+    # api'deki ${API_IMAGE:?} kalıbı burada kullanılamaz: o değişken "pull
+    # edilecek pinli imaj" demek, bu servis ise imajı kendi üretiyor. Yine de
+    # "latest" YOK — varsayılan etiket sabit ve açıkça yerel.
+    image: ${MENU_IMAGE:-onlinemenu/menu:local}
+    build:
+      context: ../web
+      dockerfile: ../deploy/menu/Dockerfile
+      args:
+        PUBLIC_API_ORIGIN: http://api:8080
+    restart: unless-stopped
+    depends_on:
+      api:
+        # service_healthy DEĞİL: api'nin healthcheck'i yok (yukarıdaki not).
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PUBLIC_API_ORIGIN: http://api:8080
+    ports:
+      - "127.0.0.1:3001:3001"
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      # "/" statik bir karşılama sayfası: yalnızca Node sunucusunun ayakta
+      # olduğunu ölçer, API/Redis/Postgres'e dokunmaz. API restart'ında bu
+      # konteyneri unhealthy göstermemesi kasıtlı.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3001/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # admin — personel yönetim paneli (Next.js 16, web/apps/admin).
+  #
+  # ⚠️ NEXT_PUBLIC_* değişkenleri TARAYICI paketine derleme anında gömülür;
+  # bu yüzden environment'ta değil build.args'ta duruyorlar. Buraya yazılan her
+  # değer yayınlanan JavaScript'ten okunabilir — sır konulamaz.
+  #
+  # ⚠️ Port 3000 DEĞİL 3002: 3000'i observability profilindeki grafana
+  # kullanıyor, ikisi birlikte açıldığında host portu çakışırdı.
+  #
+  # AÇIK EKSİK (rapor): src/app/api/pos/kitchen-stream/route.ts yalnızca
+  # NEXT_PUBLIC_API_CORE_URL okuyor ve konteyner içinde localhost:8081'e
+  # düşüyor — mutfak ekranı SSE akışı bu konteynerden çalışmaz. Düzeltmesi
+  # web/apps/admin/src altında, bu görevin kapsamı dışında bırakıldı.
+  # ---------------------------------------------------------------------------
+  admin:
+    image: ${ADMIN_IMAGE:-onlinemenu/admin:local}
+    build:
+      context: ../web
+      dockerfile: ../deploy/admin/Dockerfile
+      args:
+        # Sunucu tarafı: /api/core/* rewrite'ının hedefi (ağ-içi adres).
+        API_CORE_ORIGIN: http://api:8080
+        NEXT_PUBLIC_API_PROXY_ENABLED: "true"
+        # Misafir menü linkleri ve basılan QR kodları bu tabana göre üretilir.
+        # Gerçek genel domain olmalı — yanlışsa BASILMIŞ QR'lar bozulur.
+        NEXT_PUBLIC_MENU_URL: ${MENU_PUBLIC_URL:?MENU_PUBLIC_URL gerekli — misafir menüsünün genel adresi (ör. https://menu.example.com); QR kodlarına gömülür}
+        # Tarayıcı OIDC'ye buradan yönlenir: genel Keycloak adresi olmalı,
+        # http://keycloak:8080 DEĞİL.
+        NEXT_PUBLIC_KEYCLOAK_URL: https://${KEYCLOAK_HOSTNAME:?KEYCLOAK_HOSTNAME gerekli}
+        NEXT_PUBLIC_KEYCLOAK_REALM: onlinemenu
+        # Şifresiz dev-login formu kapalı. Dockerfile varsayılanı da "false",
+        # burada tekrar edilmesi kasıtlı: kaynak kodundaki kontrol fail-open
+        # (yalnızca tam "false" dizesi kapatıyor).
+        NEXT_PUBLIC_ENABLE_DEV_LOGIN: "false"
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_CORE_ORIGIN: http://api:8080
+    ports:
+      - "127.0.0.1:3002:3000"
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      # /login kimlik doğrulaması olmayan statik sayfa: API veya Keycloak'a
+      # bağlanmadan render olur, yani sunucunun servis verdiğini ölçer.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/login || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # postgres-backup — ADR-OPS-001. TEK zamanlayıcı (compose-içi döngü, host
+  # cron değil). Detay, test edilen restore, RPO/RTO tartışması:
+  # deploy/backup/README.md
+  # ---------------------------------------------------------------------------
+  postgres-backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      BACKUP_SUPERUSER: postgres
+      BACKUP_SUPERUSER_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD gerekli (.env.sops)}
+      APP_DB: ${POSTGRES_DB:-onlinemenu}
+      KEYCLOAK_DB: keycloak
+      BACKUP_DIR: /backups
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      MC_BIN_PATH: /opt/tools/mc
+      # Sağlayıcı seçilmediği için varsayılan boş — yalnızca yerel yedek alınır.
+      # Doldurulursa (herhangi bir S3-uyumlu endpoint) mc ile de yüklenir.
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+    entrypoint: ["/scripts/entrypoint.sh"]
+    volumes:
+      - ./backup/backup.sh:/scripts/backup.sh:ro
+      - ./backup/entrypoint.sh:/scripts/entrypoint.sh:ro
+      - postgres-backups:/backups
+      - backup-tools-data:/opt/tools
+    networks:
+      - onlinemenu-prod
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+
+  # =============================================================================
+  # OBSERVABILITY — profiles: [observability], varsayılanda ÇALIŞMAZ.
+  # Tek restoranlık bir host için opsiyonel: kaynak yeterliyse
+  #   docker compose -f docker-compose.prod.yml --profile observability up -d
+  # Servis tanımları dev'dekiyle aynı imaj/pin — yalnızca host'a port açmıyor
+  # (Grafana loopback'e bağlı, SSH tüneliyle erişim — domain gerektirmez).
+  # =============================================================================
+
+  prometheus:
+    image: prom/prometheus:v3.3.1
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=14d"
+      - "--web.enable-remote-write-receiver"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  loki:
+    image: grafana/loki:3.5.0
+    profiles: [observability]
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    profiles: [observability]
+    restart: unless-stopped
+    command: -config.file=/etc/tempo/config.yaml
+    expose:
+      - "4317"
+      - "4318"
+    volumes:
+      - ./tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/tmp/tempo
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3200/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    profiles: [observability]
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otelcol/config.yaml:/etc/otelcol/config.yaml:ro
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:13133 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  grafana:
+    image: grafana/grafana:11.6.1
+    profiles: [observability]
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER gerekli (.env.sops)}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD gerekli (.env.sops)}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_HTTP_PORT: "3000"
+      GF_FEATURE_TOGGLES_ENABLE: traceToMetrics,metricsSummary,tempoApmTable
+    ports:
+      # Yalnızca loopback — domain/TLS kararı gerektirmeden SSH tüneliyle
+      # ("ssh -L 3000:localhost:3000 host") erişim.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m

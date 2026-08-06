@@ -351,7 +351,7 @@ Trigger: Anlaşılamayan hata, production bug, test başarısızlığı
 
 ### Güvenlik Taraması
 - `task security:scan` — gosec (Go kod) + trivy (container/dependency CVE). CI'da zorunlu.
-- False-positive yönetimi `.gosec.yml` exclusion'larıyla yapılır — aynı false-positive'i her seansta kovalama.
+- False-positive yönetimi `backend/.gosec.json` exclusion'larıyla yapılır — aynı false-positive'i her seansta kovalama. Dosya **JSON olmak zorunda**: gosec `-conf`'u `encoding/json` ile okur, YAML verilirse tarama başlamadan ölür. `severity`/`confidence` config alanı değil, CLI bayrağıdır (Taskfile ve ci.yml'de).
 
 ### Frontend Monorepo
 - `web/apps/admin` ve `web/apps/pos-desktop` **birbirinden import edemez**.

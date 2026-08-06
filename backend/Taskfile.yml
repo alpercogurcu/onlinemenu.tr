@@ -91,7 +91,11 @@ tasks:
   security:scan:
     desc: "gosec + trivy güvenlik taraması"
     cmds:
-      - gosec -conf .gosec.yml -exclude-generated ./...
+      # -conf JSON bekler (gosec/config.go: encoding/json). Eski .gosec.yml YAML
+      # olduğu için bu komut config'i okurken exit 1 veriyordu — tarama hiç
+      # koşmadı. severity/confidence gosec'in config şemasında yok, yalnızca
+      # CLI bayrağı: .gosec.yml'deki niyet buraya taşındı (bkz. .gosec.json).
+      - gosec -conf .gosec.json -exclude-generated -severity medium -confidence medium ./...
       - trivy fs --severity HIGH,CRITICAL .
 
   gen:

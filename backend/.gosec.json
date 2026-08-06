@@ -1,0 +1,77 @@
+{
+  "_readme": [
+    "gosec yapılandırması JSON olmak ZORUNDA. -conf ile verilen dosya encoding/json",
+    "ile okunur (gosec/config.go, Config.ReadFrom). Bu dosyanın selefi .gosec.yml",
+    "YAML'dı ve gosec her çalışmada 'Failed to load config: invalid character g'",
+    "diyip exit 1 veriyordu — yani `task backend:security:scan` ve CI'daki Security",
+    "job'u bu repoda BUGÜNE KADAR HİÇ tarama yapmadı, yalnızca config okurken öldü.",
+    "",
+    "YAML'daki iki alan gosec'in config şemasında YOK, CLI bayrağıdır; anlamları",
+    "kaybolmasın diye komut satırına taşındı (backend/Taskfile.yml security:scan ve",
+    ".github/workflows/ci.yml 'Run gosec'):",
+    "  severity: medium / confidence: medium -> -severity medium -confidence medium",
+    "  rules.exclude-generated: true        -> -exclude-generated (zaten veriliyordu)",
+    "Ölçüldü: bugün low/low ile medium/medium AYNI 5 bulguyu veriyor, yani bu filtre",
+    "şu an hiçbir şeyi gizlemiyor. İleride yalnızca LOW severity bulgularını",
+    "gizleyecek — kaldırmak isterseniz bayrakları iki dosyadan da silmek yeterli.",
+    "",
+    "JSON yorum kabul etmediği için gerekçeler 'reason' alanlarında duruyor.",
+    "gosec bunları yok sayar: PathExcludeRule yalnızca path/rules alanlarını okur",
+    "(gosec/path_filter.go) ve bilinmeyen alanlar json.Unmarshal tarafından atılır.",
+    "'path' bir regex'tir ve bulgunun MUTLAK dosya yoluna karşı eşlenir; bu yüzden",
+    "desenler repo-göreli parça olarak yazılır (doğrulandı)."
+  ],
+
+  "global": {
+    "nosec": "false",
+    "audit": "true",
+
+    "_exclude-reason": [
+      "G104 (unhandled errors): errcheck linter'ı golangci-lint içinde zaten aynı",
+      "  şeye bakıyor; iki araçtan aynı bulguyu iki kez almanın değeri yok.",
+      "G202 (SQL string concatenation): 'SET LOCAL app.tenant_id' deseni.",
+      "  platform/db.WithTenantTx() tenant id'yi parametreli gönderir; gosec",
+      "  concat'ı görüp taint varsayıyor (ADR-SEC-001)."
+    ],
+    "exclude": "G104,G202"
+  },
+
+  "exclude-rules": [
+    {
+      "path": "internal/platform/db/generated/.*",
+      "rules": ["*"],
+      "reason": "Üretilen kod — elle düzeltilemez, kaynağı sqlc/şablon."
+    },
+    {
+      "path": ".*_mock\\.go$",
+      "rules": ["*"],
+      "reason": "Test mock'ları — üretim yüzeyi değil."
+    },
+    {
+      "path": ".*\\.pb\\.go$",
+      "rules": ["*"],
+      "reason": "protoc üretimi — elle düzeltilemez."
+    },
+
+    {
+      "path": "internal/platform/auth/keycloak_verifier\\.go$",
+      "rules": ["G704"],
+      "reason": "SSRF (taint analysis) yanlış pozitifi. İstek URL'i v.jwksURL; bu değer KEYCLOAK_ISSUER_URL'den composition root'ta türetilir (cmd/api/main.go newTokenVerifier) — hiçbir HTTP isteğinden, gövdeden veya path'ten beslenmiyor. gosec'in SSA taint analizi env kaynaklı sabiti 'dışarıdan gelen' sayıyor."
+    },
+    {
+      "path": "internal/modules/storefront/http/guest_middleware\\.go$",
+      "rules": ["G124"],
+      "reason": "Cookie Secure bayrağı yanlış pozitifi. Secure değeri Config.CookieSecure'dan gelen bir parametre (setGuestCookie'nin 'secure' argümanı); gosec yalnızca literal 'true' kabul ediyor. DİKKAT: dosyada zaten '#nosec G124' yorumu var ama İŞE YARAMIYOR — G124 bir SSA analizörü (analyzers/insecure_cookie.go) ve SSA bulguları AST tabanlı #nosec bastırmasından geçmiyor (kanıt: tarama özetinde 'Nosec: 0'). O yorumun akıbetine karar verilmeli."
+    },
+    {
+      "path": "internal/modules/payment/module\\.go$",
+      "rules": ["G118"],
+      "reason": "'cancel çağrılmadı' yanlış pozitifi. registerLoop cancel'ı dış kapsamdaki bir değişkende tutup fx OnStop hook'unda çağırıyor; analizör OnStart closure'ının dışına bakamadığı için sızıntı sanıyor. Kapatma yolu ayrıca 'done' kanalıyla bloklanarak doğrulanıyor."
+    },
+    {
+      "path": "internal/platform/outbox/dispatcher\\.go$",
+      "rules": ["G404"],
+      "reason": "Zayıf rastgelelik yanlış pozitifi. math/rand yalnızca retry backoff jitter'ı için kullanılıyor (dispatcher.go:477); tahmin edilebilir olması bir güvenlik sonucu doğurmuyor, crypto/rand burada gereksiz maliyet."
+    }
+  ]
+}

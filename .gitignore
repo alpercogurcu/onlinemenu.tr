@@ -31,6 +31,14 @@ go.work.sum
 *.pem
 *.key
 
+# deploy/.env.prod — docker-compose.prod.yml kurulum sırasının 1. adımında
+# .env.prod.example'dan kopyalanıp GERÇEK sırlarla doldurulan düz metin dosya.
+# Yukarıdaki ".env" kalıbı bunu YAKALAMAZ (tam ad eşleşmesi), o yüzden ayrıca
+# yazıldı. Şablon (.env.prod.example) ve şifreli hâl (.env.prod.sops) hariç.
+.env.prod
+!.env.prod.example
+!.env.prod.sops
+
 # SOPS şifreli dosyalar commit edilir; düz metin asla
 # .env.sops → commit edilir (şifreli)
 # .env      → commit edilmez (bu satır üstte)

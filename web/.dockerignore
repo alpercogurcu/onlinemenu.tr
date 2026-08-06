@@ -1,0 +1,39 @@
+# Build context for deploy/menu/Dockerfile and deploy/admin/Dockerfile is this
+# directory (web/). Everything listed here is excluded from that context.
+#
+# node_modules is the important one: the image installs its own dependencies
+# with pnpm inside the builder stage, and a host node_modules tree (macOS
+# arm64 binaries, symlinked pnpm store) copied over it would either break the
+# build or silently ship the wrong native binaries.
+node_modules
+**/node_modules
+
+# Build outputs — regenerated inside the image. Copying a host .next in would
+# make the image contents depend on whatever was last built locally.
+.next
+**/.next
+out
+**/out
+dist
+**/dist
+
+# Wails app: it is a Go/desktop target, never containerised. Its Go sources and
+# generated bindings are dead weight in a Next.js build context.
+apps/pos-desktop/build
+apps/pos-desktop/frontend/wailsjs
+
+# Local-only files. .env* must never enter an image layer: layers are readable
+# by anyone who can pull the image.
+.env
+**/.env
+**/.env.*
+!**/.env.example
+
+.git
+.gitignore
+**/*.log
+**/.DS_Store
+**/coverage
+**/.turbo
+**/.vscode
+**/.idea

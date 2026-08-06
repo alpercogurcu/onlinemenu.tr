@@ -208,27 +208,75 @@ func (h *Hub) broadcast(tenantID, branchID uuid.UUID, evt OrderEvent) {
 }
 
 // buildSnapshot loads the branch's currently-live orders and their table
-// labels (best-effort — see per-order note below) for the snapshot message
+// labels (best-effort — see snapshotTableLabels) for the snapshot message
 // sent immediately after a successful handshake.
+//
+// Table labels are resolved with ONE batched lookup for the whole snapshot,
+// not one per order: a busy branch can have hundreds of live orders, and the
+// per-order CheckService.GetByID this used to call cost a full
+// BEGIN/SET LOCAL/SELECT/COMMIT round-trip each (measured ~22ms/order on a
+// dev branch with 738 live orders — a 16s first paint on the KDS).
 func (h *Hub) buildSnapshot(ctx context.Context, tenantID, branchID uuid.UUID) (Snapshot, error) {
 	orders, err := h.orders.ListActiveByBranch(ctx, tenantID, branchID)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("pos/ws: list active orders: %w", err)
 	}
 
+	labels := h.snapshotTableLabels(ctx, tenantID, orders)
+
 	events := make([]OrderEvent, 0, len(orders))
 	for _, o := range orders {
+		label := ""
+		if o.CheckID != nil {
+			label = labels[*o.CheckID]
+		}
 		events = append(events, OrderEvent{
 			Type:       eventTypeForStatus(o.Status),
 			OrderID:    o.ID,
 			CheckID:    o.CheckID,
-			TableLabel: h.tableLabel(ctx, tenantID, o.CheckID),
+			TableLabel: label,
+			Source:     string(o.Source),
 			Status:     string(o.Status),
 			Seq:        0,
 			OccurredAt: o.UpdatedAt,
 		})
 	}
 	return newSnapshot(events), nil
+}
+
+// snapshotTableLabels resolves the table label of every dine-in check
+// referenced by orders, in a single batched query. Takeaway/delivery orders
+// carry no check_id and are skipped; ids are de-duplicated because several
+// orders (rounds) commonly share one check.
+//
+// Best-effort, exactly like the per-order lookup it replaces: a read failure
+// is logged and yields an empty map, so the snapshot still goes out with
+// every row missing only its table label rather than the client getting no
+// snapshot at all.
+func (h *Hub) snapshotTableLabels(ctx context.Context, tenantID uuid.UUID, orders []domain.Order) map[uuid.UUID]string {
+	seen := make(map[uuid.UUID]struct{}, len(orders))
+	ids := make([]uuid.UUID, 0, len(orders))
+	for _, o := range orders {
+		if o.CheckID == nil {
+			continue
+		}
+		if _, dup := seen[*o.CheckID]; dup {
+			continue
+		}
+		seen[*o.CheckID] = struct{}{}
+		ids = append(ids, *o.CheckID)
+	}
+	if len(ids) == 0 {
+		return map[uuid.UUID]string{}
+	}
+
+	labels, err := h.checks.TableLabelsByIDs(ctx, tenantID, ids)
+	if err != nil {
+		h.logger.Warn("pos/ws: resolve snapshot table_labels failed",
+			zap.Int("check_count", len(ids)), zap.Error(err))
+		return map[uuid.UUID]string{}
+	}
+	return labels
 }
 
 // tableLabel best-effort resolves a check's table label for dine-in orders.
@@ -306,6 +354,7 @@ func (h *Hub) handleOrderEvent(ctx context.Context, msg jetstream.Msg) error {
 		OrderID:    order.ID,
 		CheckID:    order.CheckID,
 		TableLabel: h.tableLabel(ctx, tenantID, order.CheckID),
+		Source:     string(order.Source),
 		Status:     string(order.Status),
 		Seq:        meta.Sequence.Stream,
 		OccurredAt: meta.Timestamp,

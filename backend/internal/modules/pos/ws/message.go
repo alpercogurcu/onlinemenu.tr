@@ -36,7 +36,15 @@ type OrderEvent struct {
 	OrderID    uuid.UUID  `json:"order_id"`
 	CheckID    *uuid.UUID `json:"check_id,omitempty"`
 	TableLabel string     `json:"table_label,omitempty"`
-	Status     string     `json:"status"`
+
+	// Source is the surface that created the order ("pos" | "online_qr" —
+	// domain.Source), read from the orders row, NOT from the outbox payload
+	// (DATA-002: events stay immutable, this is a snapshot/WS projection
+	// only). The KDS uses it to badge QR-originated tickets, which arrive
+	// without a waiter having seen them.
+	Source string `json:"source,omitempty"`
+
+	Status string `json:"status"`
 
 	// Seq is the JetStream stream sequence number of the event that produced
 	// this message (0 for snapshot rows, which have no single originating

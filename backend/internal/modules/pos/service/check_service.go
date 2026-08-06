@@ -228,6 +228,30 @@ func (s *CheckService) GetByID(ctx context.Context, tenantID, checkID uuid.UUID)
 	return c, nil
 }
 
+// TableLabelsByIDs batch-resolves table labels for many checks in one
+// tenant-scoped transaction. It exists so the kitchen WS snapshot can label
+// every order with a single query+transaction instead of one GetByID (and
+// therefore one BEGIN/SET LOCAL/COMMIT round-trip) per order — see
+// ws/hub.go buildSnapshot.
+//
+// Duplicate and zero-value ids are the caller's concern; a check id with no
+// visible row is absent from the returned map (treat as "no label").
+func (s *CheckService) TableLabelsByIDs(ctx context.Context, tenantID uuid.UUID, checkIDs []uuid.UUID) (map[uuid.UUID]string, error) {
+	if len(checkIDs) == 0 {
+		return map[uuid.UUID]string{}, nil
+	}
+	var labels map[uuid.UUID]string
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		labels, err = s.checkRepo.TableLabelsByCheckIDs(ctx, tx, checkIDs)
+		return err
+	})
+	if err != nil {
+		return nil, wrapErr(err, "pos/service/check: table labels by ids: %w")
+	}
+	return labels, nil
+}
+
 // GetByIDWithTotal is GetByID plus the check's current bill total (kurus —
 // CheckRepo.GetTotal, rejected/cancelled order items excluded). It exists
 // alongside the plain GetByID rather than replacing it because GetByID's

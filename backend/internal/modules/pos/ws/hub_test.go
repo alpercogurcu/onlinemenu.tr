@@ -23,6 +23,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,6 +59,7 @@ import (
 
 var (
 	sharedPool *db.Pool
+	sharedDSN  string
 	natsURL    string
 
 	kitchenRoleID = uuid.MustParse("00000001-0000-0000-0000-000000000004")
@@ -94,7 +97,8 @@ func TestMain(m *testing.M) {
 		_ = pgCtr.Terminate(ctx)
 		os.Exit(1)
 	}
-	sharedPool = newPool(ctx, superDSN, "app_runtime", "runtime_secret")
+	sharedDSN = superDSN
+	sharedPool = newPool(ctx, superDSN, "app_runtime", "runtime_secret", nil)
 
 	natsCtr, err := tccore.GenericContainer(ctx, tccore.GenericContainerRequest{
 		ContainerRequest: tccore.ContainerRequest{
@@ -219,7 +223,7 @@ func bootstrapRoles(ctx context.Context, superDSN string) error {
 	return nil
 }
 
-func newPool(ctx context.Context, baseDSN, user, password string) *db.Pool {
+func newPool(ctx context.Context, baseDSN, user, password string, tracer pgx.QueryTracer) *db.Pool {
 	cfg, err := pgxpool.ParseConfig(baseDSN)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse pool config: %v\n", err)
@@ -228,6 +232,7 @@ func newPool(ctx context.Context, baseDSN, user, password string) *db.Pool {
 	cfg.ConnConfig.User = user
 	cfg.ConnConfig.Password = password
 	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	cfg.ConnConfig.Tracer = tracer
 	cfg.MaxConns = 10
 
 	p, err := db.NewPoolFromConfig(ctx, cfg)
@@ -297,12 +302,17 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	return newTestEnvWithPool(t, sharedPool)
+}
+
+func newTestEnvWithPool(t *testing.T, pool *db.Pool) *testEnv {
+	t.Helper()
 	logger := zap.NewNop()
 
 	orderRepo := repo.NewOrderRepo()
 	checkRepo := repo.NewCheckRepo()
-	orders := service.NewOrderService(service.OrderParams{DB: sharedPool, OrderRepo: orderRepo, Logger: logger})
-	checks := service.NewCheckService(service.CheckParams{DB: sharedPool, CheckRepo: checkRepo, SaleReader: zeroSaleReader{}, Logger: logger})
+	orders := service.NewOrderService(service.OrderParams{DB: pool, OrderRepo: orderRepo, Logger: logger})
+	checks := service.NewCheckService(service.CheckParams{DB: pool, CheckRepo: checkRepo, SaleReader: zeroSaleReader{}, Logger: logger})
 
 	lc := &fakeLifecycle{}
 	// Unique stream name per test, BUT JetStream also rejects a new stream
@@ -575,6 +585,124 @@ func TestKitchenWS_Snapshot_IncludesReadyOrder(t *testing.T) {
 	// eventTypeForStatus normalizes every non-pending status to
 	// order.status_changed — there is no originating subject for a snapshot row.
 	require.Equal(t, "order.status_changed", row["type"])
+}
+
+// checkSelectCounter is a pgx.QueryTracer that counts how many statements
+// reading the "checks" table the snapshot path issues. It is the regression
+// guard for the N+1 that used to make buildSnapshot call
+// CheckService.GetByID once per order: a branch with 738 live orders spent
+// ~16s (measured on the dev stack) inside the snapshot before the client saw
+// its first byte.
+type checkSelectCounter struct {
+	mu           sync.Mutex
+	checkSelects int
+	total        int
+}
+
+func (c *checkSelectCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.total++
+	if strings.Contains(data.SQL, "FROM checks") {
+		c.checkSelects++
+	}
+	return ctx
+}
+
+func (c *checkSelectCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (c *checkSelectCounter) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.checkSelects, c.total = 0, 0
+}
+
+func (c *checkSelectCounter) snapshotCounts() (checkSelects, total int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.checkSelects, c.total
+}
+
+var _ pgx.QueryTracer = (*checkSelectCounter)(nil)
+
+// TestKitchenWS_Snapshot_TableLabelsAreBatched pins the fix for the KDS
+// first-paint blocker: table labels for the whole snapshot must be resolved
+// with ONE query against "checks", no matter how many orders (or distinct
+// checks) the branch has live. Asserting the query count rather than a wall
+// clock keeps the guard deterministic in CI.
+func TestKitchenWS_Snapshot_TableLabelsAreBatched(t *testing.T) {
+	counter := &checkSelectCounter{}
+	pool := newPool(context.Background(), sharedDSN, "app_runtime", "runtime_secret", counter)
+	t.Cleanup(pool.Close)
+
+	env := newTestEnvWithPool(t, pool)
+
+	tenantID := uuid.New()
+	branchID := uuid.New()
+
+	principal := auth.Principal{
+		PersonID: uuid.New(),
+		Ctx:      auth.ContextStaff,
+		TenantID: tenantID,
+		BranchID: branchID,
+		RoleIDs:  []uuid.UUID{kitchenRoleID},
+	}
+	srv := newAuthedServer(t, env.mux, map[string]auth.Principal{"kitchen-token": principal})
+	defer srv.Close()
+
+	const checkCount = 12
+	wantLabels := make(map[string]string, checkCount)
+	for i := range checkCount {
+		label := fmt.Sprintf("Masa %d", i+1)
+		chk, err := env.checks.Open(context.Background(), tenantID, principal, domain.Check{
+			BranchID:   branchID,
+			TableLabel: label,
+			OpenedBy:   &principal.PersonID,
+		})
+		require.NoError(t, err)
+
+		// Two orders (rounds) per check: the batch must de-duplicate check
+		// ids, so the query count stays 1 even though 24 orders reference
+		// 12 checks.
+		for range 2 {
+			order, err := env.orders.Place(context.Background(), tenantID, principal, domain.Order{
+				BranchID:     branchID,
+				CheckID:      &chk.ID,
+				OrderChannel: domain.OrderChannelDineIn,
+				Items: []domain.OrderItem{
+					{ProductID: uuid.New(), ProductName: "Pide", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 9000},
+				},
+			})
+			require.NoError(t, err)
+			wantLabels[order.ID.String()] = label
+		}
+	}
+
+	// Only the snapshot's own queries must be counted, not the seeding above.
+	counter.reset()
+
+	conn, _, err := dialKitchenWS(t, srv, "kitchen-token", branchID.String())
+	require.NoError(t, err)
+	defer conn.CloseNow()
+
+	snapshot := readOne(t, conn, 10*time.Second)
+	require.Equal(t, "snapshot", snapshot["type"])
+	rows, _ := snapshot["orders"].([]any)
+	require.Len(t, rows, checkCount*2)
+
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		orderID, _ := row["order_id"].(string)
+		require.Equal(t, wantLabels[orderID], row["table_label"], "order %s label", orderID)
+		// Source is projected from the orders row, not from the outbox
+		// payload — every POS-placed order carries the "pos" default.
+		require.Equal(t, string(domain.SourcePOS), row["source"])
+	}
+
+	checkSelects, total := counter.snapshotCounts()
+	require.Equal(t, 1, checkSelects,
+		"snapshot must resolve every table label in one checks query (got %d for %d checks); total statements=%d",
+		checkSelects, checkCount, total)
 }
 
 func TestKitchenWS_NoPermission_Forbidden(t *testing.T) {

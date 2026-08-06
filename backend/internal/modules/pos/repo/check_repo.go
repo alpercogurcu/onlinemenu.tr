@@ -85,6 +85,48 @@ func (r *CheckRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 	return c, nil
 }
 
+// TableLabelsByCheckIDs batch-resolves the table_label of many checks in a
+// single query, so a multi-check read (the kitchen WS snapshot — see
+// ws/hub.go buildSnapshot) never needs one GetByID round-trip per row (N+1).
+// It selects only table_label rather than reusing checkColumns/scanCheck
+// because that is the single field the caller needs and the projection is
+// what keeps the query cheap on a branch with hundreds of live orders.
+//
+// A check id that is not visible to the current tenant context (RLS) or no
+// longer exists is simply absent from the returned map; callers must treat a
+// missing key as "no label", not an error — mirroring the ErrNotFound → ""
+// behaviour of the single-check path it replaces.
+func (r *CheckRepo) TableLabelsByCheckIDs(ctx context.Context, tx pgx.Tx, checkIDs []uuid.UUID) (map[uuid.UUID]string, error) {
+	labels := make(map[uuid.UUID]string, len(checkIDs))
+	if len(checkIDs) == 0 {
+		return labels, nil
+	}
+
+	// checkIDs is sent as []string cast to ::uuid[] for the same reason as
+	// TotalsByCheckIDs — see that method's comment on
+	// pgx.QueryExecModeSimpleProtocol and array parameter OIDs.
+	ids := make([]string, len(checkIDs))
+	for i, id := range checkIDs {
+		ids[i] = id.String()
+	}
+
+	rows, err := tx.Query(ctx, `SELECT id, table_label FROM checks WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/check: table labels by check ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		var label string
+		if err := rows.Scan(&id, &label); err != nil {
+			return nil, fmt.Errorf("pos/repo/check: table labels by check ids scan: %w", err)
+		}
+		labels[id] = label
+	}
+	return labels, rows.Err()
+}
+
 // GetForUpdate locks the check row for the duration of the caller's
 // transaction. This is what actually prevents two concurrent Close/Cancel
 // calls from both observing "open" and both emitting an outbox event: the

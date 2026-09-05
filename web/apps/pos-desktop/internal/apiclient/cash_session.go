@@ -182,6 +182,22 @@ func (c *Client) RecordCashMovement(ctx context.Context, sessionID, direction st
 	return out, nil
 }
 
+// ListCashMovements calls GET /api/v1/payments/cash-sessions/{id}/movements —
+// the full in-shift cash in/out ledger (kasa hareket defteri), oldest first.
+// Unlike ListCashSessionParticipants's {"participants":[...]} envelope, the
+// handler (listCashMovements) responds with a bare JSON array.
+func (c *Client) ListCashMovements(ctx context.Context, sessionID string) ([]CashMovement, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("apiclient: list cash movements: session id is required")
+	}
+	var out []CashMovement
+	path := "/api/v1/payments/cash-sessions/" + url.PathEscape(sessionID) + "/movements"
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("apiclient: list cash movements: %w", err)
+	}
+	return out, nil
+}
+
 type submitClosingCountRequest struct {
 	ClosingCountedAmount int64               `json:"closing_counted_amount"`
 	Denominations        []DenominationCount `json:"denominations"`

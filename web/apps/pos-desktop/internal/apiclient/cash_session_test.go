@@ -229,6 +229,57 @@ func TestClient_RecordCashMovement_RejectsEmptyReasonBeforeCallingServer(t *test
 	}
 }
 
+// ListCashMovements decodes a BARE JSON array — unlike
+// ListCashSessionParticipants's {"participants":[...]} envelope, the backend
+// handler (listCashMovements) responds with the array itself.
+func TestClient_ListCashMovements_DecodesBareArrayOrderedOldestFirst(t *testing.T) {
+	const body = `[
+		{"id":"mv-1","session_id":"session-1","direction":"in","amount_minor":5000,"reason":"bozuk para","created_by":"11111111-1111-1111-1111-111111111111","created_at":"2026-08-01T10:00:00Z"},
+		{"id":"mv-2","session_id":"session-1","direction":"out","amount_minor":2000,"reason":"kasadan alma","created_by":"11111111-1111-1111-1111-111111111111","created_at":"2026-08-01T11:00:00Z"}
+	]`
+
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, tokenstore.New(t.TempDir(), nil))
+	got, err := c.ListCashMovements(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("ListCashMovements: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/api/v1/payments/cash-sessions/session-1/movements" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Direction != "in" || got[0].AmountMinor != 5000 {
+		t.Errorf("unexpected first movement: %+v", got[0])
+	}
+	if got[1].Direction != "out" || got[1].AmountMinor != 2000 {
+		t.Errorf("unexpected second movement: %+v", got[1])
+	}
+}
+
+func TestClient_ListCashMovements_RejectsEmptySessionIDBeforeCallingServer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("must not reach the server without a session id")
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, tokenstore.New(t.TempDir(), nil))
+	if _, err := c.ListCashMovements(context.Background(), ""); err == nil {
+		t.Fatal("expected an error for an empty session id")
+	}
+}
+
 func TestClient_SubmitClosingCount_DecodesFreshDifference(t *testing.T) {
 	const body = `{
 	  "id": "44444444-4444-4444-4444-444444444444",

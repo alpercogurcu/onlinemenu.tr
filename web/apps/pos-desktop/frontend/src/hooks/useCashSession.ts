@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   CloseCashSession,
   GetActiveCashSession,
+  ListCashMovements,
   OpenCashSession,
   RecordCashMovement,
   SubmitClosingCount,
@@ -43,7 +44,13 @@ export type UseCashSessionResult = {
    * (ADR-DATA-008), set when closeSession() resolves with cannot_close=true.
    * Cleared by dismissCannotClose or by a subsequent successful close. */
   cannotCloseReasons: string[] | null
+  /** The full hareket defteri (movement ledger) for `session`, oldest first —
+   * only populated on demand via loadMovements (the ledger view), never
+   * fetched implicitly alongside session refreshes, since most cashier
+   * interactions never open it. */
+  movements: main.CashMovementDTO[]
   refresh: () => Promise<main.CashSessionDTO | null>
+  loadMovements: () => Promise<void>
   openSession: (openingCountedAmount: number, openingNotes: string) => Promise<boolean>
   recordMovement: (direction: 'in' | 'out', amountMinor: number, reason: string) => Promise<boolean>
   submitClosingCount: (rows: readonly DenominationRow[], notes: string) => Promise<boolean>
@@ -77,6 +84,7 @@ export function useCashSession(branchId: string | undefined): UseCashSessionResu
   const [error, setError] = useState('')
   const [closingSnapshot, setClosingSnapshot] = useState<ClosingSnapshot | null>(null)
   const [cannotCloseReasons, setCannotCloseReasons] = useState<string[] | null>(null)
+  const [movements, setMovements] = useState<main.CashMovementDTO[]>([])
 
   const reset = useCallback(() => {
     setSession(null)
@@ -84,6 +92,7 @@ export function useCashSession(branchId: string | undefined): UseCashSessionResu
     setError('')
     setClosingSnapshot(null)
     setCannotCloseReasons(null)
+    setMovements([])
   }, [])
 
   // Render-time reset on branch change — same pattern and same rationale as
@@ -101,6 +110,7 @@ export function useCashSession(branchId: string | undefined): UseCashSessionResu
     setError('')
     setClosingSnapshot(null)
     setCannotCloseReasons(null)
+    setMovements([])
   }
 
   // refresh returns the freshly-fetched session (or null) directly, rather
@@ -134,6 +144,23 @@ export function useCashSession(branchId: string | undefined): UseCashSessionResu
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // loadMovements is deliberately NOT called from refresh/the effects above:
+  // most status-screen visits never open the ledger, so fetching it on every
+  // session poll would be pure waste. The ledger view (CashSessionModal)
+  // calls this itself when the cashier navigates to it.
+  const loadMovements = useCallback(async (): Promise<void> => {
+    if (!session) {
+      setMovements([])
+      return
+    }
+    try {
+      const list = await ListCashMovements(session.id)
+      setMovements(list)
+    } catch (err) {
+      setError(describeError(err))
+    }
+  }, [session])
 
   // Staleness poll — ONLY while closing_control (see CLOSING_CONTROL_POLL_MS).
   // Keyed on id+status rather than the whole `session` object so a poll tick
@@ -254,7 +281,9 @@ export function useCashSession(branchId: string | undefined): UseCashSessionResu
     closingSnapshot,
     stale,
     cannotCloseReasons,
+    movements,
     refresh,
+    loadMovements,
     openSession,
     recordMovement,
     submitClosingCount,

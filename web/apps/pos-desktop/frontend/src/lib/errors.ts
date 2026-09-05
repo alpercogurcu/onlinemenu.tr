@@ -19,19 +19,29 @@ export function isForbiddenError(err: unknown): boolean {
 }
 
 /**
- * Machine-readable error codes the POS backend now returns in its JSON error
- * body (`{"error": "...", "code": "..."}`) — see pos/http/handler.go's
- * respondError. Every 409 that handler emits carries one, which is what makes
- * a conflict actionable: 409 alone is ambiguous (already closed vs. underpaid
- * vs. awaiting a fiscal result all share it).
+ * Machine-readable error codes the POS/payment backends return in their JSON
+ * error body (`{"error": "...", "code": "..."}`) — see pos/http/handler.go's
+ * respondError for the 409 codes, and
+ * payment/http/cash_session_pin_handler.go's joinCashSession for
+ * session_scoped_principal (403). Every one of these carries a code because
+ * its bare status alone is ambiguous: a 409 could mean already-closed vs.
+ * underpaid vs. awaiting a fiscal result, and a 403 on cash-session join could
+ * mean a pin-switched principal (re-authenticate) vs. a wrong branch —
+ * outcomes that need different, specific guidance, not one generic message.
  */
-export type ApiErrorCode = 'fiscal_pending' | 'insufficient_payment' | 'invalid_transition' | 'table_occupied'
+export type ApiErrorCode =
+  | 'fiscal_pending'
+  | 'insufficient_payment'
+  | 'invalid_transition'
+  | 'table_occupied'
+  | 'session_scoped_principal'
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'fiscal_pending',
   'insufficient_payment',
   'invalid_transition',
   'table_occupied',
+  'session_scoped_principal',
 ])
 
 /**
@@ -69,6 +79,12 @@ export function describeError(err: unknown): string {
       return 'Bu masa az önce doldu — plan yenilendi, dolu masaya dokunarak açık adisyona geçebilirsiniz.'
     case 'invalid_transition':
       return 'Bu adisyon/sipariş başka bir işlemle çakışıyor — sayfayı yenileyin.'
+    case 'session_scoped_principal':
+      // ADR-DATA-008 PIN akışı: this principal was itself issued via a
+      // PIN-switch, not a fresh Keycloak login — a different situation from
+      // isForbiddenError's generic branch/rol mismatch (checked below), which
+      // is why this must be checked here, before the code-less 403 fallback.
+      return 'Bu işlem için Keycloak ile yeniden giriş yapın.'
     default:
       break
   }

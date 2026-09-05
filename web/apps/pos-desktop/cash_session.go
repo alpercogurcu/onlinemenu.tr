@@ -172,6 +172,27 @@ func (a *App) RecordCashMovement(sessionID, direction string, amountMinor int64,
 	}, nil
 }
 
+// ListCashMovements returns the full hareket defteri (movement ledger) for
+// sessionID, oldest first — the durum ekranı's cash-in/cash-out list.
+func (a *App) ListCashMovements(sessionID string) ([]CashMovementDTO, error) {
+	movements, err := a.api.ListCashMovements(a.ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CashMovementDTO, len(movements))
+	for i, m := range movements {
+		out[i] = CashMovementDTO{
+			ID:          m.ID,
+			SessionID:   m.SessionID,
+			Direction:   m.Direction,
+			AmountMinor: m.AmountMinor,
+			Reason:      m.Reason,
+			CreatedAt:   m.CreatedAt.Format(rfc3339Millis),
+		}
+	}
+	return out, nil
+}
+
 // SubmitClosingCount records the cashier's sayım (closing count) and moves
 // the session to closing_control. Calling this again while already in
 // closing_control is a deliberate "recount" path (ADR-DATA-008's

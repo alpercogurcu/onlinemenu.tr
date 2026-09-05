@@ -959,6 +959,7 @@ function App() {
         closingSnapshot={cashSession.closingSnapshot}
         stale={cashSession.stale}
         cannotCloseReasons={cashSession.cannotCloseReasons}
+        movements={cashSession.movements}
         canOpenSession={canOpenCheck}
         onOpenSession={cashSession.openSession}
         onRecordMovement={cashSession.recordMovement}
@@ -966,6 +967,7 @@ function App() {
         onCloseSession={cashSession.closeSession}
         onDismissCannotClose={cashSession.dismissCannotClose}
         onRefresh={cashSession.refresh}
+        onLoadMovements={cashSession.loadMovements}
       />
 
       <CashierSwitchModal

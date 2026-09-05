@@ -6,7 +6,7 @@ import { DenominationCounter } from './DenominationCounter'
 import { ErrorBanner } from './ErrorBanner'
 import { HoldButton } from './HoldButton'
 
-type View = 'opening' | 'status' | 'movement' | 'counting' | 'closing'
+type View = 'opening' | 'status' | 'movement' | 'ledger' | 'counting' | 'closing'
 
 type CashSessionModalProps = {
   open: boolean
@@ -18,6 +18,9 @@ type CashSessionModalProps = {
   closingSnapshot: ClosingSnapshot | null
   stale: boolean
   cannotCloseReasons: string[] | null
+  /** The full hareket defteri — empty until onLoadMovements resolves at least
+   * once for the current session (see the 'ledger' view below). */
+  movements: main.CashMovementDTO[]
   canOpenSession: boolean
   onOpenSession: (openingCountedAmount: number, openingNotes: string) => Promise<boolean>
   onRecordMovement: (direction: 'in' | 'out', amountMinor: number, reason: string) => Promise<boolean>
@@ -25,6 +28,7 @@ type CashSessionModalProps = {
   onCloseSession: () => Promise<boolean>
   onDismissCannotClose: () => void
   onRefresh: () => Promise<main.CashSessionDTO | null>
+  onLoadMovements: () => Promise<void>
 }
 
 /**
@@ -50,6 +54,7 @@ export function CashSessionModal({
   closingSnapshot,
   stale,
   cannotCloseReasons,
+  movements,
   canOpenSession,
   onOpenSession,
   onRecordMovement,
@@ -57,8 +62,10 @@ export function CashSessionModal({
   onCloseSession,
   onDismissCannotClose,
   onRefresh,
+  onLoadMovements,
 }: CashSessionModalProps) {
   const [view, setView] = useState<View>('opening')
+  const [movementsLoading, setMovementsLoading] = useState(false)
 
   // Deliberately keyed on session?.status (and open), NOT the whole `session`
   // object: a closing_control poll tick (see useCashSession's staleness poll)
@@ -109,6 +116,13 @@ export function CashSessionModal({
       setOpeningInput('')
       setOpeningNotes('')
     }
+  }
+
+  async function handleOpenLedger() {
+    setView('ledger')
+    setMovementsLoading(true)
+    await onLoadMovements()
+    setMovementsLoading(false)
   }
 
   async function handleMovementSubmit() {
@@ -243,6 +257,48 @@ export function CashSessionModal({
                   Sayımı Başlat
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={handleOpenLedger}
+                className="min-h-14 w-full rounded-md border border-line font-semibold text-ink"
+              >
+                Hareket Defteri
+              </button>
+            </div>
+          ) : view === 'ledger' && session ? (
+            <div className="flex flex-col gap-4">
+              {movementsLoading ? (
+                <p className="text-sm text-ink-dim">Yükleniyor…</p>
+              ) : movements.length === 0 ? (
+                <p className="text-sm text-ink-dim">Bu oturumda henüz nakit giriş/çıkış hareketi yok.</p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {movements.map((m) => (
+                    <li
+                      key={m.id}
+                      className="flex items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-sm"
+                    >
+                      <div className="flex flex-col">
+                        <span className={m.direction === 'in' ? 'font-semibold text-teal' : 'font-semibold text-amber'}>
+                          {m.direction === 'in' ? 'Giriş' : 'Çıkış'}
+                        </span>
+                        <span className="text-ink-dim">{m.reason}</span>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <span className="tabular-nums text-ink">{formatMoney(m.amount_minor)}</span>
+                        <span className="text-xs text-ink-dim">{new Date(m.created_at).toLocaleTimeString('tr-TR')}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                type="button"
+                onClick={() => setView('status')}
+                className="min-h-14 w-full rounded-md border border-line font-semibold text-ink"
+              >
+                Geri
+              </button>
             </div>
           ) : view === 'movement' && session ? (
             <div className="flex flex-col gap-4">

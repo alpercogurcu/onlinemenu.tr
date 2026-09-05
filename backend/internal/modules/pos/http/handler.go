@@ -25,23 +25,25 @@ import (
 
 // Handler exposes POS REST endpoints.
 type Handler struct {
-	checks *service.CheckService
-	orders *service.OrderService
-	tables *service.TableService
-	logger *zap.Logger
-	engine *auth.Engine
+	checks  *service.CheckService
+	orders  *service.OrderService
+	tables  *service.TableService
+	reports *service.ReportService
+	logger  *zap.Logger
+	engine  *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
 type Params struct {
 	fx.In
 
-	Checks *service.CheckService
-	Orders *service.OrderService
-	Tables *service.TableService
-	Logger *zap.Logger
-	Cache  *redis.Client
-	Engine *auth.Engine
+	Checks  *service.CheckService
+	Orders  *service.OrderService
+	Tables  *service.TableService
+	Reports *service.ReportService
+	Logger  *zap.Logger
+	Cache   *redis.Client
+	Engine  *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client needed for the
@@ -53,7 +55,7 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{checks: p.Checks, orders: p.Orders, tables: p.Tables, logger: p.Logger, engine: p.Engine},
+		h:     &Handler{checks: p.Checks, orders: p.Orders, tables: p.Tables, reports: p.Reports, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
@@ -102,6 +104,11 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("pos.table.manage")).Post("/tables", hwc.h.createTable)
 		r.With(hwc.h.permit("pos.table.manage")).Patch("/tables/{id}", hwc.h.updateTable)
 		r.With(hwc.h.permit("pos.table.manage")).Post("/tables/{id}/status", hwc.h.setTableStatus)
+
+		// Day-end sales report (Sprint pilot-mvp): shift_manager only, mirrors
+		// role_permissions seed's reports:read grant (see
+		// configs/opa/bundles/authz.rego's pos_report_actions).
+		r.With(hwc.h.permit("pos.report.read")).Get("/reports/sale-details", hwc.h.saleDetails)
 	})
 }
 
@@ -938,6 +945,18 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	}
 	if errors.Is(err, service.ErrManualOccupyForbidden) {
 		http.Error(w, "table can only become occupied by opening a check", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, service.ErrInvalidRange) {
+		http.Error(w, "from must be before to", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, service.ErrRangeTooLong) {
+		http.Error(w, "range exceeds 92 days", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, service.ErrInvalidTimezone) {
+		http.Error(w, "invalid tz", http.StatusUnprocessableEntity)
 		return
 	}
 	h.logger.Error("pos handler error", zap.Error(err))

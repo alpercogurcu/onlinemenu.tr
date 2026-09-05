@@ -7,7 +7,7 @@
 // calls, not just the result.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderHook, waitFor } from "@testing-library/react"
-import type { ReactNode } from "react"
+import { StrictMode, type ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useOrderDetails } from "@/hooks/use-pos"
@@ -53,6 +53,22 @@ function Wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>
 }
+
+// StrictMode is the dev default for this Next.js app (see the startedRef
+// workaround in callback-client.tsx) — it double-invokes mount effects as
+// setup→cleanup→setup, which is exactly what can leave a ref-based "alive"
+// flag stuck at its cleanup value if the setup does not reset it.
+//
+// `StrictMode` is passed as `wrapper` directly rather than via a custom
+// component that renders it internally (e.g. `({children}) => <StrictMode>
+// {children}</StrictMode>`): React only marks the root fiber "strict" when
+// the element passed to `root.render()` is *literally* `<StrictMode>` at the
+// top; an intermediate function component — even one that renders
+// `<StrictMode>` as the very first thing it returns — defeats that check and
+// silently disables the mount double-invoke for every descendant, which
+// would make this regression test pass whether or not the fix is present.
+// useOrderDetails does not read TanStack Query context, so no
+// QueryClientProvider is needed here.
 
 function ids(count: number, prefix = "o"): string[] {
   return Array.from({ length: count }, (_, i) => `${prefix}${i}`)
@@ -174,5 +190,16 @@ describe("useOrderDetails", () => {
     await waitFor(() => expect(result.current.size).toBe(4))
     for (const id of ids(3)) expect(result.current.has(id)).toBe(true)
     expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  // StrictMode's setup→cleanup→setup on mount must not leave the hook's
+  // "alive" ref stuck at false (from the first pass's cleanup) for the rest
+  // of the component's real lifetime — otherwise every fetch result is
+  // silently discarded and the KDS board never populates in dev.
+  it("still populates the board when mounted under StrictMode", async () => {
+    const { result } = renderHook(() => useOrderDetails(ids(3)), { wrapper: StrictMode })
+
+    await waitFor(() => expect(result.current.size).toBe(3))
+    expect(get).toHaveBeenCalledTimes(1)
   })
 })

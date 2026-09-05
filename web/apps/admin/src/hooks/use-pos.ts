@@ -278,6 +278,11 @@ export function useOrderDetails(ids: string[]): Map<string, Order> {
   const alive = useRef(true)
 
   useEffect(() => {
+    // StrictMode (dev) double-invokes mount as setup→cleanup→setup; without
+    // resetting here, the cleanup's `false` from the first pass would stick
+    // for the component's entire real lifetime and every fetch result would
+    // be discarded (see callback-client.tsx's startedRef for the same fix).
+    alive.current = true
     return () => {
       alive.current = false
     }

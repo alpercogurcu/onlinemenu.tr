@@ -13,6 +13,16 @@ import (
 	"onlinemenu.tr/internal/modules/payment/service"
 )
 
+// Join's two 403 outcomes used to collapse into the same bare "forbidden"
+// text, leaving the POS client nothing to react to: a pin-switched principal
+// needs to re-authenticate via Keycloak, a wrong-branch principal does not.
+// These codes let the client tell them apart (see joinCashSession below and
+// errors.ts on the POS desktop side).
+const (
+	codeSessionScopedPrincipal = "session_scoped_principal"
+	codeBranchForbidden        = "branch_forbidden"
+)
+
 // joinCashSessionRequest is the POST .../participants body. Pin is optional
 // (service.CashSessionPinService.Join): joining always records participation;
 // a supplied pin is set/replaced in the same call. Omitting it just means
@@ -44,11 +54,13 @@ func (h *Handler) joinCashSession(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, pub.ErrSessionScopedPrincipal):
 		// 403, not 401: the caller IS authenticated, just not in the
-		// "trusted moment" this action requires.
-		http.Error(w, "forbidden", http.StatusForbidden)
+		// "trusted moment" this action requires. Coded so the POS client can
+		// tell this apart from branch_forbidden and prompt a fresh
+		// Keycloak login instead of showing one generic message.
+		respondErrorJSON(w, http.StatusForbidden, codeSessionScopedPrincipal, "forbidden")
 		return
 	case errors.Is(err, pub.ErrBranchForbidden):
-		http.Error(w, "forbidden", http.StatusForbidden)
+		respondErrorJSON(w, http.StatusForbidden, codeBranchForbidden, "forbidden")
 		return
 	case errors.Is(err, pub.ErrNotFound):
 		http.Error(w, "cash session not found", http.StatusNotFound)

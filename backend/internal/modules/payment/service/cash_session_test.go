@@ -235,6 +235,75 @@ func TestCashSessionService_RecordMovement_RejectedAfterClosingCountSubmitted(t 
 		"a movement submitted after the closing count must not silently invalidate the count already recorded")
 }
 
+// ---------------------------------------------------------------------------
+// ListMovements — the hareket defteri read
+// ---------------------------------------------------------------------------
+
+// TestCashSessionService_ListMovements_ReturnsRecordedMovements is the
+// read-side companion to RecordMovement: everything recorded against a
+// session must come back through ListMovements, oldest first.
+func TestCashSessionService_ListMovements_ReturnsRecordedMovements(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	svc := newCashSessionService()
+	branch := uuid.New()
+	manager := shiftManagerPrincipal(branch)
+
+	opened, err := svc.Open(ctx, manager, service.OpenCashSessionRequest{BranchID: branch, OpeningCountedAmount: 0})
+	require.NoError(t, err)
+	session := opened.Session
+
+	first, err := svc.RecordMovement(ctx, manager, session.ID, service.RecordMovementRequest{
+		Direction: domain.CashMovementIn, AmountMinor: 5000, Reason: "bozuk para",
+	})
+	require.NoError(t, err)
+	second, err := svc.RecordMovement(ctx, manager, session.ID, service.RecordMovementRequest{
+		Direction: domain.CashMovementOut, AmountMinor: 2000, Reason: "kasadan alma",
+	})
+	require.NoError(t, err)
+
+	movements, err := svc.ListMovements(ctx, manager, session.ID)
+	require.NoError(t, err)
+	require.Len(t, movements, 2)
+	assert.Equal(t, first.ID, movements[0].ID)
+	assert.Equal(t, second.ID, movements[1].ID)
+}
+
+// TestCashSessionService_ListMovements_UnknownSession_ReturnsNotFound guards
+// the sentinel the HTTP layer switches on to answer 404.
+func TestCashSessionService_ListMovements_UnknownSession_ReturnsNotFound(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	svc := newCashSessionService()
+	manager := shiftManagerPrincipal(uuid.New())
+
+	_, err := svc.ListMovements(ctx, manager, uuid.New())
+	assert.ErrorIs(t, err, pub.ErrNotFound)
+}
+
+// TestCashSessionService_ListMovements_RefusesForeignBranch pins that a
+// principal cannot read another branch's ledger merely by guessing its
+// session id.
+func TestCashSessionService_ListMovements_RefusesForeignBranch(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	svc := newCashSessionService()
+	ownerBranch := uuid.New()
+	owner := shiftManagerPrincipal(ownerBranch)
+
+	opened, err := svc.Open(ctx, owner, service.OpenCashSessionRequest{BranchID: ownerBranch, OpeningCountedAmount: 0})
+	require.NoError(t, err)
+
+	// Same tenant (RLS must let the row through), different branch: this is
+	// exactly the case requireBranch exists for — RLS alone would not stop a
+	// cashier of branch A of the SAME chain from reading branch B's ledger.
+	intruder := owner
+	intruder.BranchID = uuid.New()
+
+	_, err = svc.ListMovements(ctx, intruder, opened.Session.ID)
+	assert.ErrorIs(t, err, pub.ErrBranchForbidden)
+}
+
 // TestCashSessionService_RejectsInvalidInput pins every caller-input rejection
 // to pub.ErrInvalidInput, not merely to "some error".
 //

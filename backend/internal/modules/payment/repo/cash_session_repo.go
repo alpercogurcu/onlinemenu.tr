@@ -286,6 +286,39 @@ func (r *CashSessionRepo) InsertMovement(ctx context.Context, tx pgx.Tx, m domai
 	return m, nil
 }
 
+// ListMovements returns every movement recorded against sessionID, oldest
+// first — the POS cash-session screen's ledger (kasa hareket defteri). Unlike
+// SumMovementsNet (a single aggregate) this returns the individual rows so
+// the UI can show direction/amount/reason/who/when per entry.
+func (r *CashSessionRepo) ListMovements(ctx context.Context, tx pgx.Tx, tenantID, sessionID uuid.UUID) ([]domain.CashMovement, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, tenant_id, branch_id, session_id, direction, amount_minor, reason, created_by, created_at
+		FROM cash_movements
+		WHERE tenant_id = $1 AND session_id = $2
+		ORDER BY created_at ASC
+	`, tenantID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: list cash movements: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.CashMovement
+	for rows.Next() {
+		var m domain.CashMovement
+		var direction string
+		if err := rows.Scan(&m.ID, &m.TenantID, &m.BranchID, &m.SessionID, &direction,
+			&m.AmountMinor, &m.Reason, &m.CreatedBy, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("payment/repo: list cash movements: scan: %w", err)
+		}
+		m.Direction = domain.CashMovementDirection(direction)
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment/repo: list cash movements: %w", err)
+	}
+	return out, nil
+}
+
 // SumMovementsNet returns the net cash movement total for a session: 'in'
 // movements add, 'out' movements subtract. Zero when the session has no
 // movements yet.

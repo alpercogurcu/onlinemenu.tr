@@ -365,6 +365,91 @@ func TestCashSessionRepo_SumMovementsNet_NoMovements(t *testing.T) {
 	assert.Equal(t, int64(0), net)
 }
 
+// TestCashSessionRepo_ListMovements_OrderedByCreatedAt is the movement
+// ledger's read side (the POS cash-session screen's defter): every movement
+// ever recorded against a session, oldest first, so the ledger renders as
+// the cashier lived it rather than in insertion/id order.
+func TestCashSessionRepo_ListMovements_OrderedByCreatedAt(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewCashSessionRepo()
+	branch := uuid.New()
+
+	var session domain.CashSession
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		session, err = r.Open(ctx, tx, domain.CashSession{
+			TenantID: tenantA, BranchID: branch, OpeningCountedAmount: 0, OpenedBy: uuid.New(),
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	base := time.Now().UTC().Add(-time.Hour)
+	inserted := make([]domain.CashMovement, 3)
+	err = sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		for i, m := range []domain.CashMovement{
+			{TenantID: tenantA, BranchID: branch, SessionID: session.ID, Direction: domain.CashMovementIn, AmountMinor: 5000, Reason: "bozuk para", CreatedBy: uuid.New()},
+			{TenantID: tenantA, BranchID: branch, SessionID: session.ID, Direction: domain.CashMovementOut, AmountMinor: 2000, Reason: "kasadan alma", CreatedBy: uuid.New()},
+			{TenantID: tenantA, BranchID: branch, SessionID: session.ID, Direction: domain.CashMovementIn, AmountMinor: 1000, Reason: "bozuk para 2", CreatedBy: uuid.New()},
+		} {
+			got, err := r.InsertMovement(ctx, tx, m)
+			if err != nil {
+				return err
+			}
+			inserted[i] = got
+		}
+		// InsertMovement stamps CreatedAt from time.Now(), which can tie at
+		// this test's resolution; force a deterministic, strictly increasing
+		// order so the assertion below is not a coin flip.
+		for i, m := range inserted {
+			ts := base.Add(time.Duration(i) * time.Minute)
+			if _, err := tx.Exec(ctx, `UPDATE cash_movements SET created_at = $1 WHERE id = $2`, ts, m.ID); err != nil {
+				return err
+			}
+			inserted[i].CreatedAt = ts
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	var movements []domain.CashMovement
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		movements, err = r.ListMovements(ctx, tx, tenantA, session.ID)
+		return err
+	})
+	require.NoError(t, err)
+
+	require.Len(t, movements, 3)
+	for i, want := range inserted {
+		assert.Equal(t, want.ID, movements[i].ID, "movement %d out of order", i)
+		assert.Equal(t, want.Direction, movements[i].Direction)
+		assert.Equal(t, want.AmountMinor, movements[i].AmountMinor)
+		assert.Equal(t, want.Reason, movements[i].Reason)
+		assert.Equal(t, want.CreatedBy, movements[i].CreatedBy)
+		assert.WithinDuration(t, want.CreatedAt, movements[i].CreatedAt, time.Second)
+	}
+}
+
+// TestCashSessionRepo_ListMovements_NoMovements_ReturnsEmpty guards the
+// zero-movements case: a freshly opened session's ledger must render as an
+// empty list, not an error or a nil the JSON layer would serialize as null.
+func TestCashSessionRepo_ListMovements_NoMovements_ReturnsEmpty(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewCashSessionRepo()
+
+	var movements []domain.CashMovement
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		movements, err = r.ListMovements(ctx, tx, tenantA, uuid.New())
+		return err
+	})
+	require.NoError(t, err)
+	assert.Empty(t, movements)
+}
+
 // ---------------------------------------------------------------------------
 // SumCompletedCashPayments — the expected-close window
 // ---------------------------------------------------------------------------

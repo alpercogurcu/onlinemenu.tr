@@ -242,6 +242,53 @@ func (h *Handler) recordCashMovement(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func toCashMovementResponse(m domain.CashMovement) cashMovementResponse {
+	return cashMovementResponse{
+		ID:          m.ID,
+		SessionID:   m.SessionID,
+		Direction:   string(m.Direction),
+		AmountMinor: m.AmountMinor,
+		Reason:      m.Reason,
+		CreatedBy:   m.CreatedBy,
+		CreatedAt:   m.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// listCashMovements answers GET /api/v1/payments/cash-sessions/{id}/movements
+// — the hareket defteri (movement ledger) the POS cash-session screen renders
+// alongside the live reconciliation figures already exposed on
+// cashSessionResponse.
+func (h *Handler) listCashMovements(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	sessionID, ok := requireURLID(w, r)
+	if !ok {
+		return
+	}
+
+	movements, err := h.sessions.ListMovements(r.Context(), p, sessionID)
+	switch {
+	case errors.Is(err, pub.ErrBranchForbidden):
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	case errors.Is(err, pub.ErrNotFound):
+		http.Error(w, "cash session not found", http.StatusNotFound)
+		return
+	case err != nil:
+		h.logger.Error("payment: list cash movements", zap.Error(err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]cashMovementResponse, len(movements))
+	for i, m := range movements {
+		out[i] = toCashMovementResponse(m)
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
 type submitClosingCountRequest struct {
 	ClosingCountedAmount int64                 `json:"closing_counted_amount"`
 	Denominations        []denominationRequest `json:"denominations"`

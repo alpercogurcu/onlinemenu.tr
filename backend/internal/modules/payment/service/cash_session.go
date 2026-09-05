@@ -242,6 +242,37 @@ func (s *CashSessionService) RecordMovement(ctx context.Context, principal auth.
 	return movement, nil
 }
 
+// ListMovements returns the full in-shift cash in/out ledger for a session,
+// oldest first — the POS cash-session screen's hareket defteri. It reads
+// GetByID (no lock: this is a plain report, not part of a mutating sequence)
+// rather than GetByIDForUpdate, and requireBranch the same way every other
+// session-scoped read/write on this service does.
+func (s *CashSessionService) ListMovements(ctx context.Context, principal auth.Principal, sessionID uuid.UUID) ([]domain.CashMovement, error) {
+	if sessionID == uuid.Nil {
+		return nil, fmt.Errorf("payment/service: session id is required")
+	}
+
+	var movements []domain.CashMovement
+	err := s.db.WithTenantReadTx(ctx, principal.TenantID, func(tx pgx.Tx) error {
+		session, err := s.sessions.GetByID(ctx, tx, principal.TenantID, sessionID)
+		if err != nil {
+			return err
+		}
+		if err := requireBranch(ctx, principal, session.BranchID); err != nil {
+			return err
+		}
+		movements, err = s.sessions.ListMovements(ctx, tx, principal.TenantID, sessionID)
+		return err
+	})
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, pub.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: list cash movements: %w", err)
+	}
+	return movements, nil
+}
+
 // SubmitClosingCountRequest carries the inputs for the first step of closing.
 type SubmitClosingCountRequest struct {
 	ClosingCountedAmount int64

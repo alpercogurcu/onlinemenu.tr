@@ -2,6 +2,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,11 +22,23 @@ import (
 	"onlinemenu.tr/internal/platform/httpx"
 )
 
+// cashSessionPinService is the subset of *service.CashSessionPinService the
+// HTTP layer calls. Declaring it here (accept interfaces, return structs)
+// lets a handler test substitute a fake that returns a chosen sentinel error
+// without wiring the real service's DB/Redis/token-signer dependencies — see
+// cash_session_pin_handler_test.go's fakeCashSessionPinService.
+type cashSessionPinService interface {
+	Join(ctx context.Context, principal auth.Principal, sessionID uuid.UUID, pin string) error
+	Switch(ctx context.Context, principal auth.Principal, sessionID, targetPersonID uuid.UUID, pin string) (string, error)
+	ListParticipants(ctx context.Context, principal auth.Principal, sessionID uuid.UUID) ([]service.CashSessionParticipantView, error)
+	ResetPin(ctx context.Context, principal auth.Principal, sessionID, targetPersonID uuid.UUID) error
+}
+
 // Handler exposes payment REST endpoints.
 type Handler struct {
 	payments   *service.PaymentService
 	sessions   *service.CashSessionService
-	sessionPin *service.CashSessionPinService
+	sessionPin cashSessionPinService
 	logger     *zap.Logger
 	engine     *auth.Engine
 }
@@ -90,6 +103,11 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		// Idempotency-Key the same as a payment write.
 		r.With(hwc.h.permit("payment.cash_session.movement"), httpx.Idempotency(hwc.cache)).
 			Post("/cash-sessions/{id}/movements", hwc.h.recordCashMovement)
+		// Read-only ledger of the same movements, same permission as the
+		// session read above — any participant may see what has been taken
+		// in/out of the drawer this shift.
+		r.With(hwc.h.permit("payment.cash_session.read")).
+			Get("/cash-sessions/{id}/movements", hwc.h.listCashMovements)
 		r.With(hwc.h.permit("payment.cash_session.submit_closing")).
 			Post("/cash-sessions/{id}/closing-count", hwc.h.submitClosingCount)
 		r.With(hwc.h.permit("payment.cash_session.close")).

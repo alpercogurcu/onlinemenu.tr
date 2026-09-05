@@ -40,6 +40,7 @@ type Providers struct {
 // Module registers OpenTelemetry providers with fx lifecycle.
 var Module = fx.Module("otel",
 	fx.Provide(NewProviders),
+	fx.Provide(NewMetrics),
 )
 
 // NewProviders initialises trace and metric providers and sets them as globals.

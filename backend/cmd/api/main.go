@@ -191,7 +191,7 @@ func newRouter(p routerParams) *chi.Mux {
 			// storefront/http/public_guard_smoke_test.go is what keeps that
 			// claim true: it walks the registered routes and fails if any of
 			// them (bar /sessions) answers without a guest session.
-			if path == "/healthz" ||
+			if path == "/healthz" || path == "/readyz" ||
 				strings.HasPrefix(path, publicAPIPrefix) ||
 				(isDev && strings.HasPrefix(path, "/dev/")) {
 				next.ServeHTTP(w, r)
@@ -205,11 +205,63 @@ func newRouter(p routerParams) *chi.Mux {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// /readyz is nil-able: routerParams.Pool is nil in tests that build a bare
+	// router (e.g. TestRouterMiddleware), so the dbPinger interface is left
+	// nil rather than boxing a nil *db.Pool — a boxed nil would compare != nil
+	// and reach Ping on a nil receiver.
+	var readyzPool dbPinger
+	if p.Pool != nil {
+		readyzPool = p.Pool.Inner()
+	}
+	r.Get("/readyz", readyzHandler(readyzPool))
+
 	if isDev {
 		r.Post("/dev/login", devLoginHandler(p.Pool, p.Signer))
 	}
 
 	return r
+}
+
+// dbPinger is the minimal DB health-check surface /readyz needs, extracted so
+// tests can substitute a fake without a real database. *pgxpool.Pool (via
+// db.Pool.Inner()) satisfies it.
+type dbPinger interface {
+	Ping(ctx context.Context) error
+}
+
+// readyzResp is the /readyz JSON body.
+type readyzResp struct {
+	Status string `json:"status"`
+	DB     string `json:"db,omitempty"`
+}
+
+// readyzHandler reports whether the process can currently serve traffic. DB
+// reachability is checked because every other endpoint depends on it — an
+// orchestrator polling /readyz on a tight interval should stop routing
+// traffic here the moment the database is unreachable. A 2s timeout keeps a
+// hung database from hanging the health check itself.
+func readyzHandler(pool dbPinger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if pool == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(readyzResp{Status: "degraded", DB: "db pool not configured"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		if err := pool.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(readyzResp{Status: "degraded", DB: err.Error()})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(readyzResp{Status: "ok"})
+	}
 }
 
 // devCORSMiddleware sets permissive CORS headers for local development only.

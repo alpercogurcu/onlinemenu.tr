@@ -14,6 +14,7 @@ import (
 	"onlinemenu.tr/internal/modules/payment/domain"
 	"onlinemenu.tr/internal/modules/payment/repo"
 	"onlinemenu.tr/internal/platform/db"
+	platformotel "onlinemenu.tr/internal/platform/otel"
 )
 
 const (
@@ -90,11 +91,12 @@ type ReconcileStats struct {
 // method yet; when one lands, call it before expiring and let the vendor's
 // answer — not the clock — decide. AutoExpire exists for that day.
 type Reconciler struct {
-	store  staleSubmissionStore
-	sink   domain.FiscalResultSink
-	cfg    ReconcilerConfig
-	logger *zap.Logger
-	now    func() time.Time
+	store   staleSubmissionStore
+	sink    domain.FiscalResultSink
+	cfg     ReconcilerConfig
+	logger  *zap.Logger
+	metrics *platformotel.Metrics
+	now     func() time.Time
 
 	// warned remembers which submissions were already reported so a row stuck for
 	// days does not emit a warning on every tick. Entries are dropped once the
@@ -111,17 +113,19 @@ type ReconcilerParams struct {
 	SubmissionRepo *repo.FiscalSubmissionRepo
 	Sink           domain.FiscalResultSink
 	Logger         *zap.Logger
+	Metrics        *platformotel.Metrics
 	Config         ReconcilerConfig `optional:"true"`
 }
 
 func NewReconciler(p ReconcilerParams) *Reconciler {
 	return &Reconciler{
-		store:  &dbStaleSubmissionStore{db: p.DB, repo: p.SubmissionRepo},
-		sink:   p.Sink,
-		cfg:    p.Config.withDefaults(),
-		logger: p.Logger,
-		now:    func() time.Time { return time.Now().UTC() },
-		warned: make(map[uuid.UUID]struct{}),
+		store:   &dbStaleSubmissionStore{db: p.DB, repo: p.SubmissionRepo},
+		sink:    p.Sink,
+		cfg:     p.Config.withDefaults(),
+		logger:  p.Logger,
+		metrics: p.Metrics,
+		now:     func() time.Time { return time.Now().UTC() },
+		warned:  make(map[uuid.UUID]struct{}),
 	}
 }
 
@@ -198,6 +202,11 @@ func (r *Reconciler) RunOnce(ctx context.Context) (ReconcileStats, error) {
 			zap.Bool("past_vendor_ttl", pastTTL),
 		)
 	}
+
+	// len(seen) is every stale submission still outstanding after this sweep
+	// (expired rows were deleted from seen above) — the current overdue
+	// backlog, not just the ones newly warned this tick.
+	r.metrics.SetFiscalOverdue(int64(len(seen)))
 
 	r.pruneWarned(seen)
 	return stats, nil

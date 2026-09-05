@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/platform/eventbus"
+	platformotel "onlinemenu.tr/internal/platform/otel"
 )
 
 // msgPublisher is the subset of eventbus.Bus used by the dispatcher.
@@ -89,6 +90,7 @@ type Dispatcher struct {
 	pub             msgPublisher
 	cfg             Config
 	logger          *zap.Logger
+	metrics         *platformotel.Metrics
 	cancel          context.CancelFunc
 	done            chan struct{}
 	publishTimeout  time.Duration
@@ -105,10 +107,11 @@ type Dispatcher struct {
 type Params struct {
 	fx.In
 
-	LC     fx.Lifecycle
-	Config Config
-	Bus    *eventbus.Bus
-	Logger *zap.Logger
+	LC      fx.Lifecycle
+	Config  Config
+	Bus     *eventbus.Bus
+	Logger  *zap.Logger
+	Metrics *platformotel.Metrics
 }
 
 // Register wires the Dispatcher into the fx lifecycle.
@@ -147,6 +150,7 @@ func Register(p Params) error {
 		pub:             p.Bus,
 		cfg:             p.Config,
 		logger:          p.Logger,
+		metrics:         p.Metrics,
 		done:            make(chan struct{}),
 		publishTimeout:  publishTimeout,
 		staleClaimAfter: staleClaimAfter,
@@ -252,6 +256,7 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t TableSpec) error {
 		}
 		return fmt.Errorf("outbox: claim batch for %s: %w", t.Table, err)
 	}
+	d.reportPending(ctx, t)
 	if len(batch) == 0 {
 		return nil
 	}
@@ -294,6 +299,25 @@ func (d *Dispatcher) dispatchTable(ctx context.Context, t TableSpec) error {
 	}
 
 	return nil
+}
+
+// reportPending feeds the onlinemenu_outbox_pending gauge with t's current
+// backlog (unprocessed, not-dead rows), independent of whether this cycle's
+// claimBatch found anything to publish. Skipped entirely when no Metrics is
+// wired (nil in tests that construct Dispatcher directly) to avoid an extra
+// query with nowhere for the result to go.
+func (d *Dispatcher) reportPending(ctx context.Context, t TableSpec) {
+	if d.metrics == nil {
+		return
+	}
+	var count int64
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE processed_at IS NULL AND is_dead = FALSE`, t.Table)
+	if err := d.pool.QueryRow(ctx, query).Scan(&count); err != nil {
+		d.logger.Warn("outbox: count pending rows failed",
+			zap.String("table", t.Table), zap.Error(err))
+		return
+	}
+	d.metrics.SetOutboxPending(t.Module, count)
 }
 
 // claimBatch atomically selects and marks up to BatchSize eligible rows as

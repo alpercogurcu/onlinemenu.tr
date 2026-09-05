@@ -10,10 +10,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/payment/domain"
 	"onlinemenu.tr/internal/modules/payment/repo"
+	platformotel "onlinemenu.tr/internal/platform/otel"
 )
 
 type fakeStaleStore struct {
@@ -315,6 +318,94 @@ func TestReconciler_ResolvedSubmissionWarnsAgainIfItRecurs(t *testing.T) {
 	again, err := r.RunOnce(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, again.Warned, "a recurrence must be reported, not suppressed forever")
+}
+
+// fiscalOverdueValue reads the onlinemenu_fiscal_submissions_overdue gauge's
+// single data point from a collected snapshot.
+func fiscalOverdueValue(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	for _, sm := range rm.ScopeMetrics {
+		for _, met := range sm.Metrics {
+			if met.Name != "fiscal_submissions_overdue" {
+				continue
+			}
+			gauge, ok := met.Data.(metricdata.Gauge[int64])
+			require.True(t, ok, "fiscal_submissions_overdue is not an int64 gauge")
+			require.Len(t, gauge.DataPoints, 1)
+			return gauge.DataPoints[0].Value
+		}
+	}
+	t.Fatal("fiscal_submissions_overdue metric not found")
+	return 0
+}
+
+// TestReconciler_RunOnce_FeedsFiscalOverdueGauge proves the sweep publishes
+// its outstanding-backlog size — not just this tick's newly-warned count — so
+// deploy/prometheus/rules.yml's FiscalSubmissionOverdue alert reflects reality
+// across ticks, not only the first time a submission goes stale.
+func TestReconciler_RunOnce_FeedsFiscalOverdueGauge(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	providers := &platformotel.Providers{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))}
+	metrics, err := platformotel.NewMetrics(providers)
+	require.NoError(t, err)
+
+	rows := []repo.FiscalSubmission{
+		staleSubmission(30 * time.Minute),    // stays outstanding: warned
+		staleSubmission(20 * 24 * time.Hour), // past TTL, AutoExpire off: still outstanding
+	}
+	store := &fakeStaleStore{rows: rows}
+	r := newTestReconciler(store, &fakeSink{}, ReconcilerConfig{ExpireAfter: 14 * 24 * time.Hour})
+	r.metrics = metrics
+
+	_, err = r.RunOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), fiscalOverdueValue(t, reader), "both rows are still outstanding, neither expired")
+
+	// One of the two resolves (webhook finally arrives) and drops out of the
+	// stale set on the next sweep — the gauge must follow it down.
+	store.mu.Lock()
+	store.rows = []repo.FiscalSubmission{rows[0]}
+	store.mu.Unlock()
+
+	_, err = r.RunOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), fiscalOverdueValue(t, reader))
+}
+
+// TestReconciler_RunOnce_ExpiredSubmissionsDoNotCountAsOverdue proves a row
+// that AutoExpire resolves this tick is excluded from the gauge: it is no
+// longer awaiting a fiscal result, it has been terminally failed.
+func TestReconciler_RunOnce_ExpiredSubmissionsDoNotCountAsOverdue(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	providers := &platformotel.Providers{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))}
+	metrics, err := platformotel.NewMetrics(providers)
+	require.NoError(t, err)
+
+	store := &fakeStaleStore{rows: []repo.FiscalSubmission{staleSubmission(20 * 24 * time.Hour)}}
+	r := newTestReconciler(store, &fakeSink{}, ReconcilerConfig{ExpireAfter: 14 * 24 * time.Hour, AutoExpire: true})
+	r.metrics = metrics
+
+	stats, err := r.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Expired)
+	assert.Equal(t, int64(0), fiscalOverdueValue(t, reader))
+}
+
+// TestReconciler_RunOnce_NilMetricsDoesNotPanic: the fx-optional-in-practice
+// Metrics field is nil in every other test in this file (they build Reconciler
+// via newTestReconciler, which never sets it) — SetFiscalOverdue on a nil
+// *Metrics must be a no-op, not a nil-pointer panic.
+func TestReconciler_RunOnce_NilMetricsDoesNotPanic(t *testing.T) {
+	store := &fakeStaleStore{rows: []repo.FiscalSubmission{staleSubmission(30 * time.Minute)}}
+	r := newTestReconciler(store, &fakeSink{}, ReconcilerConfig{})
+	require.Nil(t, r.metrics)
+
+	assert.NotPanics(t, func() {
+		_, err := r.RunOnce(context.Background())
+		require.NoError(t, err)
+	})
 }
 
 // TestReconciler_ExpiredRowIsForgotten: after an expiry the row leaves the stale

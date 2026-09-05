@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -233,6 +235,117 @@ func TestTracedHandlerDoesNotTracePublicStorefrontPaths(t *testing.T) {
 			assert.NotContains(t, attr.Value.Emit(), "/api/public/v1")
 		}
 	}
+}
+
+// fakePinger is a test double for dbPinger, letting /readyz be exercised
+// without a real database.
+type fakePinger struct {
+	err error
+}
+
+func (f fakePinger) Ping(_ context.Context) error {
+	return f.err
+}
+
+// TestReadyzHandler covers the DB-reachable and DB-down branches, plus the
+// defensive nil-pool branch (routerParams.Pool is nil until fx wires it).
+func TestReadyzHandler(t *testing.T) {
+	tests := []struct {
+		name       string
+		pool       dbPinger
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "db reachable",
+			pool:       fakePinger{},
+			wantStatus: http.StatusOK,
+			wantBody:   `{"status":"ok"}`,
+		},
+		{
+			name:       "db down",
+			pool:       fakePinger{err: errors.New("dial tcp: connection refused")},
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   `{"status":"degraded","db":"dial tcp: connection refused"}`,
+		},
+		{
+			name:       "pool not configured",
+			pool:       nil,
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   `{"status":"degraded","db":"db pool not configured"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+			w := httptest.NewRecorder()
+
+			readyzHandler(tc.pool).ServeHTTP(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code)
+			assert.JSONEq(t, tc.wantBody, w.Body.String())
+		})
+	}
+}
+
+// TestReadyzHandler_PingTimesOutAt2s proves the handler bounds a hung Ping
+// call rather than hanging the health check itself indefinitely.
+func TestReadyzHandler_PingTimesOutAt2s(t *testing.T) {
+	blocked := blockingPinger{unblock: make(chan struct{})}
+	defer close(blocked.unblock)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+
+	start := time.Now()
+	readyzHandler(blocked).ServeHTTP(w, req)
+	elapsed := time.Since(start)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Less(t, elapsed, 3*time.Second, "the 2s ping timeout must cut a hung DB short")
+}
+
+// blockingPinger blocks Ping until unblock is closed or ctx is cancelled,
+// simulating a database that never answers.
+type blockingPinger struct {
+	unblock chan struct{}
+}
+
+func (b blockingPinger) Ping(ctx context.Context) error {
+	select {
+	case <-b.unblock:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestRouterMiddleware_ReadyzBypassesAuth proves /readyz is exempt from the
+// staff auth chain the same way /healthz is (main.go's path == "/readyz"
+// branch) — an orchestrator health-checking this endpoint carries no token.
+func TestRouterMiddleware_ReadyzBypassesAuth(t *testing.T) {
+	const secret = "test-secret-32-bytes-long-padding!"
+	t.Setenv("APP_ENV", "dev")
+
+	signer, err := auth.NewContextTokenSigner([]byte(secret))
+	require.NoError(t, err)
+	verifier, err := newTokenVerifier()
+	require.NoError(t, err)
+
+	router := newRouter(routerParams{
+		Signer:   signer,
+		Verifier: verifier,
+		Pool:     nil,
+		Logger:   zap.NewNop(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.NotEqual(t, http.StatusUnauthorized, w.Code, "/readyz must bypass the staff auth chain")
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, "Pool is nil in this bare router, so /readyz reports degraded rather than panicking")
 }
 
 // Silence fxtest logger to keep test output clean.

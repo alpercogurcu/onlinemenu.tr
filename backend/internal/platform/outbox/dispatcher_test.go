@@ -21,8 +21,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/goleak"
 	"go.uber.org/zap"
+
+	platformotel "onlinemenu.tr/internal/platform/otel"
 )
 
 var sharedPool *pgxpool.Pool
@@ -403,6 +408,82 @@ func TestClaimBatch_ReclaimsStaleClaim(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "a stale claim past StaleClaimAfter must be reclaimed")
+}
+
+// outboxPendingValue reads the "module"-labeled onlinemenu_outbox_pending
+// data point from a collected snapshot, failing the test if it is absent.
+func outboxPendingValue(t *testing.T, rm metricdata.ResourceMetrics, module string) int64 {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, met := range sm.Metrics {
+			if met.Name != "outbox_pending" {
+				continue
+			}
+			gauge, ok := met.Data.(metricdata.Gauge[int64])
+			require.True(t, ok, "outbox_pending is not an int64 gauge")
+			for _, dp := range gauge.DataPoints {
+				if v, ok := dp.Attributes.Value(attribute.Key("module")); ok && v.AsString() == module {
+					return dp.Value
+				}
+			}
+		}
+	}
+	t.Fatalf("no outbox_pending data point for module %q", module)
+	return 0
+}
+
+// TestDispatchTable_ReportsPendingGauge proves reportPending feeds the
+// gauge with the table's current backlog every cycle, independent of this
+// cycle's own publish outcome. The assertion is a delta against a baseline
+// read before inserting fixtures, since pos_outbox accumulates leftover
+// pending rows from earlier tests in this shared-database suite.
+func TestDispatchTable_ReportsPendingGauge(t *testing.T) {
+	ctx := context.Background()
+
+	var baseline int64
+	require.NoError(t, sharedPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM pos_outbox WHERE processed_at IS NULL AND is_dead = FALSE`,
+	).Scan(&baseline))
+
+	tenantID := uuid.New()
+	insertOutboxRow(t, ctx, tenantID, uuid.New(), "order.placed")
+	insertOutboxRow(t, ctx, tenantID, uuid.New(), "order.placed")
+
+	reader := sdkmetric.NewManualReader()
+	providers := &platformotel.Providers{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))}
+	metrics, err := platformotel.NewMetrics(providers)
+	require.NoError(t, err)
+
+	// The publish outcome is irrelevant here: reportPending runs right after
+	// claimBatch, before either row is published, so both are still
+	// unprocessed at observation time regardless of what happens next.
+	d := newTestDispatcher(&fakePublisher{}, Config{BatchSize: 10, MaxRetries: 3})
+	d.metrics = metrics
+
+	require.NoError(t, d.dispatchTable(ctx, TableSpec{Table: "pos_outbox", Module: "pos"}))
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(ctx, &rm))
+
+	assert.Equal(t, baseline+2, outboxPendingValue(t, rm, "pos"))
+}
+
+// TestDispatchTable_NilMetrics_SkipsPendingQuery proves a Dispatcher built
+// without a Metrics handle (the zero value in every other test in this file)
+// never issues the extra COUNT query — dispatchTable's happy path must be
+// unaffected by whether metrics wiring exists.
+func TestDispatchTable_NilMetrics_SkipsPendingQuery(t *testing.T) {
+	ctx := context.Background()
+	tenantID := uuid.New()
+	eventID := insertOutboxRow(t, ctx, tenantID, uuid.New(), "order.placed")
+
+	d := newTestDispatcher(&fakePublisher{}, Config{BatchSize: 10, MaxRetries: 3})
+	require.Nil(t, d.metrics)
+
+	require.NoError(t, d.dispatchTable(ctx, TableSpec{Table: "pos_outbox", Module: "pos"}))
+
+	processed, _, _, _ := rowState(t, ctx, eventID)
+	assert.True(t, processed)
 }
 
 func TestRun_StopsCleanlyOnCancel(t *testing.T) {

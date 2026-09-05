@@ -213,7 +213,7 @@ func newRouter(p routerParams) *chi.Mux {
 	if p.Pool != nil {
 		readyzPool = p.Pool.Inner()
 	}
-	r.Get("/readyz", readyzHandler(readyzPool))
+	r.Get("/readyz", readyzHandler(readyzPool, p.Logger))
 
 	if isDev {
 		r.Post("/dev/login", devLoginHandler(p.Pool, p.Signer))
@@ -240,13 +240,20 @@ type readyzResp struct {
 // orchestrator polling /readyz on a tight interval should stop routing
 // traffic here the moment the database is unreachable. A 2s timeout keeps a
 // hung database from hanging the health check itself.
-func readyzHandler(pool dbPinger) http.HandlerFunc {
+//
+// The degraded body never carries the real error: /readyz is auth-exempt
+// (same as /healthz — main.go's routing table above) and, once a reverse
+// proxy fronts this service, may be reachable from the public internet.
+// pgx connection errors can embed internal detail (hostnames, DB usernames,
+// driver internals), so the raw error is logged server-side at Warn and the
+// client only ever sees a constant "unreachable" — this fix's whole point.
+func readyzHandler(pool dbPinger, logger *zap.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if pool == nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(readyzResp{Status: "degraded", DB: "db pool not configured"})
+			_ = json.NewEncoder(w).Encode(readyzResp{Status: "degraded", DB: "unreachable"})
 			return
 		}
 
@@ -254,8 +261,9 @@ func readyzHandler(pool dbPinger) http.HandlerFunc {
 		defer cancel()
 
 		if err := pool.Ping(ctx); err != nil {
+			logger.Warn("readyz: database ping failed", zap.Error(err))
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(readyzResp{Status: "degraded", DB: err.Error()})
+			_ = json.NewEncoder(w).Encode(readyzResp{Status: "degraded", DB: "unreachable"})
 			return
 		}
 

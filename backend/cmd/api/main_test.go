@@ -17,6 +17,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"onlinemenu.tr/internal/modules/catalog"
 	"onlinemenu.tr/internal/modules/identity"
@@ -249,7 +250,13 @@ func (f fakePinger) Ping(_ context.Context) error {
 
 // TestReadyzHandler covers the DB-reachable and DB-down branches, plus the
 // defensive nil-pool branch (routerParams.Pool is nil until fx wires it).
+// The degraded body must never carry the real error text — /readyz is
+// auth-exempt and may sit behind a public reverse proxy — so every degraded
+// case asserts a constant "unreachable" body and, separately, that the raw
+// error string never appears anywhere in the response.
 func TestReadyzHandler(t *testing.T) {
+	const dbErrText = "dial tcp: connection refused: host=postgres user=app_runtime"
+
 	tests := []struct {
 		name       string
 		pool       dbPinger
@@ -264,15 +271,15 @@ func TestReadyzHandler(t *testing.T) {
 		},
 		{
 			name:       "db down",
-			pool:       fakePinger{err: errors.New("dial tcp: connection refused")},
+			pool:       fakePinger{err: errors.New(dbErrText)},
 			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   `{"status":"degraded","db":"dial tcp: connection refused"}`,
+			wantBody:   `{"status":"degraded","db":"unreachable"}`,
 		},
 		{
 			name:       "pool not configured",
 			pool:       nil,
 			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   `{"status":"degraded","db":"db pool not configured"}`,
+			wantBody:   `{"status":"degraded","db":"unreachable"}`,
 		},
 	}
 
@@ -281,12 +288,40 @@ func TestReadyzHandler(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 			w := httptest.NewRecorder()
 
-			readyzHandler(tc.pool).ServeHTTP(w, req)
+			readyzHandler(tc.pool, zap.NewNop()).ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			assert.JSONEq(t, tc.wantBody, w.Body.String())
+			assert.NotContains(t, w.Body.String(), dbErrText,
+				"the raw DB error must never reach an unauthenticated client")
 		})
 	}
+}
+
+// TestReadyzHandler_LogsRealErrorButHidesItFromClient is the regression test
+// for the information-disclosure fix: the operator-facing log line must
+// still carry the real pgx error (needed to actually debug an outage), while
+// the client-facing JSON body carries only the constant "unreachable".
+func TestReadyzHandler_LogsRealErrorButHidesItFromClient(t *testing.T) {
+	const dbErrText = "dial tcp: connection refused: host=postgres user=app_runtime"
+
+	core, logs := observer.New(zap.WarnLevel)
+	logger := zap.New(core)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+
+	readyzHandler(fakePinger{err: errors.New(dbErrText)}, logger).ServeHTTP(w, req)
+
+	assert.JSONEq(t, `{"status":"degraded","db":"unreachable"}`, w.Body.String())
+	assert.NotContains(t, w.Body.String(), dbErrText)
+
+	entries := logs.FilterMessage("readyz: database ping failed").All()
+	require.Len(t, entries, 1, "the real error must be logged exactly once per failed probe")
+	assert.Equal(t, zap.WarnLevel, entries[0].Level)
+	gotErr, ok := entries[0].ContextMap()["error"].(string)
+	require.True(t, ok, "log entry must carry an \"error\" field")
+	assert.Equal(t, dbErrText, gotErr, "the operator-facing log must carry the real error")
 }
 
 // TestReadyzHandler_PingTimesOutAt2s proves the handler bounds a hung Ping
@@ -299,7 +334,7 @@ func TestReadyzHandler_PingTimesOutAt2s(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	start := time.Now()
-	readyzHandler(blocked).ServeHTTP(w, req)
+	readyzHandler(blocked, zap.NewNop()).ServeHTTP(w, req)
 	elapsed := time.Since(start)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)

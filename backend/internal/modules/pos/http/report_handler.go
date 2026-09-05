@@ -36,7 +36,7 @@ func (h *Handler) saleDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tz := r.URL.Query().Get("tz")
+	tz := resolveReportTZ(r.URL.Query().Get("tz"))
 
 	details, err := h.reports.SaleDetails(r.Context(), p, service.SaleDetailsRequest{
 		BranchID: branchID,
@@ -50,6 +50,20 @@ func (h *Handler) saleDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, toSaleDetailsResponse(branchID, from, to, tz, details))
+}
+
+// resolveReportTZ applies service.DefaultReportTZ (tz is optional — pilot
+// scope is Turkey-only) when the query omitted it, so the value used to
+// build both the service request AND the echoed response "tz" field is the
+// same resolved zone, not the raw (possibly empty) query string.
+// ReportService.SaleDetails applies the identical default internally for any
+// other caller of the service — see DefaultReportTZ's doc comment — this
+// mirrors it here only so the handler has a concrete value to echo back.
+func resolveReportTZ(raw string) string {
+	if raw == "" {
+		return service.DefaultReportTZ
+	}
+	return raw
 }
 
 // ---------------------------------------------------------------------------

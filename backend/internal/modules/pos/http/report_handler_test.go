@@ -103,6 +103,24 @@ func TestSaleDetails_Unauthorized(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+// TestResolveReportTZ pins the tz-optional contract (task-4 fix round 1: tz
+// is optional per the brief, defaulting to service.DefaultReportTZ, not a
+// 422 "invalid tz" — that error is now reserved for a non-empty garbage
+// value, see ReportService.SaleDetails / TestReportService_SaleDetails_
+// InvalidTimezone). Tested as a pure function here — same layering as
+// TestParseOrderIDs in order_ids_test.go — rather than via a full
+// saleDetails request, because h.reports is a concrete *service.ReportService
+// with no DB-free fake available in this package; the "empty tz actually
+// reaches the service as the default and the store sees it" half of the
+// contract is covered instead by
+// TestReportService_SaleDetails_DefaultsEmptyTZ in the service package.
+func TestResolveReportTZ(t *testing.T) {
+	assert.Equal(t, service.DefaultReportTZ, resolveReportTZ(""))
+	assert.Equal(t, "Europe/Istanbul", resolveReportTZ(""))
+	assert.Equal(t, "UTC", resolveReportTZ("UTC"), "a non-empty value passes through unchanged, even one ReportService will later reject")
+	assert.Equal(t, "Not/AZone", resolveReportTZ("Not/AZone"), "resolveReportTZ does not validate — that is ReportService's job")
+}
+
 // TestToSaleDetailsResponse_ArraysAreNeverNull pins the JSON array contract
 // (task-2-review follow-up): paymentpub.SalesSummaryReader returns nil
 // slices for an empty window/branch, and domain.SalesSummary's own

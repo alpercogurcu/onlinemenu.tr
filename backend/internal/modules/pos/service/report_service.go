@@ -28,13 +28,22 @@ var ErrInvalidRange = errors.New("pos/service/report: from must be before to")
 // pilot-scale checks/orders tables have no index tuned for a scan that wide).
 var ErrRangeTooLong = errors.New("pos/service/report: range exceeds 92 days")
 
-// ErrInvalidTimezone is returned when TZ is empty or not a loadable IANA
-// zone name. Empty is rejected rather than silently defaulting to UTC
-// (time.LoadLocation("") succeeds as UTC) because ByDay's date bucketing is
-// meaningless without an explicit zone — a report client that forgot the
-// query parameter must be told, not served a UTC-bucketed report it never
-// asked for.
+// ErrInvalidTimezone is returned when TZ is a non-empty string that is not a
+// loadable IANA zone name. An empty TZ is no longer an error — see
+// DefaultReportTZ — but a caller-supplied garbage value still must be
+// reported, not silently defaulted, so a typo'd tz query parameter (e.g.
+// "Europe/Istambul") is not answered with a wrong-zone report the client
+// never asked for.
 var ErrInvalidTimezone = errors.New("pos/service/report: invalid timezone")
+
+// DefaultReportTZ is the timezone SaleDetails uses when
+// SaleDetailsRequest.TZ is empty — pilot scope is Turkey-only, so an
+// unspecified tz means "the branch's own timezone" for every branch that
+// exists today. Exported so http.saleDetails can apply the identical default
+// before echoing the resolved value back in the response's "tz" field
+// (ReportService.SaleDetails itself returns no TZ field to read that back
+// from — see SaleDetails' doc comment).
+const DefaultReportTZ = "Europe/Istanbul"
 
 // maxReportRange bounds SaleDetailsRequest's [From, To) window; see
 // ErrRangeTooLong.
@@ -148,14 +157,18 @@ type SaleDetails struct {
 // cross-module transactional consistency here would mean pos taking a
 // dependency on payment's transaction, which module isolation forbids.
 func (s *ReportService) SaleDetails(ctx context.Context, principal auth.Principal, req SaleDetailsRequest) (SaleDetails, error) {
+	// Applied before any validation so every caller of the service — HTTP or
+	// otherwise — gets the identical default, not just http.saleDetails (see
+	// DefaultReportTZ's doc comment).
+	if req.TZ == "" {
+		req.TZ = DefaultReportTZ
+	}
+
 	if !req.From.Before(req.To) {
 		return SaleDetails{}, ErrInvalidRange
 	}
 	if req.To.Sub(req.From) > maxReportRange {
 		return SaleDetails{}, ErrRangeTooLong
-	}
-	if req.TZ == "" {
-		return SaleDetails{}, ErrInvalidTimezone
 	}
 	if _, err := time.LoadLocation(req.TZ); err != nil {
 		return SaleDetails{}, ErrInvalidTimezone

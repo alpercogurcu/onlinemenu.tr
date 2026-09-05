@@ -26,15 +26,19 @@ import (
 // fakeSalesSummaryStore is a test double for salesSummaryStore. called
 // records whether SalesSummary was ever invoked, so tests can assert a
 // rejected request never reaches it (e.g. branch-forbidden must fail before
-// any data access).
+// any data access). gotFilter records the last filter it was called with, so
+// tests can assert what ReportService actually resolved (e.g. a defaulted
+// TZ) rather than only what the caller originally passed in.
 type fakeSalesSummaryStore struct {
-	summary domain.SalesSummary
-	err     error
-	called  bool
+	summary   domain.SalesSummary
+	err       error
+	called    bool
+	gotFilter domain.SalesSummaryFilter
 }
 
-func (f *fakeSalesSummaryStore) SalesSummary(_ context.Context, _ uuid.UUID, _ domain.SalesSummaryFilter) (domain.SalesSummary, error) {
+func (f *fakeSalesSummaryStore) SalesSummary(_ context.Context, _ uuid.UUID, filter domain.SalesSummaryFilter) (domain.SalesSummary, error) {
 	f.called = true
+	f.gotFilter = filter
 	return f.summary, f.err
 }
 
@@ -121,6 +125,9 @@ func TestReportService_SaleDetails_RangeTooLong(t *testing.T) {
 	assert.False(t, store.called, "repo must not be called on validation failure")
 }
 
+// TestReportService_SaleDetails_InvalidTimezone covers non-empty garbage tz
+// values only — an EMPTY tz is no longer an error, see
+// TestReportService_SaleDetails_DefaultsEmptyTZ below (DefaultReportTZ).
 func TestReportService_SaleDetails_InvalidTimezone(t *testing.T) {
 	branchID := uuid.New()
 	store := &fakeSalesSummaryStore{}
@@ -129,17 +136,38 @@ func TestReportService_SaleDetails_InvalidTimezone(t *testing.T) {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
 
-	tests := []string{"", "Not/AZone"}
-	for _, tz := range tests {
-		_, err := svc.SaleDetails(context.Background(), reportTestPrincipal(branchID), SaleDetailsRequest{
-			BranchID: branchID,
-			From:     from,
-			To:       to,
-			TZ:       tz,
-		})
-		require.ErrorIsf(t, err, ErrInvalidTimezone, "tz=%q", tz)
-	}
+	_, err := svc.SaleDetails(context.Background(), reportTestPrincipal(branchID), SaleDetailsRequest{
+		BranchID: branchID,
+		From:     from,
+		To:       to,
+		TZ:       "Not/AZone",
+	})
+	require.ErrorIs(t, err, ErrInvalidTimezone)
 	assert.False(t, store.called, "repo must not be called on validation failure")
+}
+
+// TestReportService_SaleDetails_DefaultsEmptyTZ pins DefaultReportTZ: tz is
+// optional (pilot scope is Turkey-only), an empty SaleDetailsRequest.TZ must
+// resolve to "Europe/Istanbul" — visible here as the TZ the fake store's
+// filter was actually called with — and must NOT return ErrInvalidTimezone.
+func TestReportService_SaleDetails_DefaultsEmptyTZ(t *testing.T) {
+	branchID := uuid.New()
+	store := &fakeSalesSummaryStore{}
+	svc := newTestReportService(store, &fakePaymentSummary{})
+
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+
+	_, err := svc.SaleDetails(context.Background(), reportTestPrincipal(branchID), SaleDetailsRequest{
+		BranchID: branchID,
+		From:     from,
+		To:       to,
+		TZ:       "",
+	})
+	require.NoError(t, err)
+	assert.True(t, store.called)
+	assert.Equal(t, DefaultReportTZ, store.gotFilter.TZ)
+	assert.Equal(t, "Europe/Istanbul", store.gotFilter.TZ)
 }
 
 func TestReportService_SaleDetails_BranchForbidden(t *testing.T) {

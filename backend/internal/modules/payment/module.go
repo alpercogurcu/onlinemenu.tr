@@ -4,6 +4,7 @@ package payment
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -43,6 +44,8 @@ var Module = fx.Module("payment",
 		repo.NewCashSessionRepo,
 		service.NewCashSessionService,
 		service.NewCashSessionPinService,
+		service.NewSalesSummaryService,
+		fx.Annotate(newSalesSummaryReader, fx.As(new(pub.SalesSummaryReader))),
 		newCashSessionOpenChecker,
 		// Bind the concrete admin repo to the interface the HTTP layer declares
 		// at its point of use, so payment_http never imports payment_repo.
@@ -149,6 +152,22 @@ func (a *saleReaderAdapter) TotalPaidForCheck(ctx context.Context, tenantID, che
 
 func (a *saleReaderAdapter) PendingTotalForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
 	return a.svc.PendingTotalForCheck(ctx, tenantID, checkID)
+}
+
+// salesSummaryReaderAdapter adapts SalesSummaryService to pub.SalesSummaryReader
+// (same one-struct-per-interface pattern as saleReaderAdapter above).
+type salesSummaryReaderAdapter struct{ svc *service.SalesSummaryService }
+
+func newSalesSummaryReader(svc *service.SalesSummaryService) *salesSummaryReaderAdapter {
+	return &salesSummaryReaderAdapter{svc: svc}
+}
+
+func (a *salesSummaryReaderAdapter) PaymentTotalsByMethod(ctx context.Context, tenantID, branchID uuid.UUID, from, to time.Time) ([]pub.MethodTotal, error) {
+	return a.svc.PaymentTotalsByMethod(ctx, tenantID, branchID, from, to)
+}
+
+func (a *salesSummaryReaderAdapter) CashSessionsInWindow(ctx context.Context, tenantID, branchID uuid.UUID, from, to time.Time) ([]pub.CashSessionSummary, error) {
+	return a.svc.CashSessionsInWindow(ctx, tenantID, branchID, from, to)
 }
 
 // CashSessionOpenChecker adapts CashSessionPinService.IsOpen to a type

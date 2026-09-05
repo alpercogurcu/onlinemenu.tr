@@ -42,6 +42,20 @@ const (
 	PaymentStatusVoided    PaymentStatus = "voided"
 )
 
+// MethodTotal is one (method, status) bucket of PaymentRepo.TotalsByMethod's
+// grouped read. Method/Status are plain strings, not PaymentMethod/
+// PaymentStatus: this exact shape is what payment/public.MethodTotal (the
+// pos-facing sales-summary contract) declares, and payment_repo may not
+// import payment_public (go-arch-lint), so the fields are kept
+// string/int64-only here to make the two structs trivially convertible at
+// the service boundary rather than tying the repo layer to the public one.
+type MethodTotal struct {
+	Method string
+	Status string
+	Count  int64
+	Total  int64
+}
+
 // Payment is the aggregate root for a single payment transaction.
 type Payment struct {
 	ID              uuid.UUID

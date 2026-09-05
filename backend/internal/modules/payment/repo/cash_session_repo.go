@@ -343,6 +343,41 @@ func (r *CashSessionRepo) SumCompletedCashPayments(ctx context.Context, tx pgx.T
 	return total, nil
 }
 
+// ListByBranchWindow returns sessions for a branch overlapping [from, to),
+// oldest opened_at first — the pos day-end sales report's cash-session list
+// (payment/public.SalesSummaryReader). A session overlaps the window when it
+// was opened before the window ends and (it is still open, or it closed no
+// earlier than the window's start): opened_at < to AND (closed_at IS NULL OR
+// closed_at >= from). id is a secondary sort key only to make the order
+// deterministic when two sessions share an opened_at; it carries no meaning
+// beyond that.
+func (r *CashSessionRepo) ListByBranchWindow(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID, from, to time.Time) ([]domain.CashSession, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT `+cashSessionColumns+`
+		FROM cash_sessions
+		WHERE tenant_id = $1 AND branch_id = $2
+		  AND opened_at < $4 AND (closed_at IS NULL OR closed_at >= $3)
+		ORDER BY opened_at, id
+	`, tenantID, branchID, from.UTC(), to.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: list cash sessions by branch window: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []domain.CashSession
+	for rows.Next() {
+		s, err := scanCashSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("payment/repo: list cash sessions by branch window: scan: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment/repo: list cash sessions by branch window: %w", err)
+	}
+	return sessions, nil
+}
+
 const cashSessionColumns = `
 	id, tenant_id, branch_id, status, opening_counted_amount, opening_notes,
 	opened_by, opened_at, closing_counted_amount, closing_denominations,

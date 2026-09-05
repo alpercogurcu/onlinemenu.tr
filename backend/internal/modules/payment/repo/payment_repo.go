@@ -246,6 +246,39 @@ func (r *PaymentRepo) PendingTotalForCheck(ctx context.Context, tx pgx.Tx, tenan
 	return total, nil
 }
 
+// TotalsByMethod groups payments created in [from, to) for one branch by
+// (method, status), for status in {completed, voided} — the pos day-end sales
+// report's payment-method breakdown (payment/public.SalesSummaryReader).
+// Ordered by method, status for a deterministic read.
+func (r *PaymentRepo) TotalsByMethod(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID, from, to time.Time) ([]domain.MethodTotal, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT method, status, COUNT(*), COALESCE(SUM(amount_total), 0)
+		FROM payments
+		WHERE tenant_id = $1 AND branch_id = $2
+		  AND status IN ('completed', 'voided')
+		  AND created_at >= $3 AND created_at < $4
+		GROUP BY method, status
+		ORDER BY method, status
+	`, tenantID, branchID, from.UTC(), to.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: totals by method: %w", err)
+	}
+	defer rows.Close()
+
+	var totals []domain.MethodTotal
+	for rows.Next() {
+		var t domain.MethodTotal
+		if err := rows.Scan(&t.Method, &t.Status, &t.Count, &t.Total); err != nil {
+			return nil, fmt.Errorf("payment/repo: totals by method: scan: %w", err)
+		}
+		totals = append(totals, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment/repo: totals by method: %w", err)
+	}
+	return totals, nil
+}
+
 // InsertOutbox records a payment domain event within the caller's transaction.
 func InsertOutbox(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, aggregateType, aggregateID, eventType string, payload any) error {
 	data, err := json.Marshal(payload)

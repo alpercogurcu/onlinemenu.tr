@@ -5,6 +5,7 @@ package public
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -85,4 +86,58 @@ type SaleReader interface {
 	// would not, because a check can have a pending payment AND still be
 	// short of its total.
 	PendingTotalForCheck(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error)
+}
+
+// MethodTotal aggregates completed/voided payments in a window by (method,
+// status). Method/Status are the payments table's raw method/status values
+// ("cash" | "terminal" | "meal_card" | "comp" | "no_charge" | "open_account",
+// "completed" | "voided"), kept as plain strings here rather than
+// domain.PaymentMethod/PaymentStatus: this package may not depend on
+// payment_domain (go-arch-lint), so it is a standalone struct shaped
+// identically to domain.MethodTotal — SalesSummaryService converts between
+// them at the module boundary.
+type MethodTotal struct {
+	Method string
+	Status string
+	Count  int64
+	Total  int64
+}
+
+// CashSessionSummary is one cash session's reconciliation figures as of the
+// end of the report window (or now, for a still-open session) — the day-end
+// sales report's cash-session line (see service.CashSessionService.buildView,
+// which computes the same figures for the live cash-session API; this is
+// that same view projected for a report window instead of "right now").
+type CashSessionSummary struct {
+	ID       uuid.UUID
+	Status   string
+	OpenedAt time.Time
+	ClosedAt *time.Time
+
+	OpeningCountedAmount int64
+	// CashPaymentsTaken is completed cash payments in the session's own
+	// [OpenedAt, ClosedAt) window (see CashSessionRepo.SumCompletedCashPayments)
+	// — not clipped to the report window, which may only partially overlap it.
+	CashPaymentsTaken int64
+	MovementsNet      int64
+	ExpectedClose     int64
+
+	// ClosingCountedAmount and Difference are nil until a closing count has
+	// been submitted — mirroring CashSessionView, there is nothing to compare
+	// yet for a session still fully open.
+	ClosingCountedAmount *int64
+	Difference           *int64
+}
+
+// SalesSummaryReader answers the pos day-end sales report's payment-side
+// questions (payment method breakdown, cash session reconciliation).
+// Dependency direction: pos → payment.public.
+type SalesSummaryReader interface {
+	// PaymentTotalsByMethod groups payments created in [from, to) for one
+	// branch by (method, status), for status in {completed, voided}.
+	PaymentTotalsByMethod(ctx context.Context, tenantID, branchID uuid.UUID, from, to time.Time) ([]MethodTotal, error)
+
+	// CashSessionsInWindow lists sessions overlapping [from, to) (opened_at <
+	// to AND (closed_at IS NULL OR closed_at >= from)), oldest first.
+	CashSessionsInWindow(ctx context.Context, tenantID, branchID uuid.UUID, from, to time.Time) ([]CashSessionSummary, error)
 }

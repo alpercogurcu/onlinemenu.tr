@@ -63,3 +63,24 @@ describe("can (cosmetic client-side permission gate)", () => {
     expect(can("storefront.qr.manage")).toBe(false)
   })
 })
+
+describe("can (pos.report.read)", () => {
+  afterEach(() => {
+    clearAccessToken()
+  })
+
+  it("denies the sales report for a cashier", () => {
+    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.cashier]))
+    expect(can("pos.report.read")).toBe(false)
+  })
+
+  it("allows the sales report for a shift_manager", () => {
+    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.shiftManager]))
+    expect(can("pos.report.read")).toBe(true)
+  })
+
+  it("allows the sales report for the manager wildcard role", () => {
+    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.manager]))
+    expect(can("pos.report.read")).toBe(true)
+  })
+})

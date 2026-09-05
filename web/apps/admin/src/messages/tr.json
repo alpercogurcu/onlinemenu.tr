@@ -215,5 +215,69 @@
       "manageDenied": "Bu işlem için yetkiniz yok. QR kodu üretme/yenileme/iptal için Shift Müdürü veya Yönetici yetkisi gerekir.",
       "viewDenied": "Bu masanın QR kodu durumunu görüntüleme yetkiniz yok."
     }
+  },
+  "dashboard": {
+    "title": "Genel Bakış",
+    "subtitle": "İşletmenizin günlük performansını takip edin.",
+    "branch": "Şube",
+    "branchPlaceholder": "Şube seçin",
+    "noBranch": "Önce bir şube seçin",
+    "noPermission": "Bu rapor için Shift Müdürü yetkisi gerekir.",
+    "openChecks": "Açık Adisyon",
+    "openChecksHint": "Şu anda açık",
+    "totalProducts": "Toplam Ürün",
+    "totalProductsHint": "Katalogdaki ürünler",
+    "sales": "Satış",
+    "salesHint": "Seçilen dönemdeki brüt satış",
+    "closedChecks": "Adisyon",
+    "closedChecksHint": "Kapanan adisyon sayısı",
+    "averageCheck": "Ortalama Adisyon",
+    "averageCheckHint": "Kapanan adisyon başına ortalama",
+    "cancellations": "İptal",
+    "cancellationsHint": "{count} adisyon",
+    "period": {
+      "label": "Dönem",
+      "today": "Bugün",
+      "yesterday": "Dün",
+      "last7": "Son 7 gün",
+      "thisMonth": "Bu ay"
+    },
+    "chart": {
+      "title": "Günlük Satış",
+      "description": "Seçilen dönemin günlük satış grafiği",
+      "tooltipLabel": "Satış"
+    },
+    "payments": {
+      "title": "Ödemeler",
+      "count": "Adet",
+      "total": "Tutar",
+      "voidedTitle": "İptal edilen ödemeler",
+      "method": {
+        "label": "Yöntem",
+        "cash": "Nakit",
+        "terminal": "Kart/ÖKC",
+        "mealCard": "Yemek Kartı",
+        "comp": "İkram",
+        "noCharge": "Ödemesiz",
+        "openAccount": "Açık Hesap"
+      }
+    },
+    "tax": {
+      "title": "KDV Dağılımı",
+      "rate": "Oran",
+      "base": "Matrah",
+      "tax": "KDV",
+      "gross": "Brüt"
+    },
+    "cashSessions": {
+      "title": "Kasa Oturumları",
+      "opened": "Açılış",
+      "openingAmount": "Açılış Tutarı",
+      "cashTaken": "Alınan Nakit",
+      "movementsNet": "Hareket Net",
+      "expected": "Beklenen",
+      "counted": "Sayılan",
+      "difference": "Fark"
+    }
   }
 }

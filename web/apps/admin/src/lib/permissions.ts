@@ -84,6 +84,12 @@ const ACTION_ROLES: Record<string, ReadonlySet<string>> = {
   // action (storefront.qr.manage), granted to shift_manager (+ manager
   // wildcard).
   "storefront.qr.manage": new Set(["shift_manager"]),
+  // GET /pos/reports/sale-details: end-of-day sales report, granted to
+  // shift_manager (+ manager wildcard) — deliberately NOT cashier, who runs
+  // the till but does not see the branch's aggregate figures. The backend
+  // 403s a cashier regardless; this only hides the report section instead of
+  // rendering a raw error after a fetch that was always going to fail.
+  "pos.report.read": new Set(["shift_manager"]),
 }
 
 /**

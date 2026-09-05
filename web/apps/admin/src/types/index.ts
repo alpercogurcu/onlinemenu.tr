@@ -447,3 +447,77 @@ export interface IssuedQRCode {
   qr_code: QRCode
   token: string
 }
+
+// Sales report — GET /api/v1/pos/reports/sale-details response
+// (backend/internal/modules/pos/repo/report_repo.go). Every amount is kuruş
+// (int64); render with lib/money.ts's formatKurus, never divide by 100 here.
+export type ReportPaymentMethod =
+  | "cash"
+  | "terminal"
+  | "meal_card"
+  | "comp"
+  | "no_charge"
+  | "open_account"
+export type ReportPaymentStatus = "completed" | "voided"
+
+export interface SaleDetailsSummary {
+  closed_check_count: number
+  gross: number
+  item_count: number
+  average_check: number
+}
+export interface SaleDetailsCancellations {
+  check_count: number
+  amount: number
+}
+export interface SaleDetailsTaxRate {
+  rate_bps: number
+  gross: number
+  base: number
+  tax: number
+}
+export interface SaleDetailsByDay {
+  date: string
+  gross: number
+  check_count: number
+}
+export interface SaleDetailsBySource {
+  source: string
+  check_count: number
+  gross: number
+}
+export interface SaleDetailsPayment {
+  method: ReportPaymentMethod
+  status: ReportPaymentStatus
+  count: number
+  total: number
+}
+// A cash session row. `closed_at`, `closing_counted_amount` and `difference`
+// are null for a session still open (or, for `difference`, one closed without
+// a counted amount) — see docs/adr/DATA-008.
+export interface SaleDetailsCashSession {
+  id: string
+  status: string
+  opened_at: string
+  closed_at: string | null
+  opening_counted_amount: number
+  cash_payments_taken: number
+  movements_net: number
+  expected_close: number
+  closing_counted_amount: number | null
+  difference: number | null
+}
+
+export interface SaleDetails {
+  branch_id: string
+  from: string
+  to: string
+  tz: string
+  sales: SaleDetailsSummary
+  cancellations: SaleDetailsCancellations
+  by_tax_rate: SaleDetailsTaxRate[]
+  by_day: SaleDetailsByDay[]
+  by_source: SaleDetailsBySource[]
+  payments: SaleDetailsPayment[]
+  cash_sessions: SaleDetailsCashSession[]
+}

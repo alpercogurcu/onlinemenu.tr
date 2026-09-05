@@ -131,4 +131,48 @@ describe("useOrderDetails", () => {
     expect(result.current.size).toBe(0)
     expect(get).not.toHaveBeenCalled()
   })
+
+  // A ticket moving between KDS columns reorders `allOrderIds` (a flatMap
+  // over columns) without changing the set of ids on the board. That must
+  // not look like a new id list and re-request everything already resolved.
+  it("reordering the same ids makes no new request", async () => {
+    const { result, rerender } = renderHook(({ list }: { list: string[] }) => useOrderDetails(list), {
+      wrapper: Wrapper,
+      initialProps: { list: ids(3) },
+    })
+    await waitFor(() => expect(result.current.size).toBe(3))
+    expect(get).toHaveBeenCalledTimes(1)
+
+    rerender({ list: [...ids(3)].reverse() })
+
+    expect(result.current.size).toBe(3)
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
+  // A fetch started for the board as it was a moment ago must still land its
+  // result once it settles, even though the id list has since changed and
+  // the effect that started it has already been superseded.
+  it("a fetch in flight when the list changes still resolves its orders", async () => {
+    let resolveFirst!: (value: { data: Order[] }) => void
+    const first = new Promise<{ data: Order[] }>((resolve) => {
+      resolveFirst = resolve
+    })
+    get.mockImplementationOnce(() => first)
+
+    const { result, rerender } = renderHook(({ list }: { list: string[] }) => useOrderDetails(list), {
+      wrapper: Wrapper,
+      initialProps: { list: ids(3) },
+    })
+    expect(get).toHaveBeenCalledTimes(1)
+
+    rerender({ list: [...ids(3), "fresh"] })
+    await waitFor(() => expect(result.current.has("fresh")).toBe(true))
+    expect(get).toHaveBeenCalledTimes(2)
+
+    resolveFirst({ data: ids(3).map(orderOf) })
+
+    await waitFor(() => expect(result.current.size).toBe(4))
+    for (const id of ids(3)) expect(result.current.has(id)).toBe(true)
+    expect(get).toHaveBeenCalledTimes(2)
+  })
 })

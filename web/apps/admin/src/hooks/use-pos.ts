@@ -261,7 +261,27 @@ const ORDER_DETAILS_BATCH = 100
 export function useOrderDetails(ids: string[]): Map<string, Order> {
   const [details, setDetails] = useState<Map<string, Order>>(() => new Map())
   const requested = useRef<Set<string>>(new Set())
-  const idsKey = ids.join(",")
+  // The KDS board (allOrderIds) is a flatMap over kitchen columns, so a ticket
+  // moving from one column to another reorders `ids` without changing the
+  // set. Keying the effect on a sorted copy means that reorder does not
+  // re-run the effect (and does not re-request ids already resolved).
+  const idsKey = [...ids].sort().join(",")
+  // Read by fetch callbacks that may settle after `ids` moved on, so a result
+  // for a ticket that has since left the board is never resurrected into the
+  // map. Updated every render (not just on effect runs) so it is always the
+  // truly latest board, independent of whether idsKey changed.
+  const latestIds = useRef<Set<string>>(new Set())
+  latestIds.current = new Set(ids)
+  // Only false after unmount — NOT on every effect re-run — so a fetch still
+  // in flight when the id list changes keeps writing its result into state
+  // instead of being discarded.
+  const alive = useRef(true)
+
+  useEffect(() => {
+    return () => {
+      alive.current = false
+    }
+  }, [])
 
   useEffect(() => {
     const pending = ids.filter((id) => !requested.current.has(id))
@@ -280,27 +300,32 @@ export function useOrderDetails(ids: string[]): Map<string, Order> {
     })
 
     if (pending.length === 0) return
-    let cancelled = false
     const batches: string[][] = []
     for (let i = 0; i < pending.length; i += ORDER_DETAILS_BATCH) {
       batches.push(pending.slice(i, i + ORDER_DETAILS_BATCH))
     }
-    void Promise.all(
-      batches.map((batch) =>
-        api.get<Order[]>("/api/v1/pos/orders", { params: { ids: batch.join(",") } }).then(({ data }) => data ?? []),
-      ),
-    ).then((results) => {
-      if (cancelled) return
-      setDetails((prev) => {
-        const next = new Map(prev)
-        for (const order of results.flat()) next.set(order.id, order)
-        return next
-      })
-    })
-    return () => {
-      cancelled = true
+    for (const batch of batches) {
+      api
+        .get<Order[]>("/api/v1/pos/orders", { params: { ids: batch.join(",") } })
+        .then(({ data }) => {
+          if (!alive.current) return
+          setDetails((prev) => {
+            const next = new Map(prev)
+            for (const order of data ?? []) {
+              if (latestIds.current.has(order.id)) next.set(order.id, order)
+            }
+            return next
+          })
+        })
+        .catch(() => {
+          // Let the next id-list change retry this batch instead of looping
+          // forever — the KDS WebSocket reconnect already re-snapshots the
+          // board, so no logging is needed here.
+          for (const id of batch) requested.current.delete(id)
+        })
     }
-    // idsKey is the stable identity of `ids`; the array itself is rebuilt each render.
+    // idsKey is the order-independent identity of `ids`; the array itself is
+    // rebuilt (and reordered on column moves) each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey])
 

@@ -25,6 +25,26 @@ const orderColumns = `id, tenant_id, branch_id, check_id, order_channel, source,
 		       accepted_at, accepted_by, rejected_at, rejected_by,
 		       rejection_reason, note, created_at, updated_at`
 
+// orderItemColumns plays the same role as orderColumns for order_items, in
+// the exact order scanOrderItem reads them.
+const orderItemColumns = `id, tenant_id, order_id, product_id, product_name,
+		          product_price_amount, product_currency, tax_rate_bps,
+		          quantity, unit_price_amount, note, created_at`
+
+// uuidStrings renders ids for an `= ANY($n::uuid[])` parameter. They travel
+// as []string rather than []uuid.UUID because every pool here runs under
+// pgx.QueryExecModeSimpleProtocol (pgBouncer transaction-mode safety,
+// ADR-SEC-001/002 — see platform/db.go), which cannot resolve an array
+// element's OID for a non-driver-native slice type and fails with "cannot
+// find encode plan". Same pattern as CheckRepo.TotalsByCheckIDs.
+func uuidStrings(ids []uuid.UUID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
+	}
+	return out
+}
+
 // Create inserts an order and its items in the same transaction.
 //
 // Source is normalized to SourcePOS when empty: the INSERT names the column
@@ -98,6 +118,64 @@ func (r *OrderRepo) GetForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (
 		return domain.Order{}, fmt.Errorf("pos/repo/order: get for update: %w", err)
 	}
 	return o, nil
+}
+
+// ListByIDs returns the orders matching the given ids, with their items,
+// oldest first — two queries total regardless of how many ids are asked for
+// (one for the orders, one for every item of all of them), so a client
+// rendering hundreds of tickets never needs one GET /orders/{id} round-trip
+// per ticket (N+1). Deliberately not ordered by the input slice: callers key
+// the result by id, and created_at matches every other order listing here.
+//
+// An id that does not exist, or is not visible under the current tenant
+// context (RLS), is simply absent from the result; callers must treat a
+// short result as a partial answer, not an error — the same contract as
+// CheckRepo.TableLabelsByCheckIDs.
+func (r *OrderRepo) ListByIDs(ctx context.Context, tx pgx.Tx, orderIDs []uuid.UUID) ([]domain.Order, error) {
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+
+	const q = `
+		SELECT ` + orderColumns + `
+		FROM orders WHERE id = ANY($1::uuid[]) ORDER BY created_at`
+
+	rows, err := tx.Query(ctx, q, uuidStrings(orderIDs))
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: list by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []domain.Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pos/repo/order: list by ids scan: %w", err)
+		}
+		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(orders) == 0 {
+		return nil, nil
+	}
+
+	found := make([]uuid.UUID, len(orders))
+	for i, o := range orders {
+		found[i] = o.ID
+	}
+	// Items are fetched for the ids that actually came back, not the ids that
+	// were asked for: RLS may have filtered some out, and asking for those
+	// again would only widen the array parameter for no rows.
+	byOrder, err := r.itemsByOrderIDs(ctx, tx, found)
+	if err != nil {
+		return nil, err
+	}
+	for i := range orders {
+		orders[i].Items = byOrder[orders[i].ID]
+	}
+	return orders, nil
 }
 
 // ListByCheck returns all orders for a given check, oldest first.
@@ -268,11 +346,39 @@ func (r *OrderRepo) insertItems(ctx context.Context, tx pgx.Tx, orderID, tenantI
 	return out, nil
 }
 
+// itemsByOrderIDs loads the items of many orders in one query, grouped by
+// order id. An order with no items has no key in the returned map; callers
+// must treat a missing key as "no items", not an error.
+func (r *OrderRepo) itemsByOrderIDs(ctx context.Context, tx pgx.Tx, orderIDs []uuid.UUID) (map[uuid.UUID][]domain.OrderItem, error) {
+	byOrder := make(map[uuid.UUID][]domain.OrderItem, len(orderIDs))
+	if len(orderIDs) == 0 {
+		return byOrder, nil
+	}
+
+	const q = `
+		SELECT ` + orderItemColumns + `
+		FROM order_items WHERE order_id = ANY($1::uuid[])
+		ORDER BY order_id, created_at`
+
+	rows, err := tx.Query(ctx, q, uuidStrings(orderIDs))
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: items by order ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		oi, err := scanOrderItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pos/repo/order: items by order ids scan: %w", err)
+		}
+		byOrder[oi.OrderID] = append(byOrder[oi.OrderID], oi)
+	}
+	return byOrder, rows.Err()
+}
+
 func (r *OrderRepo) loadItems(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) ([]domain.OrderItem, error) {
 	const q = `
-		SELECT id, tenant_id, order_id, product_id, product_name,
-		       product_price_amount, product_currency, tax_rate_bps,
-		       quantity, unit_price_amount, note, created_at
+		SELECT ` + orderItemColumns + `
 		FROM order_items WHERE order_id = $1 ORDER BY created_at`
 
 	rows, err := tx.Query(ctx, q, orderID)
@@ -283,17 +389,28 @@ func (r *OrderRepo) loadItems(ctx context.Context, tx pgx.Tx, orderID uuid.UUID)
 
 	var items []domain.OrderItem
 	for rows.Next() {
-		var oi domain.OrderItem
-		if err := rows.Scan(
-			&oi.ID, &oi.TenantID, &oi.OrderID, &oi.ProductID,
-			&oi.ProductName, &oi.ProductPriceAmount, &oi.ProductCurrency,
-			&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.Note, &oi.CreatedAt,
-		); err != nil {
+		oi, err := scanOrderItem(rows)
+		if err != nil {
 			return nil, fmt.Errorf("pos/repo/order: load items scan: %w", err)
 		}
 		items = append(items, oi)
 	}
 	return items, rows.Err()
+}
+
+// scanOrderItem reads one order_items row projected as orderItemColumns.
+func scanOrderItem(s interface {
+	Scan(...any) error
+}) (domain.OrderItem, error) {
+	var oi domain.OrderItem
+	if err := s.Scan(
+		&oi.ID, &oi.TenantID, &oi.OrderID, &oi.ProductID,
+		&oi.ProductName, &oi.ProductPriceAmount, &oi.ProductCurrency,
+		&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.Note, &oi.CreatedAt,
+	); err != nil {
+		return domain.OrderItem{}, err
+	}
+	return oi, nil
 }
 
 // scanOrder reads one order row (no items).

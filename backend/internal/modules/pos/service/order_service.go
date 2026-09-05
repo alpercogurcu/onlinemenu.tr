@@ -336,6 +336,34 @@ func (s *OrderService) GetByID(ctx context.Context, tenantID, orderID uuid.UUID)
 	return o, nil
 }
 
+// ListByIDs returns the requested orders with their items in a single read
+// transaction, so a client showing many order details at once (the kitchen
+// display board) makes one call instead of one per order.
+//
+// It is a partial-result read by design: ids that do not exist, or belong to
+// another tenant (excluded by RLS inside the transaction), are absent from
+// the result rather than turning the whole call into ErrNotFound. Callers
+// must not infer existence from the response length.
+//
+// Like GetByID, it applies no branch check — see ListActiveByBranch's note:
+// the HTTP caller is already gated by pos.order.read, and the single-order
+// path this replaces reads the same rows under the same rules.
+func (s *OrderService) ListByIDs(ctx context.Context, tenantID uuid.UUID, orderIDs []uuid.UUID) ([]domain.Order, error) {
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+	var orders []domain.Order
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		orders, err = s.orderRepo.ListByIDs(ctx, tx, orderIDs)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pos/service/order: list by ids: %w", err)
+	}
+	return orders, nil
+}
+
 // ListByCheck returns all orders for a check.
 func (s *OrderService) ListByCheck(ctx context.Context, tenantID, checkID uuid.UUID) ([]domain.Order, error) {
 	var orders []domain.Order

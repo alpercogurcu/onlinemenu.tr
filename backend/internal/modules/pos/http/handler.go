@@ -4,7 +4,9 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -83,6 +85,7 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("pos.order.read")).Get("/checks/{id}/orders", hwc.h.listOrdersByCheck)
 
 		r.With(hwc.h.permit("pos.order.place"), httpx.Idempotency(hwc.cache)).Post("/orders", hwc.h.placeOrder)
+		r.With(hwc.h.permit("pos.order.read")).Get("/orders", hwc.h.listOrdersByIDs)
 		r.With(hwc.h.permit("pos.order.read")).Get("/orders/{id}", hwc.h.getOrder)
 		r.With(hwc.h.permit("pos.order.accept")).Post("/orders/{id}/accept", hwc.h.acceptOrder)
 		r.With(hwc.h.permit("pos.order.reject")).Post("/orders/{id}/reject", hwc.h.rejectOrder)
@@ -339,6 +342,85 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusCreated, toOrderResponse(o))
+}
+
+// maxOrderIDsPerRequest caps how many orders one batch read may ask for.
+// It exists to bound the array parameter and the response body, not to
+// express a business rule: a kitchen board with more live tickets than this
+// pages through several requests. 200 is comfortably above a real branch's
+// live-ticket count while keeping the response small enough to stay a single
+// cheap round-trip.
+const maxOrderIDsPerRequest = 200
+
+// listOrdersByIDs is the batch form of getOrder: it exists so a client
+// rendering many order details at once (the kitchen display) makes one
+// request instead of one per order (N+1). Same permission as getOrder
+// (pos.order.read) and the same per-order response shape — this endpoint
+// invents no new DTO.
+//
+// ids is required: without it this would become an unbounded tenant-wide
+// order dump, which is a capability the single-order endpoint never granted.
+// Ids that do not resolve (deleted, or another tenant's — filtered by RLS)
+// are silently absent from the response; the result is explicitly partial,
+// because one stale id on a kitchen board must not blank out the whole board
+// with a 404.
+func (h *Handler) listOrdersByIDs(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	ids, err := parseOrderIDs(r.URL.Query().Get("ids"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	orders, err := h.orders.ListByIDs(r.Context(), p.TenantID, ids)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	resp := make([]orderResponse, len(orders))
+	for i, o := range orders {
+		resp[i] = toOrderResponse(o)
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// parseOrderIDs reads the comma-separated `ids` query parameter into a
+// deduplicated id slice, preserving first-seen order.
+//
+// Duplicates are collapsed before the size check so a client repeating an id
+// cannot trip the limit on a request that asks for fewer distinct orders
+// than the cap allows. Every returned error is caller-fixable input and maps
+// to 422 (matching listChecks: a present-but-malformed value is 422, and an
+// absent value is only "no filter" where a filter is optional — here it is
+// not).
+func parseOrderIDs(raw string) ([]uuid.UUID, error) {
+	parts := strings.Split(raw, ",")
+	ids := make([]uuid.UUID, 0, len(parts))
+	seen := make(map[uuid.UUID]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := uuid.Parse(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid id %q", part)
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("ids query parameter is required")
+	}
+	if len(ids) > maxOrderIDsPerRequest {
+		return nil, fmt.Errorf("ids exceeds the %d id limit", maxOrderIDsPerRequest)
+	}
+	return ids, nil
 }
 
 func (h *Handler) getOrder(w http.ResponseWriter, r *http.Request) {

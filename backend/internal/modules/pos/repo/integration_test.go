@@ -914,6 +914,147 @@ func TestOrderRepo_Accept_Reject(t *testing.T) {
 	assert.NotNil(t, rejected.RejectedAt)
 }
 
+// newTestOrder creates one order with the given items, so the ListByIDs
+// tests below can build a batch without repeating the Create boilerplate.
+func newTestOrder(t *testing.T, ctx context.Context, tenantID uuid.UUID, items ...domain.OrderItem) domain.Order {
+	t.Helper()
+	orderRepo := repo.NewOrderRepo()
+	var o domain.Order
+	err := sharedPool.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		o, err = orderRepo.Create(ctx, tx, domain.Order{
+			TenantID:     tenantID,
+			BranchID:     branchA,
+			OrderChannel: domain.OrderChannelTakeaway,
+			Status:       domain.OrderStatusPending,
+			Items:        items,
+		})
+		return err
+	})
+	require.NoError(t, err)
+	return o
+}
+
+func testItem(name string, quantity int) domain.OrderItem {
+	return domain.OrderItem{
+		ProductID:          uuid.New(),
+		ProductName:        name,
+		ProductPriceAmount: 10000,
+		ProductCurrency:    "TRY",
+		TaxRateBPS:         1000,
+		Quantity:           quantity,
+		UnitPriceAmount:    10000,
+	}
+}
+
+// TestOrderRepo_ListByIDs_GroupsItemsPerOrder is the test that actually
+// protects the batch endpoint's reason for existing: items are loaded with a
+// single `order_id = ANY(...)` query, so a grouping mistake would smear one
+// order's items onto another while every "right number of orders" assertion
+// still passed. Each order here carries a distinct item count and distinct
+// product names, so a mis-grouping cannot go unnoticed.
+func TestOrderRepo_ListByIDs_GroupsItemsPerOrder(t *testing.T) {
+	ctx := context.Background()
+	orderRepo := repo.NewOrderRepo()
+
+	one := newTestOrder(t, ctx, tenantA, testItem("Ayran", 1))
+	two := newTestOrder(t, ctx, tenantA, testItem("Adana", 2), testItem("Şalgam", 3))
+	none := newTestOrder(t, ctx, tenantA)
+
+	var orders []domain.Order
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		orders, err = orderRepo.ListByIDs(ctx, tx, []uuid.UUID{one.ID, two.ID, none.ID})
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, orders, 3)
+
+	byID := make(map[uuid.UUID]domain.Order, len(orders))
+	for _, o := range orders {
+		byID[o.ID] = o
+	}
+
+	require.Len(t, byID[one.ID].Items, 1)
+	assert.Equal(t, "Ayran", byID[one.ID].Items[0].ProductName)
+
+	require.Len(t, byID[two.ID].Items, 2)
+	names := []string{byID[two.ID].Items[0].ProductName, byID[two.ID].Items[1].ProductName}
+	assert.ElementsMatch(t, []string{"Adana", "Şalgam"}, names)
+
+	assert.Empty(t, byID[none.ID].Items, "an order with no items must come back with no items, not another order's")
+
+	// The batch result must be indistinguishable from what the per-order
+	// endpoint it replaces returns.
+	var single domain.Order
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		single, err = orderRepo.GetByID(ctx, tx, two.ID)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Len(t, single.Items, len(byID[two.ID].Items), "GetByID and ListByIDs must agree on item count")
+}
+
+// TestOrderRepo_ListByIDs_UnknownIDsSkipped documents the partial-result
+// contract: an id that does not exist is absent from the result, never an
+// error — one stale id on a kitchen board must not fail the whole batch.
+func TestOrderRepo_ListByIDs_UnknownIDsSkipped(t *testing.T) {
+	ctx := context.Background()
+	orderRepo := repo.NewOrderRepo()
+
+	existing := newTestOrder(t, ctx, tenantA, testItem("Künefe", 1))
+
+	var orders []domain.Order
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		orders, err = orderRepo.ListByIDs(ctx, tx, []uuid.UUID{existing.ID, uuid.New()})
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	assert.Equal(t, existing.ID, orders[0].ID)
+}
+
+// TestOrderRepo_ListByIDs_EmptyInput guards the short-circuit: no ids means
+// no query and no error.
+func TestOrderRepo_ListByIDs_EmptyInput(t *testing.T) {
+	ctx := context.Background()
+	orderRepo := repo.NewOrderRepo()
+
+	var orders []domain.Order
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		orders, err = orderRepo.ListByIDs(ctx, tx, nil)
+		return err
+	})
+	require.NoError(t, err)
+	assert.Empty(t, orders)
+}
+
+// TestOrderRepo_ListByIDs_RLSIsolation is the batch counterpart of
+// TestOrderRepo_RLSIsolation: passing another tenant's order id must not
+// leak it, and must not fail the ids the caller IS entitled to either.
+func TestOrderRepo_ListByIDs_RLSIsolation(t *testing.T) {
+	ctx := context.Background()
+	orderRepo := repo.NewOrderRepo()
+
+	mine := newTestOrder(t, ctx, tenantA, testItem("Baklava", 1))
+	theirs := newTestOrder(t, ctx, tenantB, testItem("Sütlaç", 1))
+
+	var orders []domain.Order
+	err := sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		orders, err = orderRepo.ListByIDs(ctx, tx, []uuid.UUID{mine.ID, theirs.ID})
+		return err
+	})
+	require.NoError(t, err)
+	require.Len(t, orders, 1, "tenantB's order must not appear in tenantA's batch")
+	assert.Equal(t, mine.ID, orders[0].ID)
+	require.Len(t, orders[0].Items, 1)
+	assert.Equal(t, "Baklava", orders[0].Items[0].ProductName)
+}
+
 func TestOrderRepo_RLSIsolation(t *testing.T) {
 	ctx := context.Background()
 	orderRepo := repo.NewOrderRepo()

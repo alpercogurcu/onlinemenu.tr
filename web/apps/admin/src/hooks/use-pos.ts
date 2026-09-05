@@ -268,10 +268,15 @@ export function useOrderDetails(ids: string[]): Map<string, Order> {
   const idsKey = [...ids].sort().join(",")
   // Read by fetch callbacks that may settle after `ids` moved on, so a result
   // for a ticket that has since left the board is never resurrected into the
-  // map. Updated every render (not just on effect runs) so it is always the
-  // truly latest board, independent of whether idsKey changed.
+  // map. Updated every render via an effect (refs cannot be written during
+  // render) so it is always the truly latest board, independent of whether
+  // idsKey changed. Effects run in declaration order after commit and the
+  // `.then` callbacks below run strictly later, so this is always current by
+  // the time the data effect (or a fetch it started) reads it.
   const latestIds = useRef<Set<string>>(new Set())
-  latestIds.current = new Set(ids)
+  useEffect(() => {
+    latestIds.current = new Set(ids)
+  })
   // Only false after unmount — NOT on every effect re-run — so a fetch still
   // in flight when the id list changes keeps writing its result into state
   // instead of being discarded.

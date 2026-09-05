@@ -9,7 +9,7 @@
 // renders nothing in jsdom (zero size), so assertions target the cards and
 // tables around the chart, never the chart's own SVG output.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -164,5 +164,38 @@ describe("DashboardClient", () => {
       const [, lastConfig] = reportCallsAfter[reportCallsAfter.length - 1] as [string, { params: { from: string; to: string } }]
       expect(lastConfig.params.from).not.toBe(firstConfig.params.from)
     })
+  })
+
+  // Regression for the stale-past-midnight bug: a dashboard left open on
+  // "today" across local midnight must roll its request range forward on its
+  // own, with no preset click and no reload. Only Date/setInterval are faked
+  // (`toFake`) so Testing Library's findByText/waitFor — which poll via a
+  // REAL setTimeout — keep working normally instead of deadlocking.
+  it("refreshes the range across local midnight while the dashboard stays open", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+    vi.setSystemTime(new Date(2026, 8, 5, 23, 59, 30))
+
+    try {
+      loginAs([SHIFT_MANAGER_ID])
+      render(<DashboardClient />, { wrapper: Wrapper })
+
+      await screen.findByText("₺280,00")
+      const before = get.mock.calls.filter(([url]) => url === "/api/v1/pos/reports/sale-details").length
+
+      act(() => {
+        vi.advanceTimersByTime(60_000)
+      })
+
+      await waitFor(() => {
+        const after = get.mock.calls.filter(([url]) => url === "/api/v1/pos/reports/sale-details").length
+        expect(after).toBeGreaterThan(before)
+      })
+
+      const reportCalls = get.mock.calls.filter(([url]) => url === "/api/v1/pos/reports/sale-details")
+      const [, lastConfig] = reportCalls[reportCalls.length - 1] as [string, { params: { from: string } }]
+      expect(lastConfig.params.from).toBe(new Date(2026, 8, 6).toISOString())
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

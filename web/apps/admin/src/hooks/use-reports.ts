@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { useEffect, useState } from "react"
 
 import api from "@/lib/api"
 import type { SaleDetails } from "@/types"
@@ -7,6 +8,36 @@ export type ReportPeriod = "today" | "yesterday" | "last7" | "thisMonth"
 
 function localMidnight(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
+function calendarDayString(d: Date): string {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+// useCalendarDay returns today's LOCAL calendar day ("YYYY-MM-DD") and only
+// triggers a re-render of its caller when that day actually changes. It
+// exists to be used as a `useMemo`/`useEffect` dependency for anything
+// derived from "today" (see periodRange below) — a dashboard left open past
+// local midnight would otherwise keep computing "today" as the day it was
+// first rendered, since neither state nor props change on their own when the
+// clock crosses midnight. A 60s poll is simpler than scheduling a precise
+// midnight timeout and accurate enough: nothing here needs to roll over
+// within a second of midnight.
+export function useCalendarDay(): string {
+  const [day, setDay] = useState(() => calendarDayString(new Date()))
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const current = calendarDayString(new Date())
+      setDay((prev) => (prev === current ? prev : current))
+    }, 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  return day
 }
 
 function addDays(d: Date, days: number): Date {

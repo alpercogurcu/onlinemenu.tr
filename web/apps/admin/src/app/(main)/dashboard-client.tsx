@@ -29,7 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useCan } from "@/hooks/use-can"
 import { useProducts } from "@/hooks/use-catalog"
 import { useChecks } from "@/hooks/use-pos"
-import { periodRange, useSaleDetails, type ReportPeriod } from "@/hooks/use-reports"
+import { periodRange, useCalendarDay, useSaleDetails, type ReportPeriod } from "@/hooks/use-reports"
 import { useBranches } from "@/hooks/use-tenant"
 import { formatKurus } from "@/lib/money"
 import { useAuthStore } from "@/store/auth-store"
@@ -58,11 +58,17 @@ export default function DashboardClient() {
     }
   }, [branches, branchId])
 
-  // Recomputed on every render (cheap: two Date allocations) rather than
-  // memoized on `period` alone, so a preset held open past local midnight
-  // (e.g. "today" left selected overnight) tracks the new calendar day
-  // instead of freezing at the range computed when it was first selected.
-  const { from, to } = useMemo(() => periodRange(period), [period])
+  // `day` is a deliberate memo dependency, not a stray one: useCalendarDay()
+  // only changes value once local midnight passes, which is exactly what
+  // makes a preset like "today" left open overnight roll its range forward
+  // instead of freezing at whatever `periodRange` returned on first render.
+  // `period` alone as the dependency would recompute on every preset click
+  // but never again afterwards. The lint rule cannot see this — `day` never
+  // appears inside the callback body, only in the dependency array — so it
+  // reads as "unnecessary" when it is in fact the whole point.
+  const day = useCalendarDay()
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `day` intentionally forces a recompute; see comment above
+  const { from, to } = useMemo(() => periodRange(period), [period, day])
 
   const openChecks = useChecks({ status: "open", limit: 100 })
   const allProducts = useProducts({ limit: 5 })

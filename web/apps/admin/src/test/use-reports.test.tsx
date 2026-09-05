@@ -6,11 +6,11 @@
 // implementation (rather than hardcoded ISO strings) keeps this test
 // independent of the machine's timezone running it.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { periodRange, useSaleDetails } from "@/hooks/use-reports"
+import { periodRange, useCalendarDay, useSaleDetails } from "@/hooks/use-reports"
 
 const get = vi.fn()
 
@@ -53,6 +53,38 @@ describe("periodRange", () => {
       from: localDay(2026, 8, 1).toISOString(),
       to: localDay(2026, 8, 6).toISOString(),
     })
+  })
+})
+
+describe("useCalendarDay", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 8, 5, 23, 59, 30))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("starts at today's local calendar day", () => {
+    const { result } = renderHook(() => useCalendarDay())
+    expect(result.current).toBe("2026-09-05")
+  })
+
+  it("rolls over to the next local calendar day once local midnight passes, then holds", () => {
+    const { result } = renderHook(() => useCalendarDay())
+
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(result.current).toBe("2026-09-06")
+
+    // A second poll on the same (new) day must not cause another update —
+    // there is nothing to observe beyond the day string itself.
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(result.current).toBe("2026-09-06")
   })
 })
 

@@ -34,7 +34,14 @@ func TestReportRepo_SalesSummary(t *testing.T) {
 	reportRepo := repo.NewReportRepo()
 
 	branch := uuid.New()
-	const tz = "Europe/Istanbul" // fixed UTC+3, no DST since 2016 — no boundary surprises here
+	// Europe/Istanbul is fixed UTC+3 with no DST since 2016, so this test's
+	// two closed_at instants (10:00 UTC) land on the same calendar date in
+	// both UTC and Istanbul — that keeps THIS test's numbers simple, but it
+	// means it alone would stay green even if the AT TIME ZONE conversion or
+	// the [from, to) window predicate were deleted. See
+	// TestReportRepo_SalesSummary_WindowAndTZBoundaries for the test that
+	// actually pins those two behaviors down.
+	const tz = "Europe/Istanbul"
 
 	from := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
@@ -189,6 +196,152 @@ func TestReportRepo_SalesSummary_RLSIsolation(t *testing.T) {
 
 	assert.Equal(t, int64(1), summary.ClosedCheckCount, "tenantB's check on the same branch id must not be counted")
 	assert.Equal(t, int64(7000), summary.GrossSales, "tenantB's gross must not leak into tenantA's summary")
+}
+
+// TestReportRepo_SalesSummary_WindowAndTZBoundaries pins down the two
+// behaviors TestReportRepo_SalesSummary's same-day-in-both-zones fixture
+// cannot: the half-open [from, to) window, and the AT TIME ZONE conversion
+// actually changing which calendar day a check buckets under (not just
+// which string format it prints).
+//
+//   - checkAtFrom closes exactly AT from: included (from <= closed_at).
+//   - checkAtTo closes exactly AT to: excluded (closed_at < to is false) —
+//     deleting the window predicate would pull it in and inflate every total.
+//   - checkLateUTC closes at 22:00 UTC, which is 01:00 the NEXT day in
+//     Europe/Istanbul (UTC+3) — deleting `AT TIME ZONE $tz` (bucketing on the
+//     raw UTC date instead) would put it in the wrong ByDay row.
+func TestReportRepo_SalesSummary_WindowAndTZBoundaries(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	orderRepo := repo.NewOrderRepo()
+	reportRepo := repo.NewReportRepo()
+
+	branch := uuid.New()
+	from := time.Date(2026, 7, 1, 6, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 7, 5, 6, 0, 0, 0, time.UTC)
+
+	closeAt := func(tx pgx.Tx, gross int64, closedAt time.Time) {
+		c, err := checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branch, TableLabel: "Masa Sınır",
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA, Source: domain.SourcePOS,
+		})
+		require.NoError(t, err)
+		_, err = orderRepo.Create(ctx, tx, domain.Order{
+			TenantID: tenantA, BranchID: branch, CheckID: &c.ID,
+			OrderChannel: domain.OrderChannelDineIn, Status: domain.OrderStatusPending,
+			Items: []domain.OrderItem{{
+				ProductID: uuid.New(), ProductName: "Sınır Kalemi",
+				ProductPriceAmount: gross, ProductCurrency: "TRY",
+				TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: gross,
+			}},
+		})
+		require.NoError(t, err)
+		_, err = checkRepo.UpdateStatus(ctx, tx, c.ID, domain.CheckStatusClosed, domain.CheckStatusOpen, &staffA)
+		require.NoError(t, err)
+		_, err = tx.Exec(ctx, `UPDATE checks SET closed_at=$1 WHERE id=$2`, closedAt, c.ID)
+		require.NoError(t, err)
+	}
+
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		closeAt(tx, 1000, from)                                         // at the lower bound: included
+		closeAt(tx, 2000, to)                                           // at the upper bound: excluded
+		closeAt(tx, 3000, time.Date(2026, 7, 2, 22, 0, 0, 0, time.UTC)) // -> 2026-07-03 in Istanbul
+		return nil
+	})
+	require.NoError(t, err)
+
+	var summary domain.SalesSummary
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		summary, err = reportRepo.SalesSummary(ctx, tx, domain.SalesSummaryFilter{
+			BranchID: branch, From: from, To: to, TZ: "Europe/Istanbul",
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(2), summary.ClosedCheckCount, "the check closed exactly at `to` must be excluded")
+	assert.Equal(t, int64(4000), summary.GrossSales, "the excluded check's 2000 must not be in the total")
+
+	require.Equal(t, []domain.DayLine{
+		{Date: "2026-07-01", Gross: 1000, CheckCount: 1},
+		{Date: "2026-07-03", Gross: 3000, CheckCount: 1},
+	}, summary.ByDay, "the 22:00 UTC check must bucket under its Istanbul date, not its UTC date")
+
+	require.Equal(t, []domain.TaxLine{
+		{RateBPS: 1000, Gross: 4000, Base: 3636, Tax: 364},
+	}, summary.ByTaxRate)
+}
+
+// TestReportRepo_SalesSummary_CancelledOnlyOrder_CountsButNoTaxRow pins down
+// the INNER-vs-LEFT JOIN split between byTaxRate and byDay/bySource: a
+// CLOSED check whose only order is CANCELLED (so the order is filtered out
+// by the `o.status <> ALL(excluded)` join predicate, leaving no order_items
+// row to join) must still be counted in ByDay/BySource with Gross 0 (LEFT
+// JOIN keeps the check row), but must produce NO row at all in ByTaxRate —
+// not a spurious {RateBPS: 0, Gross: 0} row from a NULL tax_rate_bps (INNER
+// JOIN drops the check entirely there).
+func TestReportRepo_SalesSummary_CancelledOnlyOrder_CountsButNoTaxRow(t *testing.T) {
+	ctx := context.Background()
+	checkRepo := repo.NewCheckRepo()
+	orderRepo := repo.NewOrderRepo()
+	reportRepo := repo.NewReportRepo()
+
+	branch := uuid.New()
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	closedAt := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		c, err := checkRepo.Create(ctx, tx, domain.Check{
+			TenantID: tenantA, BranchID: branch, TableLabel: "Masa İptal Sipariş",
+			Status: domain.CheckStatusOpen, OpenedBy: &staffA, Source: domain.SourcePOS,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := orderRepo.Create(ctx, tx, domain.Order{
+			TenantID: tenantA, BranchID: branch, CheckID: &c.ID,
+			OrderChannel: domain.OrderChannelDineIn, Status: domain.OrderStatusCancelled,
+			Items: []domain.OrderItem{{
+				ProductID: uuid.New(), ProductName: "İptal Kalemi",
+				ProductPriceAmount: 8000, ProductCurrency: "TRY",
+				TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: 8000,
+			}},
+		}); err != nil {
+			return err
+		}
+		if _, err := checkRepo.UpdateStatus(ctx, tx, c.ID, domain.CheckStatusClosed, domain.CheckStatusOpen, &staffA); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE checks SET closed_at=$1 WHERE id=$2`, closedAt, c.ID)
+		return err
+	})
+	require.NoError(t, err)
+
+	var summary domain.SalesSummary
+	err = sharedPool.WithTenantReadTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		summary, err = reportRepo.SalesSummary(ctx, tx, domain.SalesSummaryFilter{
+			BranchID: branch, From: from, To: to, TZ: "Europe/Istanbul",
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(1), summary.ClosedCheckCount)
+	assert.Zero(t, summary.GrossSales)
+	assert.Zero(t, summary.ItemCount)
+
+	require.Equal(t, []domain.DayLine{
+		{Date: "2026-08-03", Gross: 0, CheckCount: 1},
+	}, summary.ByDay, "a closed check with only a cancelled order must still count via the LEFT JOIN")
+
+	require.Equal(t, []domain.SourceLine{
+		{Source: "pos", Gross: 0, CheckCount: 1},
+	}, summary.BySource)
+
+	assert.Empty(t, summary.ByTaxRate, "the INNER JOIN must drop the check entirely, not emit a NULL-tax-rate row")
 }
 
 // TestReportRepo_SalesSummary_EmptyWindow_ReturnsEmptySlicesNotNil guards the

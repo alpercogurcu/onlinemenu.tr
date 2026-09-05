@@ -20,11 +20,24 @@ type SalesSummaryFilter struct {
 
 // TaxLine is one KDV-rate bucket of a sales summary: Gross is the raw
 // item total at that rate, Base and Tax split it per the tax-inclusive
-// formula in ReportRepo.SalesSummary's doc comment.
+// formula NewTaxLine implements.
 type TaxLine struct {
 	RateBPS     int
 	Gross, Base int64
 	Tax         int64
+}
+
+// NewTaxLine splits a tax-inclusive gross amount into base and tax at the
+// given basis-point rate, using integer arithmetic throughout (money is
+// int64 kuruş — no floating point). The rounding half-up on the division
+// remainder (`+ den/2` before the final `/ den`) matches the pilot's Global
+// Constraints tax formula verbatim: tax = (gross*bps + (10000+bps)/2) /
+// (10000+bps), base = gross - tax. Lives in domain (not repo) so it is
+// exercised by a Docker-free unit test.
+func NewTaxLine(rateBPS int, gross int64) TaxLine {
+	den := int64(10000 + rateBPS)
+	tax := (gross*int64(rateBPS) + den/2) / den
+	return TaxLine{RateBPS: rateBPS, Gross: gross, Base: gross - tax, Tax: tax}
 }
 
 // DayLine is one calendar-day bucket of a sales summary, keyed by

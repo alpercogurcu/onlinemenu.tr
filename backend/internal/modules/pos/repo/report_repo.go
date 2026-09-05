@@ -54,6 +54,13 @@ func excludedOrderStatuses() []string {
 //
 // ByTaxRate/ByDay/BySource are always non-nil (empty slice, not nil) even
 // for an empty window, so JSON serializes them as `[]` rather than `null`.
+//
+// Callers must run this inside db.WithTenantReadTx, not a ReadCommitted
+// write tx: the four queries below execute as separate statements, and only
+// RepeatableRead (WithTenantReadTx's isolation level) guarantees they all
+// see the same snapshot — under ReadCommitted a concurrent close/cancel
+// landing between two of the four statements could make the breakdowns
+// disagree with the scalar counters.
 func (r *ReportRepo) SalesSummary(ctx context.Context, tx pgx.Tx, f domain.SalesSummaryFilter) (domain.SalesSummary, error) {
 	excluded := excludedOrderStatuses()
 
@@ -119,6 +126,12 @@ func (r *ReportRepo) statusTotals(ctx context.Context, tx pgx.Tx, f domain.Sales
 		case domain.CheckStatusCancelled:
 			summary.CancelledCheckCount = count
 			summary.CancelledAmount = amount
+		default:
+			// The WHERE clause only admits 'closed'/'cancelled' rows; a third
+			// value here means the query or the checks_status_chk constraint
+			// drifted. Fail loudly rather than silently dropping the row's
+			// counts from the report.
+			return domain.SalesSummary{}, fmt.Errorf("pos/repo/report: status totals: unexpected check status %q", status)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -157,24 +170,12 @@ func (r *ReportRepo) byTaxRate(ctx context.Context, tx pgx.Tx, f domain.SalesSum
 		if err := rows.Scan(&bps, &gross); err != nil {
 			return nil, fmt.Errorf("pos/repo/report: by tax rate scan: %w", err)
 		}
-		lines = append(lines, taxLine(bps, gross))
+		lines = append(lines, domain.NewTaxLine(bps, gross))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("pos/repo/report: by tax rate: %w", err)
 	}
 	return lines, nil
-}
-
-// taxLine splits a tax-inclusive gross amount into base and tax at the given
-// basis-point rate, using integer arithmetic throughout (money is int64
-// kuruş — no floating point). The rounding half-up on the division remainder
-// (`+ den/2` before the final `/ den`) matches the pilot's Global
-// Constraints tax formula verbatim: tax = (gross*bps + (10000+bps)/2) /
-// (10000+bps), base = gross - tax.
-func taxLine(bps int, gross int64) domain.TaxLine {
-	den := int64(10000 + bps)
-	tax := (gross*int64(bps) + den/2) / den
-	return domain.TaxLine{RateBPS: bps, Gross: gross, Base: gross - tax, Tax: tax}
 }
 
 // byDay breaks down closed-check counts and gross sales per calendar day,

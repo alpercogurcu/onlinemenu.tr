@@ -233,6 +233,16 @@ allow if {
 	has_role("shift_manager")
 }
 
+# -- POS: day-end sales report. Shift managers close the day; cashiers do not
+# see chain figures (mirrors role_permissions seed: reports/read only for
+# shift_manager). Manager passes via the wildcard above.
+pos_report_actions := {"pos.report.read"}
+
+allow if {
+	input.action in pos_report_actions
+	has_role("shift_manager")
+}
+
 # -- Storefront: table QR codes (ADR-ARCH-006 §4). Mirrors the pos.table.*
 # split directly above, because a QR code is an attribute of a table: reading
 # the inventory (which table already has a live code, which were retired) is a

@@ -258,10 +258,12 @@ var permissionWiringRegistry = map[permissionPair]wiringEntry{
 
 	// -- reports --------------------------------------------------------------
 	{"reports", "read"}: {
-		Wired: false, CheckRole: "shift_manager", CheckAction: "reports.summary.read",
-		Reason: "no reports module exists yet at all (no permit(...) call site, " +
-			"no OPA action). 'reports.summary.read' is a placeholder name for " +
-			"the watch check; see shifts/read's caveat about guessed names.",
+		Wired: true, CheckRole: "shift_manager", CheckAction: "pos.report.read",
+		Reason: "pos day-end sales report (GET /api/v1/pos/reports/sale-details) " +
+			"closed this gap: real permit(...) call site in pos/http/handler.go " +
+			"and a real OPA rule (pos_report_actions, shift_manager-only, mirrors " +
+			"the seed). Supersedes the 'reports.summary.read' placeholder name " +
+			"this entry carried before the report existed.",
 	},
 
 	// -- inventory ------------------------------------------------------------

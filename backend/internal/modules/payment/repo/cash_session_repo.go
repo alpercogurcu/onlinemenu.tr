@@ -411,6 +411,44 @@ func (r *CashSessionRepo) ListByBranchWindow(ctx context.Context, tx pgx.Tx, ten
 	return sessions, nil
 }
 
+// ListOpenOlderThan returns every still-'opened' cash session across every
+// tenant whose opened_at is before cutoff — StaleSessionWatch's read
+// (ADR-DATA-008 açıkları: a drawer left open long past a normal shift needs
+// an operator's attention). It never writes and is deliberately cross-tenant:
+// the caller must run it inside db.WithAllTenantsReadTx
+// (app.tenant_scope = 'all_tenants'), which migration/000009's
+// cash_sessions_all_tenants_select policy grants — same shape as
+// dbStaleSubmissionStore.ListStaleSubmitted for fiscal_submissions.
+//
+// Only 'opened' matches: 'closing_control' means a human already started
+// reconciling it (not "forgotten"), and 'closed'/'opening_control' are not
+// live drawers at all.
+func (r *CashSessionRepo) ListOpenOlderThan(ctx context.Context, tx pgx.Tx, cutoff time.Time) ([]domain.CashSession, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT `+cashSessionColumns+`
+		FROM cash_sessions
+		WHERE status = 'opened' AND opened_at < $1
+		ORDER BY opened_at ASC
+	`, cutoff.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("payment/repo: list open cash sessions older than cutoff: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.CashSession
+	for rows.Next() {
+		s, err := scanCashSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("payment/repo: list open cash sessions older than cutoff: scan: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment/repo: list open cash sessions older than cutoff: %w", err)
+	}
+	return out, nil
+}
+
 const cashSessionColumns = `
 	id, tenant_id, branch_id, status, opening_counted_amount, opening_notes,
 	opened_by, opened_at, closing_counted_amount, closing_denominations,

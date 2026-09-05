@@ -43,6 +43,7 @@ var Module = fx.Module("payment",
 		repo.NewFiscalAdminRepo,
 		repo.NewCashSessionRepo,
 		service.NewCashSessionService,
+		service.NewStaleSessionWatch,
 		service.NewCashSessionPinService,
 		service.NewSalesSummaryService,
 		fx.Annotate(newSalesSummaryReader, fx.As(new(pub.SalesSummaryReader))),
@@ -68,6 +69,7 @@ var Module = fx.Module("payment",
 	}),
 	fx.Invoke(registerSubmissionWorker),
 	fx.Invoke(registerReconciler),
+	fx.Invoke(registerStaleSessionWatch),
 )
 
 // newFiscalAdapter is the adapter factory (ADR-FISCAL-002 §4).
@@ -106,6 +108,13 @@ func registerSubmissionWorker(lc fx.Lifecycle, w *service.SubmissionWorker, logg
 // vendor basket TTL, so a lost result can never strand a payment silently.
 func registerReconciler(lc fx.Lifecycle, r *service.Reconciler, logger *zap.Logger) {
 	registerLoop(lc, logger, "payment: fiscal reconciler", r.Run)
+}
+
+// registerStaleSessionWatch runs the stale cash session sweep (ADR-DATA-008
+// açıkları): it warns about drawers left 'opened' long past a normal shift so
+// an operator can go check, and never closes anything on its own.
+func registerStaleSessionWatch(lc fx.Lifecycle, w *service.StaleSessionWatch, logger *zap.Logger) {
+	registerLoop(lc, logger, "payment: stale cash session watch", w.Run)
 }
 
 // registerLoop attaches a cancellable polling loop to the fx lifecycle and

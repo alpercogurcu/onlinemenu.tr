@@ -567,3 +567,116 @@ func TestCashSessionRepo_SumCompletedCashPayments_UpperBoundExcludesAfterUntil(t
 	require.NoError(t, err)
 	assert.Equal(t, int64(4000), total)
 }
+
+// ---------------------------------------------------------------------------
+// ListOpenOlderThan — StaleSessionWatch's read (ADR-DATA-008 açıkları)
+// ---------------------------------------------------------------------------
+
+// openBackdated opens a session for branch and then backdates its opened_at
+// directly, since Open always stamps time.Now(). Backdating far into the
+// past (rather than by, say, a couple of hours) keeps this test's fixture
+// unambiguously distinct from any session other tests in this shared
+// database open around the same wall-clock moment.
+func openBackdated(t *testing.T, r *repo.CashSessionRepo, tenantID, branchID uuid.UUID, openedAt time.Time) domain.CashSession {
+	t.Helper()
+	ctx := context.Background()
+	var session domain.CashSession
+	err := sharedPool.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		session, err = r.Open(ctx, tx, domain.CashSession{
+			TenantID: tenantID, BranchID: branchID, OpeningCountedAmount: 0, OpenedBy: uuid.New(),
+		})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE cash_sessions SET opened_at = $1 WHERE id = $2`, openedAt.UTC(), session.ID)
+		session.OpenedAt = openedAt.UTC()
+		return err
+	})
+	require.NoError(t, err)
+	return session
+}
+
+func listOpenOlderThan(t *testing.T, r *repo.CashSessionRepo, cutoff time.Time) []domain.CashSession {
+	t.Helper()
+	ctx := context.Background()
+	var found []domain.CashSession
+	// Cross-tenant by design (StaleSessionWatch scans every tenant in one
+	// pass) — this is the caller contract migration/000009's all-tenants
+	// SELECT policy exists for.
+	err := sharedPool.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		found, err = r.ListOpenOlderThan(ctx, tx, cutoff)
+		return err
+	})
+	require.NoError(t, err)
+	return found
+}
+
+func containsSessionID(sessions []domain.CashSession, id uuid.UUID) bool {
+	for _, s := range sessions {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCashSessionRepo_ListOpenOlderThan_FindsStaleOpenSession is the core
+// case: an 'opened' session backdated well past the cutoff must be reported.
+func TestCashSessionRepo_ListOpenOlderThan_FindsStaleOpenSession(t *testing.T) {
+	requireDB(t)
+	r := repo.NewCashSessionRepo()
+	stale := openBackdated(t, r, tenantA, uuid.New(), time.Now().UTC().Add(-48*time.Hour))
+
+	found := listOpenOlderThan(t, r, time.Now().UTC().Add(-24*time.Hour))
+
+	assert.True(t, containsSessionID(found, stale.ID), "a session opened 48h ago must be reported stale at a 24h cutoff")
+}
+
+// TestCashSessionRepo_ListOpenOlderThan_ExcludesRecentSession pins the other
+// side of the cutoff: a session opened just now must not be reported, or
+// every branch's very first shift of the day would immediately warn.
+func TestCashSessionRepo_ListOpenOlderThan_ExcludesRecentSession(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewCashSessionRepo()
+
+	var recent domain.CashSession
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		var err error
+		recent, err = r.Open(ctx, tx, domain.CashSession{
+			TenantID: tenantA, BranchID: uuid.New(), OpeningCountedAmount: 0, OpenedBy: uuid.New(),
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	found := listOpenOlderThan(t, r, time.Now().UTC().Add(-24*time.Hour))
+
+	assert.False(t, containsSessionID(found, recent.ID), "a session opened moments ago must not be reported stale")
+}
+
+// TestCashSessionRepo_ListOpenOlderThan_ExcludesClosedSession: a session that
+// closed on its own must never be flagged, no matter how long ago it opened —
+// StaleSessionWatch is about drawers someone forgot open, not history.
+func TestCashSessionRepo_ListOpenOlderThan_ExcludesClosedSession(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	r := repo.NewCashSessionRepo()
+	stale := openBackdated(t, r, tenantA, uuid.New(), time.Now().UTC().Add(-48*time.Hour))
+
+	// Force the status directly rather than walking the full
+	// opened -> closing_control -> closed state machine: this test is only
+	// pinning ListOpenOlderThan's status filter, not the transition rules
+	// (already covered by domain's own tests).
+	err := sharedPool.WithTenantTx(ctx, tenantA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE cash_sessions SET status = 'closed', closed_at = now() WHERE id = $1`, stale.ID)
+		return err
+	})
+	require.NoError(t, err)
+
+	found := listOpenOlderThan(t, r, time.Now().UTC().Add(-24*time.Hour))
+
+	assert.False(t, containsSessionID(found, stale.ID), "a closed session must never be reported, regardless of age")
+}

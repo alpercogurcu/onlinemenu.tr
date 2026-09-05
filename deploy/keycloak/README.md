@@ -192,12 +192,27 @@ vault kv put secret/keycloak/admin-client client_secret='<client secret>'
 | `KEYCLOAK_ADMIN_BASE_URL` | evet* | — | `KEYCLOAK_ADMIN_CLIENT_ID` doluysa zorunlu; eksikse süreç başlangıçta durur |
 | `KEYCLOAK_REALM` | hayır | `onlinemenu` | |
 
-### 5. SMTP — sessizce düşmez ama düşer
+### 5. SMTP — artık şablonda var; realm import env'den okur
 
-Realm'de SMTP yapılandırılmamışsa parola belirleme e-postası gönderilemez.
-Davet **başarılı sayılır** (person ve membership zaten yazılmıştır, geri
-alınacak bir şey yoktur) ama yanıt `notification_sent: false` ve
-`notification_error: "<gerçek hata>"` taşır, ayrıca Warn seviyesinde loglanır.
+`realm-onlinemenu.json`'daki `smtpServer` bloğu `${SMTP_HOST}`, `${SMTP_PORT}`,
+`${SMTP_FROM}`, `${SMTP_USER}`, `${SMTP_PASSWORD}`, `${SMTP_STARTTLS}`
+placeholder'larını taşır. Bunlar Keycloak'ın **kendi** config placeholder
+mekanizmasıdır (`docs/guides/server/importExport.adoc` — `${VAR_NAME}`
+biçimi; `${ENV_VAR:fallback}` de desteklenir) — Spring/Helm'deki `${env.X}`
+biçimi **değildir**, Keycloak öyle bir söz dizimini tanımıyor. `command:
+start --import-realm` ile başlarken bu placeholder'lar container'ın ortam
+değişkenlerinden çözülür; ayrı bir Admin Console adımı **gerekmez**.
+
+`docker-compose.prod.yml`'daki `keycloak` servisi `SMTP_*` değişkenlerini
+`.env.prod`'dan devralır (bkz. `deploy/.env.prod.example`). Değerler boş
+bırakılırsa placeholder boş string'e çözülür — import patlamaz, sadece SMTP
+devre dışı kalır (aşağıdaki davranış geçerli olur).
+
+Realm'de SMTP yapılandırılmamışsa (veya `.env.prod`'da boş bırakılmışsa)
+parola belirleme e-postası gönderilemez. Davet **başarılı sayılır** (person
+ve membership zaten yazılmıştır, geri alınacak bir şey yoktur) ama yanıt
+`notification_sent: false` ve `notification_error: "<gerçek hata>"` taşır,
+ayrıca Warn seviyesinde loglanır.
 
 Personel giriş yapamayacağı için üretimde SMTP yapılandırması **fiilen
 zorunludur**; aksi halde her davet elle parola belirlemeyi gerektirir.

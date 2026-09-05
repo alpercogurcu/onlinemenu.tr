@@ -236,6 +236,15 @@ services:
       KC_METRICS_ENABLED: "true"
       KC_LOG_LEVEL: warn
       KC_CACHE: local
+      # realm-onlinemenu.json'daki smtpServer bloğu bu değişkenleri Keycloak'ın
+      # kendi ${VAR_NAME} realm-import placeholder'ıyla okur (deploy/keycloak/
+      # README.md §5). Boş bırakılırsa SMTP devre dışı kalır, import patlamaz.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
     command: start --import-realm --optimized=false
     ports:
       - "127.0.0.1:8090:8080"
@@ -594,6 +603,7 @@ services:
       - "--web.enable-remote-write-receiver"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - prometheus-data:/prometheus
     networks:
       - onlinemenu-prod

@@ -9,6 +9,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"onlinemenu.tr/internal/modules/pos/domain"
 	"onlinemenu.tr/internal/modules/pos/service"
 	"onlinemenu.tr/internal/platform/auth"
 )
@@ -133,6 +135,78 @@ func TestResolveReportTZ(t *testing.T) {
 // yields a Go nil, decoding [] yields a non-nil empty slice, so the
 // distinction survives the round trip exactly the way a real client's JSON
 // parser would see it.
+// TestToSaleDetailsResponse_FullBody pins the ENTIRE 200 response body — not
+// just the array-nullness slice (see TestToSaleDetailsResponse_ArraysAreNeverNull
+// below) — against the brief's example JSON shape (task-4 brief, Step 3's
+// worked example), using the exact same figures. Every field name and every
+// value round-trips through the real toSaleDetailsResponse + encoding/json,
+// so a field rename, a wrong json tag, or a dropped value in
+// toSaleDetailsResponse/toCashSessionResponse fails this test — the five
+// individual DTO-conversion loops are exercised together here, not in
+// isolation.
+func TestToSaleDetailsResponse_FullBody(t *testing.T) {
+	branchID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	sessionID := uuid.MustParse("66666666-7777-8888-9999-aaaaaaaaaaaa")
+	from := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	openedAt := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	closedAt := time.Date(2026, 9, 4, 20, 0, 0, 0, time.UTC)
+	closingCounted := int64(52500)
+	difference := int64(0)
+
+	details := service.SaleDetails{
+		SalesSummary: domain.SalesSummary{
+			ClosedCheckCount:    2,
+			CancelledCheckCount: 1,
+			GrossSales:          28000,
+			CancelledAmount:     4000,
+			ItemCount:           4,
+			ByTaxRate:           []domain.TaxLine{{RateBPS: 1000, Gross: 23000, Base: 20909, Tax: 2091}},
+			ByDay:               []domain.DayLine{{Date: "2026-09-04", Gross: 25000, CheckCount: 1}},
+			BySource:            []domain.SourceLine{{Source: "pos", CheckCount: 1, Gross: 25000}},
+		},
+		AverageCheck: 14000,
+		Payments:     []service.PaymentTotal{{Method: "cash", Status: "completed", Count: 2, Total: 3500}},
+		CashSessions: []service.CashSessionSummary{{
+			ID:                   sessionID,
+			Status:               "closed",
+			OpenedAt:             openedAt,
+			ClosedAt:             &closedAt,
+			OpeningCountedAmount: 50000,
+			CashPaymentsTaken:    3500,
+			MovementsNet:         -1000,
+			ExpectedClose:        52500,
+			ClosingCountedAmount: &closingCounted,
+			Difference:           &difference,
+		}},
+	}
+
+	resp := toSaleDetailsResponse(branchID, from, to, "Europe/Istanbul", details)
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+
+	wantJSON := fmt.Sprintf(`{
+		"branch_id": %q, "from": %q, "to": %q, "tz": "Europe/Istanbul",
+		"sales": {"closed_check_count": 2, "gross": 28000, "item_count": 4, "average_check": 14000},
+		"cancellations": {"check_count": 1, "amount": 4000},
+		"by_tax_rate": [{"rate_bps": 1000, "gross": 23000, "base": 20909, "tax": 2091}],
+		"by_day": [{"date": "2026-09-04", "gross": 25000, "check_count": 1}],
+		"by_source": [{"source": "pos", "check_count": 1, "gross": 25000}],
+		"payments": [{"method": "cash", "status": "completed", "count": 2, "total": 3500}],
+		"cash_sessions": [{
+			"id": %q, "status": "closed",
+			"opened_at": %q, "closed_at": %q,
+			"opening_counted_amount": 50000, "cash_payments_taken": 3500,
+			"movements_net": -1000, "expected_close": 52500,
+			"closing_counted_amount": 52500, "difference": 0
+		}]
+	}`,
+		branchID, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano),
+		sessionID, openedAt.Format(time.RFC3339Nano), closedAt.Format(time.RFC3339Nano))
+
+	assert.JSONEq(t, wantJSON, string(raw))
+}
+
 func TestToSaleDetailsResponse_ArraysAreNeverNull(t *testing.T) {
 	// service.SaleDetails{} zero value: domain.SalesSummary's ByTaxRate/
 	// ByDay/BySource and Payments/CashSessions are all nil, matching the

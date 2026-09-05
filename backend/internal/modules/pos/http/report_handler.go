@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 
-	paymentpub "onlinemenu.tr/internal/modules/payment/public"
 	"onlinemenu.tr/internal/modules/pos/service"
 )
 
@@ -180,7 +179,7 @@ func toSaleDetailsResponse(branchID uuid.UUID, from, to time.Time, tz string, d 
 	}
 }
 
-func toCashSessionResponse(cs paymentpub.CashSessionSummary) cashSessionResponse {
+func toCashSessionResponse(cs service.CashSessionSummary) cashSessionResponse {
 	return cashSessionResponse{
 		ID:                   cs.ID,
 		Status:               cs.Status,

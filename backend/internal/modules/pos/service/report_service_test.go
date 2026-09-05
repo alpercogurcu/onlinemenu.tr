@@ -235,8 +235,24 @@ func TestReportService_SaleDetails_HappyPath(t *testing.T) {
 	assert.True(t, store.called)
 	assert.Equal(t, summary, got.SalesSummary)
 	assert.Equal(t, int64(14000), got.AverageCheck, "28000 / 2 closed checks")
-	assert.Equal(t, payments.totals, got.Payments)
-	assert.Equal(t, payments.sessions, got.CashSessions)
+	// got.Payments/CashSessions are pos's own PaymentTotal/CashSessionSummary
+	// types (module isolation: pos_http may not import payment_public, see
+	// toPaymentTotals/toCashSessionSummaries), so this asserts the converted
+	// shape field-for-field rather than comparing against the paymentpub
+	// fixtures directly (different types never compare equal).
+	assert.Equal(t, []PaymentTotal{{Method: "cash", Status: "completed", Count: 2, Total: 3500}}, got.Payments)
+	assert.Equal(t, []CashSessionSummary{{
+		ID:                   payments.sessions[0].ID,
+		Status:               "closed",
+		OpenedAt:             closedAt.Add(-8 * time.Hour),
+		ClosedAt:             &closedAt,
+		OpeningCountedAmount: 50000,
+		CashPaymentsTaken:    3500,
+		MovementsNet:         -1000,
+		ExpectedClose:        52500,
+		ClosingCountedAmount: &closingAmount,
+		Difference:           &diff,
+	}}, got.CashSessions)
 }
 
 func TestReportService_SaleDetails_AverageCheckZeroWhenNoClosedChecks(t *testing.T) {

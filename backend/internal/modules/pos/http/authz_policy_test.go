@@ -110,3 +110,47 @@ func TestAuthz_PosTableManage_ReadOnlyRolesDenied(t *testing.T) {
 		assert.Falsef(t, d.Allow, "%s should be denied pos.table.manage", tc.name)
 	}
 }
+
+// TestAuthz_PosReportRead_ManagerAndShiftManagerAllowed / _CounterAndKitchenRolesDenied
+// pin the day-end sales report's OPA rule (pos_report_actions in
+// authz.rego), mirroring the pos.table.manage two-way matrix directly above:
+// a positive case proves the grant is real, not just that unauthorized
+// callers are rejected (permission_wiring_test.go's
+// {"reports","read"} entry only asserts the positive half).
+func TestAuthz_PosReportRead_ManagerAndShiftManagerAllowed(t *testing.T) {
+	eng := newSmokeTestEngine(t)
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+	}{
+		{"manager", tablePolicyManagerID},
+		{"shift_manager", tablePolicyShiftManagerID},
+	} {
+		d, err := eng.Decide(context.Background(), "pos.report.read", tablePolicyPrincipal(tc.id))
+		require.NoError(t, err)
+		assert.Truef(t, d.Allow, "%s should be allowed pos.report.read", tc.name)
+	}
+}
+
+// TestAuthz_PosReportRead_CounterAndKitchenRolesDenied is the regression
+// test for the report's shift_manager-only scope: counter staff (cashier,
+// waiter) and kitchen/bar can see checks/tables but must NOT see the day-end
+// chain figures (mirrors role_permissions seed: reports/read is
+// shift_manager-only, see permission_wiring_test.go's {"reports","read"}
+// entry and authz.rego's pos_report_actions comment).
+func TestAuthz_PosReportRead_CounterAndKitchenRolesDenied(t *testing.T) {
+	eng := newSmokeTestEngine(t)
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+	}{
+		{"cashier", tablePolicyCashierID},
+		{"waiter", tablePolicyWaiterID},
+		{"kitchen", tablePolicyKitchenID},
+		{"bar", tablePolicyBarID},
+	} {
+		d, err := eng.Decide(context.Background(), "pos.report.read", tablePolicyPrincipal(tc.id))
+		require.NoError(t, err)
+		assert.Falsef(t, d.Allow, "%s should be denied pos.report.read", tc.name)
+	}
+}

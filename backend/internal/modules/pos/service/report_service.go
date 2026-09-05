@@ -128,17 +128,90 @@ type SaleDetailsRequest struct {
 	TZ       string
 }
 
+// PaymentTotal is pos's own copy of paymentpub.MethodTotal, field-for-field.
+// It exists because pos_http may not import payment_public (.go-arch-lint.yml:
+// only pos_service may — module isolation) but still needs to render the
+// payment breakdown in the JSON response; ReportService converts at the
+// module boundary (see toPaymentTotals) so http/report_handler.go never sees
+// a payment package type.
+type PaymentTotal struct {
+	Method string
+	Status string
+	Count  int64
+	Total  int64
+}
+
+// CashSessionSummary is pos's own copy of paymentpub.CashSessionSummary, for
+// the same reason as PaymentTotal.
+type CashSessionSummary struct {
+	ID       uuid.UUID
+	Status   string
+	OpenedAt time.Time
+	ClosedAt *time.Time
+
+	OpeningCountedAmount int64
+	CashPaymentsTaken    int64
+	MovementsNet         int64
+	ExpectedClose        int64
+
+	ClosingCountedAmount *int64
+	Difference           *int64
+}
+
+// toPaymentTotals converts payment's public type to pos's own at the module
+// boundary. Preserves nil: a nil input (paymentpub.SalesSummaryReader
+// returns nil for an empty window, see its doc comment) yields a nil output,
+// not an empty-but-non-nil slice — ReportService does not normalize nil to
+// `[]`, that is http.toSaleDetailsResponse's job (see
+// TestReportService_SaleDetails_NilPaymentSlicesPassThrough).
+func toPaymentTotals(in []paymentpub.MethodTotal) []PaymentTotal {
+	if in == nil {
+		return nil
+	}
+	out := make([]PaymentTotal, len(in))
+	for i, m := range in {
+		out[i] = PaymentTotal{Method: m.Method, Status: m.Status, Count: m.Count, Total: m.Total}
+	}
+	return out
+}
+
+// toCashSessionSummaries is toPaymentTotals' counterpart for cash sessions —
+// same nil-preserving contract.
+func toCashSessionSummaries(in []paymentpub.CashSessionSummary) []CashSessionSummary {
+	if in == nil {
+		return nil
+	}
+	out := make([]CashSessionSummary, len(in))
+	for i, c := range in {
+		out[i] = CashSessionSummary{
+			ID:                   c.ID,
+			Status:               c.Status,
+			OpenedAt:             c.OpenedAt,
+			ClosedAt:             c.ClosedAt,
+			OpeningCountedAmount: c.OpeningCountedAmount,
+			CashPaymentsTaken:    c.CashPaymentsTaken,
+			MovementsNet:         c.MovementsNet,
+			ExpectedClose:        c.ExpectedClose,
+			ClosingCountedAmount: c.ClosingCountedAmount,
+			Difference:           c.Difference,
+		}
+	}
+	return out
+}
+
 // SaleDetails is the day-end sales report: domain.SalesSummary (pos-owned:
 // check/order aggregates) plus AverageCheck (derived here, not in the repo —
 // it is a presentation figure, not a stored one) and the payment-side
-// breakdown (Payments, CashSessions), fetched from payment in a separate,
-// later transaction — see SaleDetails' doc comment on the consistency
-// window this implies.
+// breakdown (Payments, CashSessions — pos's own PaymentTotal/CashSessionSummary
+// types, converted from payment's public ones at the module boundary, see
+// toPaymentTotals/toCashSessionSummaries), fetched from payment in a
+// separate, later transaction — see SaleDetails' doc comment on the
+// consistency window this implies.
 type SaleDetails struct {
 	domain.SalesSummary
 	AverageCheck int64
-	Payments     []paymentpub.MethodTotal
-	CashSessions []paymentpub.CashSessionSummary
+	Payments     []PaymentTotal
+	CashSessions []CashSessionSummary
 }
 
 // SaleDetails validates the request, enforces ADR-AUTH-001 layer 3 branch
@@ -205,7 +278,7 @@ func (s *ReportService) SaleDetails(ctx context.Context, principal auth.Principa
 	return SaleDetails{
 		SalesSummary: summary,
 		AverageCheck: avg,
-		Payments:     payments,
-		CashSessions: sessions,
+		Payments:     toPaymentTotals(payments),
+		CashSessions: toCashSessionSummaries(sessions),
 	}, nil
 }

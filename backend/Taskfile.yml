@@ -69,6 +69,11 @@ tasks:
         sh: command -v golangci-lint 2>/dev/null || echo "$(go env GOPATH)/bin/golangci-lint"
       GO_ARCH_LINT_BIN:
         sh: command -v go-arch-lint 2>/dev/null || echo "$(go env GOPATH)/bin/go-arch-lint"
+    env:
+      # CI go1.25 kullanıyor; golangci-lint v1.64'ün x/tools sürümü daha yeni
+      # bir yerel toolchain'in (go1.26+) export data'sını okuyamıyor ve
+      # typecheck aşamasında sessizce patlıyor — CI'nin gördüğü sürümü zorla.
+      GOTOOLCHAIN: go1.25.5
     cmds:
       - "{{.GOLANGCI_LINT_BIN}} run"
       - "{{.GO_ARCH_LINT_BIN}} check"

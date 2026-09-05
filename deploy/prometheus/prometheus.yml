@@ -11,6 +11,14 @@ global:
     cluster: dev
     environment: development
 
+# Resolved relative to this file's directory: /etc/prometheus/rules.yml in
+# both compose stacks (deploy/docker-compose.dev.yml and .prod.yml mount the
+# same rules.yml next to prometheus.yml — see Task 7 report on why the
+# metric names in rules.yml carry an "onlinemenu_" prefix the Go code itself
+# does not set).
+rule_files:
+  - rules.yml
+
 scrape_configs:
   # OTel Collector internal metrics
   - job_name: otel-collector

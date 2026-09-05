@@ -142,6 +142,11 @@ tasks:
     cmds:
       - wails generate module
 
+  deploy:smoke:
+    desc: "Prod deploy sonrası /healthz, /readyz, admin ve menu uçlarını doğrula (API_URL, ADMIN_URL, MENU_URL gerekli)"
+    cmds:
+      - bash deploy/smoke.sh
+
   ci:
     desc: "CI pipeline lokalde simüle et"
     cmds:

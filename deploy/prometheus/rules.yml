@@ -1,0 +1,43 @@
+# =============================================================================
+# Prometheus alert rules — Ops asgarisi (pilot MVP, Task 7)
+#
+# Metrik adları burada gerçek Prometheus adlarıdır, OTel SDK'daki instrument
+# adları DEĞİL: otel-collector'ın prometheus exporter'ı
+# (deploy/otelcol/config.yaml → exporters.prometheus.namespace: onlinemenu)
+# her metriğe kayıtsız şartsız "onlinemenu_" önekini ekler. Bu yüzden Go
+# tarafında instrument'lar bilerek önek TAŞIMAZ ("outbox_pending",
+# "fiscal_submissions_overdue" — bkz. backend/internal/platform/otel/
+# metrics.go) ve Prometheus'a bu önekli haliyle ulaşır. Instrument adı zaten
+# "onlinemenu_" ile başlasaydı exporter onu tekrar önekler ve sonuç
+# "onlinemenu_onlinemenu_outbox_pending" gibi çift önekli, alarmın hiçbir
+# zaman eşleşmeyeceği bir isim olurdu.
+# =============================================================================
+
+groups:
+  - name: onlinemenu-ops
+    rules:
+      - alert: OutboxBacklogHigh
+        expr: onlinemenu_outbox_pending > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox backlog yüksek ({{ $labels.module }})"
+          description: >-
+            {{ $labels.module }} modülünün outbox tablosunda 10 dakikadır
+            100'den fazla işlenmemiş event var (şu an {{ $value }}). Dispatcher
+            durmuş veya NATS'a ulaşamıyor olabilir — backend/internal/platform/
+            outbox/dispatcher.go loglarını kontrol edin.
+
+      - alert: FiscalSubmissionOverdue
+        expr: onlinemenu_fiscal_submissions_overdue > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mali cihaz sonucu 5 dakikadır gecikmiş"
+          description: >-
+            En az bir fiscal submission, ödeme cihazından (Token X30TR)
+            beklenen sonucu almadan 5 dakikadır beklemede (şu an {{ $value }}
+            adet). Cihazın satış ekranını ve webhook ulaşılabilirliğini kontrol
+            edin — ADR-FISCAL-002 uzlaştırma penceresi.

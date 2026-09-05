@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useCan } from "@/hooks/use-can"
 import { useSetTableStatus, useTables, useZones, type ManualTableStatus } from "@/hooks/use-pos"
 import { useBranches } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
@@ -51,6 +53,13 @@ interface SelectedTable {
 
 export default function TablesPage() {
   const t = useTranslations("posTables")
+  const tCommon = useTranslations("storefront")
+  // Cosmetic-only gate (see lib/permissions.ts): pos.table.read (this page)
+  // is granted to cashier/shift_manager/waiter/kitchen/bar, but
+  // storefront.qr.read is narrower (cashier/shift_manager only) — without
+  // this, a kitchen/bar user could open the QR dialog and hit a silent 403
+  // on its first fetch. The button renders disabled with a tooltip instead.
+  const canViewQR = useCan("storefront.qr.read")
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches } = useBranches(tenantId)
   const [branchId, setBranchId] = useState("")
@@ -243,15 +252,34 @@ export default function TablesPage() {
                           </Select>
 
                           <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => setQrTable({ id: table.id, label: table.name })}
-                            >
-                              <QrCode className="size-3.5" />
-                              {t("qrAction")}
-                            </Button>
+                            {canViewQR ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => setQrTable({ id: table.id, label: table.name })}
+                              >
+                                <QrCode className="size-3.5" />
+                                {t("qrAction")}
+                              </Button>
+                            ) : (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span tabIndex={0} className="flex-1">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="pointer-events-none w-full"
+                                      disabled
+                                    >
+                                      <QrCode className="size-3.5" />
+                                      {t("qrAction")}
+                                    </Button>
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>{tCommon("qr.viewDenied")}</TooltipContent>
+                              </Tooltip>
+                            )}
                             <Button
                               variant="ghost"
                               size="sm"

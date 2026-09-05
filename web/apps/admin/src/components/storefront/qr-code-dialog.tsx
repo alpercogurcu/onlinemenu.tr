@@ -1,8 +1,10 @@
 "use client"
 
+import axios from "axios"
 import { AlertTriangle, Check, Copy, Loader2, Printer, QrCode, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { QRCodeSVG } from "qrcode.react"
+import type { ComponentProps } from "react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
@@ -17,6 +19,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useCan } from "@/hooks/use-can"
 import {
   useCreateQRCode,
   useQRCodes,
@@ -51,6 +55,13 @@ export function QRCodeDialog({
   tableLabel,
 }: QRCodeDialogProps) {
   const t = useTranslations("storefront")
+
+  // Cosmetic-only gate (see lib/permissions.ts): a cashier holds
+  // storefront.qr.read (can open this dialog and see the active code) but
+  // not storefront.qr.manage, so create/rotate/revoke render disabled with a
+  // tooltip instead of a working button that would just 403. The backend
+  // (authz.rego) is the real enforcement point regardless of this value.
+  const canManage = useCan("storefront.qr.manage")
 
   // The raw token lives here and nowhere else: not in the query cache, not in
   // localStorage, not in a ref that outlives the dialog. The server stores only
@@ -106,6 +117,18 @@ export function QRCodeDialog({
 
   const busy = createQR.isPending || revokeQR.isPending || rotateQR.isPending
 
+  // The disabled+tooltip gate above covers the normal path; this covers the
+  // gap it cannot (role changed mid-session, stale client state, etc.) by
+  // turning a raw 403 into the same message the tooltip already shows,
+  // instead of the generic create/rotate/revoke-failed toast.
+  function reportFailure(err: unknown, fallbackKey: "qr.createFailed" | "qr.rotateFailed" | "qr.revokeFailed") {
+    if (axios.isAxiosError(err) && err.response?.status === 403) {
+      toast.error(t("qr.manageDenied"))
+      return
+    }
+    toast.error(t(fallbackKey))
+  }
+
   async function handleCreate() {
     try {
       const issued = await createQR.mutateAsync({
@@ -115,8 +138,8 @@ export function QRCodeDialog({
       })
       setRawToken(issued.token)
       toast.success(t("qr.createdToast"))
-    } catch {
-      toast.error(t("qr.createFailed"))
+    } catch (err) {
+      reportFailure(err, "qr.createFailed")
     }
   }
 
@@ -126,8 +149,8 @@ export function QRCodeDialog({
       const issued = await rotateQR.mutateAsync(activeCode.id)
       setRawToken(issued.token)
       toast.success(t("qr.rotatedToast"))
-    } catch {
-      toast.error(t("qr.rotateFailed"))
+    } catch (err) {
+      reportFailure(err, "qr.rotateFailed")
     }
   }
 
@@ -137,8 +160,8 @@ export function QRCodeDialog({
       await revokeQR.mutateAsync(activeCode.id)
       setRawToken(null)
       toast.success(t("qr.revokedToast"))
-    } catch {
-      toast.error(t("qr.revokeFailed"))
+    } catch (err) {
+      reportFailure(err, "qr.revokeFailed")
     }
   }
 
@@ -220,36 +243,89 @@ export function QRCodeDialog({
                     also invalidates the old token, but it hands back a working
                     replacement in the same step, so it must not wear the same
                     red as the one-way action next to it. */}
-                <Button variant="destructive" onClick={handleRevoke} disabled={busy}>
+                <ManageActionButton
+                  variant="destructive"
+                  onClick={handleRevoke}
+                  disabled={busy}
+                  canManage={canManage}
+                  deniedLabel={t("qr.manageDenied")}
+                >
                   {revokeQR.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
                     <Trash2 className="size-4" />
                   )}
                   {t("qr.revoke")}
-                </Button>
-                <Button variant="secondary" onClick={handleRotate} disabled={busy}>
+                </ManageActionButton>
+                <ManageActionButton
+                  variant="secondary"
+                  onClick={handleRotate}
+                  disabled={busy}
+                  canManage={canManage}
+                  deniedLabel={t("qr.manageDenied")}
+                >
                   {rotateQR.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
                     <RefreshCw className="size-4" />
                   )}
                   {t("qr.rotate")}
-                </Button>
+                </ManageActionButton>
               </>
             ) : (
-              <Button onClick={handleCreate} disabled={busy || branchId === ""}>
+              <ManageActionButton
+                onClick={handleCreate}
+                disabled={busy || branchId === ""}
+                canManage={canManage}
+                deniedLabel={t("qr.manageDenied")}
+              >
                 {createQR.isPending ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (
                   <QrCode className="size-4" />
                 )}
                 {t("qr.create")}
-              </Button>
+              </ManageActionButton>
             )}
           </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// Wraps a manage-only action button (create/rotate/revoke) with the
+// disabled+tooltip cosmetic gate: when the current role cannot perform
+// storefront.qr.manage (see lib/permissions.ts), the button renders disabled
+// and a tooltip explains why, instead of firing a request the backend would
+// 403 on. A plain `disabled` Button does not reliably dispatch hover/focus
+// events for the tooltip trigger in every browser, hence the focusable
+// wrapping span (the standard Radix pattern for disabled-trigger tooltips).
+function ManageActionButton({
+  canManage,
+  deniedLabel,
+  disabled,
+  children,
+  ...buttonProps
+}: ComponentProps<typeof Button> & { canManage: boolean; deniedLabel: string }) {
+  if (canManage) {
+    return (
+      <Button disabled={disabled} {...buttonProps}>
+        {children}
+      </Button>
+    )
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="inline-flex">
+          <Button disabled className="pointer-events-none" {...buttonProps}>
+            {children}
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{deniedLabel}</TooltipContent>
+    </Tooltip>
   )
 }

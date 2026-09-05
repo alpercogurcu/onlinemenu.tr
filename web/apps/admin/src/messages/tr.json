@@ -211,7 +211,9 @@
       "revokedToast": "QR kodu iptal edildi",
       "createFailed": "QR kodu üretilemedi",
       "rotateFailed": "QR kodu yenilenemedi",
-      "revokeFailed": "QR kodu iptal edilemedi"
+      "revokeFailed": "QR kodu iptal edilemedi",
+      "manageDenied": "Bu işlem için yetkiniz yok. QR kodu üretme/yenileme/iptal için Shift Müdürü veya Yönetici yetkisi gerekir.",
+      "viewDenied": "Bu masanın QR kodu durumunu görüntüleme yetkiniz yok."
     }
   }
 }

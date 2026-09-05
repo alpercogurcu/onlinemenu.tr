@@ -228,3 +228,31 @@ func TestReportService_SaleDetails_AverageCheckZeroWhenNoClosedChecks(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), got.AverageCheck)
 }
+
+// TestReportService_SaleDetails_NilPaymentSlicesPassThrough documents that
+// ReportService itself does NOT normalize nil slices from
+// paymentpub.SalesSummaryReader (empty window / branch with no payments is a
+// real, documented case — see paymentpub.SalesSummaryReader) — that
+// normalization is the HTTP DTO's job (report_handler.go's
+// toSaleDetailsResponse, see TestToSaleDetailsResponse_ArraysAreNeverNull in
+// the http package), so any other consumer of this service (a future
+// non-HTTP caller) is not silently handed an empty-but-non-nil slice it
+// never asked for.
+func TestReportService_SaleDetails_NilPaymentSlicesPassThrough(t *testing.T) {
+	branchID := uuid.New()
+	store := &fakeSalesSummaryStore{summary: domain.SalesSummary{ClosedCheckCount: 0, GrossSales: 0}}
+	svc := newTestReportService(store, &fakePaymentSummary{totals: nil, sessions: nil})
+
+	from := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	got, err := svc.SaleDetails(context.Background(), reportTestPrincipal(branchID), SaleDetailsRequest{
+		BranchID: branchID,
+		From:     from,
+		To:       to,
+		TZ:       "Europe/Istanbul",
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, got.Payments)
+	assert.Nil(t, got.CashSessions)
+}

@@ -70,6 +70,12 @@ tasks:
     cmds:
       - pnpm typecheck
 
+  web:test:
+    desc: Admin paneli testleri (vitest — hook/component)
+    dir: web/apps/admin
+    cmds:
+      - pnpm run test:run
+
   menu:dev:
     desc: "Misafir QR menü uygulaması dev server (Next.js, :3001)"
     dir: web/apps/menu

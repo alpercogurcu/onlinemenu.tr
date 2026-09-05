@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useRef, useState } from "react"
 
 import api from "@/lib/api"
 import type { Check, Order, OrderStatus, PosTable, PosTableStatus, PosZone, PosZonePlan } from "@/types"
@@ -248,4 +249,60 @@ export function useAdvanceOrder() {
       void qc.invalidateQueries({ queryKey: ["orders"] })
     },
   })
+}
+
+const ORDER_DETAILS_BATCH = 100
+
+// useOrderDetails resolves order details for a live board in batches, so a
+// kitchen display with N tickets makes ceil(N/100) requests instead of N.
+// It keeps its own ledger (ref) of ids already asked for — including ids the
+// backend never returned, which are not asked again — so a newly arrived
+// ticket costs exactly one request carrying only that id.
+export function useOrderDetails(ids: string[]): Map<string, Order> {
+  const [details, setDetails] = useState<Map<string, Order>>(() => new Map())
+  const requested = useRef<Set<string>>(new Set())
+  const idsKey = ids.join(",")
+
+  useEffect(() => {
+    const pending = ids.filter((id) => !requested.current.has(id))
+    for (const id of pending) requested.current.add(id)
+
+    // Drop tickets that left the board so the map never grows unbounded.
+    setDetails((prev) => {
+      const keep = new Set(ids)
+      let changed = false
+      const next = new Map<string, Order>()
+      for (const [id, order] of prev) {
+        if (keep.has(id)) next.set(id, order)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+
+    if (pending.length === 0) return
+    let cancelled = false
+    const batches: string[][] = []
+    for (let i = 0; i < pending.length; i += ORDER_DETAILS_BATCH) {
+      batches.push(pending.slice(i, i + ORDER_DETAILS_BATCH))
+    }
+    void Promise.all(
+      batches.map((batch) =>
+        api.get<Order[]>("/api/v1/pos/orders", { params: { ids: batch.join(",") } }).then(({ data }) => data ?? []),
+      ),
+    ).then((results) => {
+      if (cancelled) return
+      setDetails((prev) => {
+        const next = new Map(prev)
+        for (const order of results.flat()) next.set(order.id, order)
+        return next
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+    // idsKey is the stable identity of `ids`; the array itself is rebuilt each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey])
+
+  return details
 }

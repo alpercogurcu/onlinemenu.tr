@@ -21,12 +21,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { useAcceptOrder, useAdvanceOrder, useOrder } from "@/hooks/use-pos"
+import { useAcceptOrder, useAdvanceOrder, useOrderDetails } from "@/hooks/use-pos"
 import { useBranches } from "@/hooks/use-tenant"
 import { type KitchenConnectionStatus, useKitchenStream } from "@/hooks/use-kitchen-stream"
 import { kitchenOrdersByStatus, type KitchenOrder } from "@/lib/kitchen-events"
 import { useAuthStore } from "@/store/auth-store"
-import type { OrderStatus } from "@/types"
+import type { Order, OrderStatus } from "@/types"
 
 const BRANCH_STORAGE_KEY = "kds-branch-id"
 const SOUND_STORAGE_KEY = "kds-sound-enabled"
@@ -150,19 +150,19 @@ function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
 
 function KitchenOrderCard({
   order,
+  detail,
   now,
   isNew,
   onAdvance,
   isMutating,
 }: {
   order: KitchenOrder
+  detail?: Order
   now: number
   isNew: boolean
   onAdvance: (order: KitchenOrder) => void
   isMutating: boolean
 }) {
-  const { data: detail } = useOrder(order.orderId)
-
   return (
     <Card
       className={`border-t-4 bg-neutral-900 text-neutral-100 ${COLUMN_ACCENT[order.status as (typeof COLUMN_ORDER)[number]]} ${
@@ -264,6 +264,12 @@ export default function KitchenPage() {
   }, [newOrderIds, soundEnabled])
 
   const columns = useMemo(() => kitchenOrdersByStatus(orders), [orders])
+
+  const allOrderIds = useMemo(
+    () => COLUMN_ORDER.flatMap((columnStatus) => columns[columnStatus].map((order) => order.orderId)),
+    [columns],
+  )
+  const details = useOrderDetails(allOrderIds)
 
   const handleBranchChange = (id: string) => {
     setBranchId(id)
@@ -386,6 +392,7 @@ export default function KitchenPage() {
                   <KitchenOrderCard
                     key={order.orderId}
                     order={order}
+                    detail={details.get(order.orderId)}
                     now={now}
                     isNew={newOrderIds.has(order.orderId)}
                     onAdvance={handleAdvance}

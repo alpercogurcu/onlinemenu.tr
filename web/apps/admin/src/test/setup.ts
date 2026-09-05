@@ -5,7 +5,7 @@ import "@testing-library/jest-dom/vitest"
 
 import { webcrypto } from "node:crypto"
 
-import { cleanup } from "@testing-library/react"
+import { cleanup, configure } from "@testing-library/react"
 import { afterEach } from "vitest"
 
 // `test.globals: false` kullanıldığından (bkz. vitest.config.ts) RTL'nin
@@ -13,6 +13,13 @@ import { afterEach } from "vitest"
 afterEach(() => {
   cleanup()
 })
+
+// RTL'nin `waitFor`/`findBy*` varsayılan 1 sn sınırı, TanStack Query'nin
+// çözülmesini bekleyen component testleri için yüklü bir makinede (paralel
+// typecheck/lint koşarken) sınırda kalıyor — tek seferlik flake görüldü.
+// Sınırı yükseltmek testin doğruladığı şeyi değiştirmez, yalnızca yavaş
+// koşucuda yanlış kırmızıyı engeller.
+configure({ asyncUtilTimeout: 5000 })
 
 // jsdom's `window.crypto` implements getRandomValues but not `.subtle` (no
 // Web Crypto SubtleCrypto support: https://github.com/jsdom/jsdom/issues/1612).

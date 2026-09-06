@@ -100,11 +100,26 @@ const CATEGORIES: Category[] = [
   },
 ]
 
+const MODIFIER_GROUP = {
+  id: "grp-1",
+  tenant_id: "t1",
+  name: "Boy Seçimi",
+  selection_type: "single" as const,
+  min_selections: 1,
+  max_selections: 1,
+  is_required: true,
+  sort_order: 0,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+}
+
 function mockRoutes() {
   get.mockImplementation((url: string) => {
     if (url === "/api/v1/catalog/products") return Promise.resolve({ data: PRODUCTS })
     if (url === "/api/v1/catalog/categories") return Promise.resolve({ data: CATEGORIES })
-    if (url === "/api/v1/catalog/modifier-groups") return Promise.resolve({ data: [] })
+    if (url === "/api/v1/catalog/modifier-groups") return Promise.resolve({ data: [MODIFIER_GROUP] })
+    if (url === `/api/v1/catalog/products/${PRODUCTS[0].id}/modifier-groups`)
+      return Promise.resolve({ data: [MODIFIER_GROUP.id] })
     if (url.endsWith("/modifier-groups")) return Promise.resolve({ data: [] })
     return Promise.resolve({ data: [] })
   })
@@ -155,6 +170,25 @@ describe("ProductsPage", () => {
 
     expect(screen.getByText("Latte")).toBeInTheDocument()
     expect(screen.queryByText("Su")).not.toBeInTheDocument()
+  })
+
+  it("marks the selected category chip with aria-pressed", async () => {
+    render(<ProductsPage />, { wrapper: Wrapper })
+    await screen.findByText("Latte")
+
+    expect(screen.getByRole("button", { name: "Tümü" })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("button", { name: "Sıcak İçecekler" })).toHaveAttribute("aria-pressed", "false")
+
+    fireEvent.click(screen.getByRole("button", { name: "Sıcak İçecekler" }))
+
+    expect(screen.getByRole("button", { name: "Sıcak İçecekler" })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("button", { name: "Tümü" })).toHaveAttribute("aria-pressed", "false")
+  })
+
+  it("shows the option-group badge for a product, resolved by group id", async () => {
+    render(<ProductsPage />, { wrapper: Wrapper })
+
+    expect(await screen.findByText(MODIFIER_GROUP.name)).toBeInTheDocument()
   })
 
   it("filters by category chip", async () => {

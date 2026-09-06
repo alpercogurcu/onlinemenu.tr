@@ -182,6 +182,7 @@ export default function ProductsPage() {
             type="button"
             variant={categoryFilter === "all" ? "secondary" : "outline"}
             size="sm"
+            aria-pressed={categoryFilter === "all"}
             onClick={() => handleCategoryChange("all")}
           >
             {t("filter.all")}
@@ -192,6 +193,7 @@ export default function ProductsPage() {
               type="button"
               variant={categoryFilter === category.id ? "secondary" : "outline"}
               size="sm"
+              aria-pressed={categoryFilter === category.id}
               onClick={() => handleCategoryChange(category.id)}
             >
               {category.name}
@@ -201,6 +203,7 @@ export default function ProductsPage() {
             type="button"
             variant={categoryFilter === "none" ? "secondary" : "outline"}
             size="sm"
+            aria-pressed={categoryFilter === "none"}
             onClick={() => handleCategoryChange("none")}
           >
             {t("filter.uncategorized")} · {uncategorizedCount}
@@ -258,9 +261,12 @@ export default function ProductsPage() {
               <TableBody>
                 {filteredProducts.map((product) => {
                   const category = categories.find((c) => c.id === product.category_id)
-                  const groupNames = (groupIdsByProduct[product.id] ?? [])
-                    .map((id) => modifierGroupNameById.get(id))
-                    .filter((name): name is string => Boolean(name))
+                  // Keyed by group id (not name) — two groups can share a
+                  // name, and name is also just display data derived from
+                  // the id, not a stable identity for the badge itself.
+                  const groups = (groupIdsByProduct[product.id] ?? [])
+                    .map((id) => ({ id, name: modifierGroupNameById.get(id) }))
+                    .filter((g): g is { id: string; name: string } => Boolean(g.name))
 
                   return (
                     <TableRow
@@ -285,11 +291,11 @@ export default function ProductsPage() {
                         {formatKurus(product.price_amount)}
                       </TableCell>
                       <TableCell>
-                        {groupNames.length > 0 ? (
+                        {groups.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
-                            {groupNames.map((name) => (
-                              <Badge key={name} variant="outline">
-                                {name}
+                            {groups.map((group) => (
+                              <Badge key={group.id} variant="outline">
+                                {group.name}
                               </Badge>
                             ))}
                           </div>

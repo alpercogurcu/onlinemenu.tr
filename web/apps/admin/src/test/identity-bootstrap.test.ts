@@ -52,13 +52,14 @@ describe("identity-bootstrap", () => {
   it("fetchMe uses the CTX bearer", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ id: "p1", email: "a@b.com", full_name: "A B", keycloak_sub: "sub", created_at: "" }),
+      json: async () => ({ person: { id: "p1", email: "a@b.com", full_name: "A B", phone: "" } }),
     })
     vi.stubGlobal("fetch", fetchMock)
 
     const me = await fetchMe("ctx-token")
 
     expect(me.id).toBe("p1")
+    expect(me.full_name).toBe("A B")
     const [, init] = fetchMock.mock.calls[0]
     expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer ctx-token" })
   })

@@ -6,7 +6,7 @@
 // Keycloak access token specifically, not whatever the interceptor would
 // inject (see me_handler.go — /me/contexts and /auth/context accept a
 // pre-context Keycloak-verified Principal).
-import type { Me, TenantContext, TenantContextListResponse } from "@/types"
+import type { Me, MeResponse, TenantContext, TenantContextListResponse } from "@/types"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_CORE_URL ?? "/api/core"
 
@@ -45,5 +45,6 @@ export async function selectMembershipContext(
 }
 
 export async function fetchMe(ctxToken: string): Promise<Me> {
-  return bearerFetch<Me>("/v1/identity/me", ctxToken)
+  const data = await bearerFetch<MeResponse>("/v1/identity/me", ctxToken)
+  return data.person
 }

@@ -386,12 +386,17 @@ export interface MembershipListResponse {
   memberships: Membership[]
 }
 
+// Mirrors personDTO in backend/internal/modules/identity/http/me_handler.go.
+// GET /v1/identity/me wraps it as { person: Me } — see MeResponse.
 export interface Me {
   id: string
-  keycloak_sub: string
   email: string
   full_name: string
-  created_at: string
+  phone: string
+}
+
+export interface MeResponse {
+  person: Me
 }
 // Mirrors contextItemDTO in
 // backend/internal/modules/identity/http/me_handler.go — one selectable

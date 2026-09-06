@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { Me, MembershipListResponse, MembershipStatus, TenantContextListResponse } from "@/types"
+import type { Me, MeResponse, MembershipListResponse, MembershipStatus, TenantContextListResponse } from "@/types"
 
 export function useMe() {
   return useQuery({
     queryKey: ["me"],
-    queryFn: async () => {
-      const { data } = await api.get<Me>("/v1/identity/me")
-      return data
+    queryFn: async (): Promise<Me> => {
+      const { data } = await api.get<MeResponse>("/v1/identity/me")
+      return data.person
     },
   })
 }

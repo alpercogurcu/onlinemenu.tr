@@ -23,7 +23,7 @@ import { getKeycloakIdToken } from "@/lib/keycloak-token-store"
 import { hasKeycloakSession, useAuthStore } from "@/store/auth-store"
 
 function NavProfileComponent() {
-  const { logout } = useAuthStore()
+  const { logout, user } = useAuthStore()
   const { theme, setTheme } = useTheme()
   const [, setProfileOpen] = useState(false)
   const router = useRouter()
@@ -62,6 +62,7 @@ function NavProfileComponent() {
       <DropdownMenuTrigger asChild>
         <SidebarMenuButton
           size="lg"
+          aria-label="Hesap menüsü"
           className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground focus-visible:ring-1"
         >
           {isLoading ? (
@@ -72,10 +73,10 @@ function NavProfileComponent() {
           ) : (
             <div className="grid flex-1 text-right text-sm leading-tight">
               <span className="truncate font-medium">
-                {me?.full_name ?? "Admin"}
+                {me?.full_name || user?.name || "—"}
               </span>
               <span className="truncate text-xs text-muted-foreground">
-                {me?.email ?? "admin@onlinemenu.tr"}
+                {me?.email || user?.email || ""}
               </span>
             </div>
           )}

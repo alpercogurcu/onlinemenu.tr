@@ -66,7 +66,6 @@ Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
 
 - [ ] Business-day ofseti (ADR-DATA-003 taslak; `branch_settings.business_day_offset` okunmuyor). İstemci takvim günü sınırlarını gönderiyor; 04:00 kesimi isteyen müşteri gelirse sunucuda `from/to` kaydırılır (plan R3)
 - [ ] `checks` için `(tenant_id, branch_id, status, closed_at)` indeksi — veri büyüyünce
-- [ ] Rapor 422/403 gövdeleri düz metin (kod alanı yok); admin istemcisi metin eşleştirmemeli
 - [ ] `domain.NewTaxLine` negatif/absürt bps için guard'sız (DB verisinden erişilemez)
 - [ ] Dashboard yetkisiz rolde de istek atıyor (403 alıyor) — kozmetik kapı var, istek de kapatılabilir
 - [ ] Satış ve ödeme panelleri farklı kolonlara göre pencereleniyor: satış tarafı `checks.closed_at`, ödeme tarafı `payments.created_at` — 23:58'de ödenip 00:02'de kapanan bir adisyon iki panelde farklı gün kovasına düşer (plan R2, kasıtlı). Dashboard'da ödemeler kartının altında bu farkı belirten bir not var

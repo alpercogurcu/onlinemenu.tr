@@ -346,6 +346,7 @@
     "group": {
       "new": "Yeni grup",
       "edit": "Grubu düzenle",
+      "notFound": "Seçenek grubu bulunamadı.",
       "summary": "{options} seçenek · {products} üründe kullanılıyor",
       "sections": {
         "rule": "Kural",

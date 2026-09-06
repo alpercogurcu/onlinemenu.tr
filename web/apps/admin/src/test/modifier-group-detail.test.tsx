@@ -24,7 +24,7 @@ vi.mock("next/navigation", () => ({
   // useBreadcrumbLabel (wired into ModifierGroupEditor) reads this — it
   // doesn't affect any assertion here since no DynamicBreadcrumb is mounted
   // in these tests, but the hook throws without a usePathname to call.
-  usePathname: () => "/catalog/modifiers/g1",
+  usePathname: () => "/catalog/modifiers/11111111-0000-0000-0000-000000000001",
 }))
 
 const get = vi.fn()
@@ -45,7 +45,7 @@ vi.mock("sonner", () => ({
 }))
 
 const GROUP: ModifierGroup = {
-  id: "g1",
+  id: "11111111-0000-0000-0000-000000000001",
   tenant_id: "t1",
   name: "Ek Malzeme",
   selection_type: "multiple",
@@ -61,7 +61,7 @@ function makeModifier(overrides: Partial<Modifier>): Modifier {
   return {
     id: "m1",
     tenant_id: "t1",
-    group_id: "g1",
+    group_id: "11111111-0000-0000-0000-000000000001",
     name: "Peynir",
     price_delta: 0,
     is_active: true,
@@ -98,15 +98,22 @@ let modifiersForG1: Modifier[] = []
 let productIdsForG1: string[] = []
 let productsList: Product[] = []
 
+// A well-formed but non-existent id — the backend answers 404, distinct from
+// MALFORMED_ID below (which never reaches the API at all).
+const NOT_FOUND_ID = "cccccccc-0000-0000-0000-000000000404"
+const MALFORMED_ID = "not-a-uuid"
+
 function mockRoutes() {
   get.mockImplementation((url: string) => {
-    if (url === "/api/v1/catalog/modifier-groups/g1") return Promise.resolve({ data: GROUP })
-    if (url === "/api/v1/catalog/modifier-groups/g1/modifiers") {
+    if (url === "/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001") return Promise.resolve({ data: GROUP })
+    if (url === "/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/modifiers") {
       return Promise.resolve({ data: modifiersForG1 })
     }
-    if (url === "/api/v1/catalog/modifier-groups/g1/products") {
+    if (url === "/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/products") {
       return Promise.resolve({ data: productIdsForG1 })
     }
+    if (url === `/api/v1/catalog/modifier-groups/${NOT_FOUND_ID}`)
+      return Promise.reject({ isAxiosError: true, response: { status: 404 }, message: "Not Found" })
     if (url === "/api/v1/catalog/products") return Promise.resolve({ data: productsList })
     return Promise.resolve({ data: [] })
   })
@@ -132,7 +139,7 @@ describe("ModifierGroupEditor — Kural card", () => {
     productIdsForG1 = []
     productsList = []
     mockRoutes()
-    post.mockResolvedValue({ data: { ...GROUP, id: "new-g1" } })
+    post.mockResolvedValue({ data: { ...GROUP, id: "new-11111111-0000-0000-0000-000000000001" } })
   })
 
   it("shows En fazla only for Birden fazla, and forces max_selections:1 when saved as Tek seçim", async () => {
@@ -166,14 +173,14 @@ describe("ModifierGroupEditor — Kural card", () => {
     // Backend PUT REPLACES the whole row — omitting sort_order used to reset
     // it to 0 on every save (I1 in the katalog-ux final review).
     put.mockResolvedValue({ data: GROUP })
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     await screen.findByDisplayValue(GROUP.name)
 
     fireEvent.change(screen.getByLabelText(/Grup adı/), { target: { value: "Ek Malzeme (v2)" } })
     fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
-    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1", {
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001", {
       name: "Ek Malzeme (v2)",
       selection_type: GROUP.selection_type,
       max_selections: GROUP.max_selections,
@@ -223,21 +230,21 @@ describe("ModifierGroupEditor — Kural card", () => {
     // (legacy data, or an edit made directly against the backend).
     const badGroup: ModifierGroup = {
       ...GROUP,
-      id: "g-bad",
+      id: "22222222-0000-0000-0000-000000000002",
       selection_type: "multiple",
       is_required: true,
       min_selections: 1,
       max_selections: 0,
     }
     get.mockImplementation((url: string) => {
-      if (url === "/api/v1/catalog/modifier-groups/g-bad") return Promise.resolve({ data: badGroup })
-      if (url === "/api/v1/catalog/modifier-groups/g-bad/modifiers") return Promise.resolve({ data: [] })
-      if (url === "/api/v1/catalog/modifier-groups/g-bad/products") return Promise.resolve({ data: [] })
+      if (url === "/api/v1/catalog/modifier-groups/22222222-0000-0000-0000-000000000002") return Promise.resolve({ data: badGroup })
+      if (url === "/api/v1/catalog/modifier-groups/22222222-0000-0000-0000-000000000002/modifiers") return Promise.resolve({ data: [] })
+      if (url === "/api/v1/catalog/modifier-groups/22222222-0000-0000-0000-000000000002/products") return Promise.resolve({ data: [] })
       if (url === "/api/v1/catalog/products") return Promise.resolve({ data: [] })
       return Promise.resolve({ data: [] })
     })
 
-    render(<ModifierGroupEditor groupId="g-bad" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="22222222-0000-0000-0000-000000000002" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Ek Malzeme")
 
     fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
@@ -246,7 +253,7 @@ describe("ModifierGroupEditor — Kural card", () => {
       await screen.findByText("En fazla değeri en az değerinden küçük olamaz"),
     ).toBeInTheDocument()
     expect(put).not.toHaveBeenCalledWith(
-      "/api/v1/catalog/modifier-groups/g-bad",
+      "/api/v1/catalog/modifier-groups/22222222-0000-0000-0000-000000000002",
       expect.anything(),
     )
   })
@@ -269,7 +276,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     modifiersForG1 = [makeModifier({ id: "m1", name: "Peynir", sort_order: 10 })]
     post.mockResolvedValue({ data: makeModifier({ id: "m2", name: "Büyük", sort_order: 20 }) })
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Peynir")
 
     const addRow = screen.getByLabelText("Yeni seçenek…")
@@ -277,7 +284,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     fireEvent.keyDown(addRow, { key: "Enter" })
 
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
-    expect(post).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers", {
+    expect(post).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/modifiers", {
       name: "Büyük",
       price_delta: 0,
       is_active: true,
@@ -291,7 +298,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     ]
     put.mockResolvedValue({ data: modifiersForG1[0] })
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Soğan")
 
     const priceInput = screen.getByLabelText("Fiyat farkı")
@@ -300,7 +307,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     fireEvent.keyDown(priceInput, { key: "Enter" })
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
-    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/modifiers/m1", {
       name: "Soğan",
       price_delta: -500,
       is_active: true,
@@ -314,7 +321,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     ]
     put.mockResolvedValue({ data: modifiersForG1[0] })
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Soğan")
 
     const priceInput = screen.getByLabelText("Fiyat farkı")
@@ -336,7 +343,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     modifiersForG1 = [makeModifier({ id: "m1" }), makeModifier({ id: "m2", sort_order: 20 })]
     productIdsForG1 = ["prod-1", "prod-2", "prod-3"]
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
 
     expect(await screen.findByText("2 seçenek · 3 üründe kullanılıyor")).toBeInTheDocument()
   })
@@ -348,7 +355,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     ]
     put.mockResolvedValue({ data: {} })
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Peynir")
 
     const moveUpButtons = screen.getAllByRole("button", { name: "Yukarı taşı" })
@@ -363,13 +370,13 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     fireEvent.click(moveDownButtons[0])
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
-    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/modifiers/m1", {
       name: "Peynir",
       price_delta: 0,
       is_active: true,
       sort_order: 20,
     })
-    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m2", {
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/modifiers/m2", {
       name: "Sosis",
       price_delta: 100,
       is_active: false,
@@ -383,13 +390,13 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     ]
     put.mockResolvedValue({ data: modifiersForG1[0] })
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Peynir")
 
     fireEvent.click(screen.getByLabelText("Satışta"))
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
-    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/11111111-0000-0000-0000-000000000001/modifiers/m1", {
       name: "Peynir",
       price_delta: 250,
       is_active: false,
@@ -400,7 +407,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
   it("keeps the previous name and shows validation instead of sending an empty name", async () => {
     modifiersForG1 = [makeModifier({ id: "m1", name: "Peynir" })]
 
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
     const nameInput = await screen.findByDisplayValue("Peynir")
 
     fireEvent.change(nameInput, { target: { value: "   " } })
@@ -429,13 +436,45 @@ describe("ModifierGroupEditor — Bu grubu kullanan ürünler card", () => {
   })
 
   it("lists the names of the products using this group", async () => {
-    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    render(<ModifierGroupEditor groupId="11111111-0000-0000-0000-000000000001" />, { wrapper: Wrapper })
 
     expect(await screen.findByText("Cheeseburger")).toBeInTheDocument()
     expect(screen.getByText("Falafel Wrap")).toBeInTheDocument()
     expect(
       screen.getByText("Buradaki değişiklik 2 üründe de geçerli olur."),
     ).toBeInTheDocument()
+  })
+})
+
+describe("ModifierGroupEditor — not found", () => {
+  beforeEach(() => {
+    get.mockReset()
+    post.mockReset()
+    put.mockReset()
+    push.mockReset()
+    replace.mockReset()
+    modifiersForG1 = []
+    productIdsForG1 = []
+    productsList = []
+    mockRoutes()
+  })
+
+  it("shows a not-found state (no delete button, no form) when the group 404s", async () => {
+    render(<ModifierGroupEditor groupId={NOT_FOUND_ID} />, { wrapper: Wrapper })
+
+    expect(await screen.findByText("Seçenek grubu bulunamadı.")).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Grup adı/)).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Sil" })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Vazgeç" }))
+    expect(push).toHaveBeenCalledWith("/catalog/modifiers")
+  })
+
+  it("shows a not-found state for a malformed (non-UUID) id without calling the API", async () => {
+    render(<ModifierGroupEditor groupId={MALFORMED_ID} />, { wrapper: Wrapper })
+
+    expect(await screen.findByText("Seçenek grubu bulunamadı.")).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Grup adı/)).not.toBeInTheDocument()
   })
 })
 

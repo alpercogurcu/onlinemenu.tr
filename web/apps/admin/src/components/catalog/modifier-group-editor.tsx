@@ -1,5 +1,6 @@
 "use client"
 
+import axios from "axios"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -25,6 +26,11 @@ import {
 } from "@/hooks/use-catalog"
 import type { SelectionType } from "@/types"
 
+// Route params are free-form strings — a stray/malformed /catalog/modifiers/{id}
+// (typo'd link, stale bookmark) should render the not-found state below
+// immediately, without even firing the GET (mirrors ProductEditor's guard).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 interface ModifierGroupEditorProps {
   // null selects "new" mode — no group exists yet, so the options card and
   // delete button stay hidden until the first Save creates one.
@@ -37,7 +43,18 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
   const router = useRouter()
   const isNew = groupId === null
 
-  const { data: group, isLoading: groupLoading } = useModifierGroup(groupId ?? "")
+  // A malformed id skips the network call entirely (useModifierGroup("") is
+  // disabled) — notFound below then fires on this instead of waiting for a
+  // response.
+  const invalidId = !isNew && groupId !== undefined && !UUID_RE.test(groupId)
+  const {
+    data: group,
+    isLoading: groupLoading,
+    isError: groupIsError,
+    error: groupError,
+  } = useModifierGroup(invalidId ? "" : (groupId ?? ""))
+  const notFound =
+    !isNew && (invalidId || (groupIsError && axios.isAxiosError(groupError) && groupError.response?.status === 404))
   // Lets the shared breadcrumb show the group's own name as the last crumb
   // instead of the raw UUID route param (mirrors ProductEditor). Undefined
   // while loading or on the "new" route, where the breadcrumb already falls
@@ -134,6 +151,17 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
       <div className="space-y-4">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-64 w-full" />
+      </div>
+    )
+  }
+
+  if (notFound) {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-destructive">{t("notFound")}</p>
+        <Button type="button" variant="outline" onClick={() => router.push("/catalog/modifiers")}>
+          {t("cancel")}
+        </Button>
       </div>
     )
   }

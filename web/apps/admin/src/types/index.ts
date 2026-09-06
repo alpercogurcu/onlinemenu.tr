@@ -35,16 +35,37 @@ export interface Category {
   created_at: string
   updated_at: string
 }
+export type SelectionType = "single" | "multiple"
 export interface ModifierGroup {
   id: string
   tenant_id: string
   name: string
+  selection_type: SelectionType
   min_selections: number
-  max_selections: number
+  // null means unlimited (only meaningful for selection_type "multiple").
+  max_selections: number | null
   is_required: boolean
+  sort_order: number
   created_at: string
   updated_at: string
 }
+export interface Modifier {
+  id: string
+  tenant_id: string
+  group_id: string
+  name: string
+  // Kuruş (int64), may be negative — see components/catalog/money-input.tsx
+  // allowNegative.
+  price_delta: number
+  is_active: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+// bps (basis points, 1/100 of a percent): %0, %1, %10, %20.
+export const TAX_RATE_OPTIONS = [0, 100, 1000, 2000] as const
+export const UNIT_OPTIONS = ["adet", "porsiyon", "gram", "kg", "ml", "lt"] as const
 export interface Menu {
   id: string
   tenant_id: string

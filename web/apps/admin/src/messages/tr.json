@@ -8,7 +8,7 @@
     "catalog": "Katalog",
     "products": "Ürünler",
     "categories": "Kategoriler",
-    "modifiers": "Modifier Grupları",
+    "modifiers": "Seçenek Grupları",
     "menus": "Menüler",
     "inventory": "Stok",
     "warehouses": "Depolar",
@@ -188,6 +188,212 @@
       "addFailed": "Ürün menüye eklenemedi",
       "removed": "Ürün menüden çıkarıldı",
       "removeFailed": "Ürün menüden çıkarılamadı"
+    }
+  },
+  "catalog": {
+    "products": {
+      "title": "Ürünler",
+      "subtitle": "Katalogdaki ürünleri yönetin.",
+      "add": "Ürün ekle",
+      "search": "Ürün ara",
+      "filter": {
+        "all": "Tümü",
+        "uncategorized": "Kategorisiz",
+        "status": {
+          "all": "Tümü",
+          "active": "Satışta",
+          "inactive": "Satışta değil"
+        }
+      },
+      "columns": {
+        "name": "Ürün",
+        "category": "Kategori",
+        "price": "Fiyat",
+        "options": "Seçenekler",
+        "status": "Durum"
+      },
+      "status": {
+        "active": "Satışta",
+        "inactive": "Satışta değil"
+      },
+      "noOptions": "Seçenek yok",
+      "empty": {
+        "title": "Henüz ürün eklenmedi",
+        "body": "Katalogda satışa sunulacak ürünleri buradan ekleyin.",
+        "cta": "İlk ürünü ekle"
+      },
+      "count": "{count} ürün · {active} satışta",
+      "actions": {
+        "edit": "Düzenle",
+        "duplicate": "Kopyala",
+        "deactivate": "Satıştan kaldır",
+        "activate": "Satışa al",
+        "delete": "Sil"
+      },
+      "deleteConfirm": {
+        "title": "\"{name}\" silinsin mi?",
+        "body": "Bu işlem geri alınamaz. Ürünü silmek yerine satıştan da kaldırabilirsiniz.",
+        "confirm": "Sil",
+        "deactivateInstead": "Satıştan kaldır"
+      },
+      "toast": {
+        "created": "Ürün eklendi",
+        "updated": "Ürün güncellendi",
+        "deleted": "Ürün silindi",
+        "deactivated": "Ürün satıştan kaldırıldı",
+        "activated": "Ürün satışa alındı",
+        "error": "İşlem tamamlanamadı"
+      }
+    },
+    "product": {
+      "new": "Yeni ürün",
+      "edit": "Ürünü düzenle",
+      "sections": {
+        "basics": "Temel bilgiler",
+        "pricing": "Fiyat ve vergi",
+        "sale": "Satışta"
+      },
+      "fields": {
+        "name": "Ad",
+        "category": "Kategori",
+        "unit": "Birim",
+        "description": "Açıklama",
+        "descriptionHint": "Müşteriye gösterilecek kısa açıklama.",
+        "price": "Fiyat (KDV dahil)",
+        "priceHint": "Müşteriden tahsil edilecek, KDV dahil tutar.",
+        "taxRate": "KDV oranı",
+        "taxHint": "Matrah {base} · KDV {tax}",
+        "sortOrder": "Sıra",
+        "sortOrderHint": "Küçük değer önce listelenir.",
+        "active": "Satışta",
+        "activeHint": "Kapatıldığında ürün menüde görünmez."
+      },
+      "groups": {
+        "title": "Seçenek grupları",
+        "subtitle": "Bu ürüne uygulanan seçenek gruplarını yönetin.",
+        "required": "Zorunlu",
+        "optional": "Opsiyonel",
+        "single": "Tek seçim",
+        "multiple": "Birden fazla",
+        "optionsCount": "{count} seçenek",
+        "edit": "Düzenle",
+        "remove": "Kaldır",
+        "addPlaceholder": "Grup ara veya ekle",
+        "createNew": "Yeni grup: \"{name}\"",
+        "empty": "Bu ürüne henüz seçenek grubu atanmadı."
+      },
+      "menus": {
+        "title": "Menüler",
+        "hint": "Ürünün görüneceği menüleri seçin.",
+        "priceDefault": "Ürünün kendi fiyatı kullanılır"
+      },
+      "save": "Kaydet",
+      "cancel": "Vazgeç",
+      "delete": "Sil",
+      "unsavedTitle": "Kaydedilmemiş değişiklikler var",
+      "unsavedBody": "Bu sayfadan ayrılırsanız yaptığınız değişiklikler kaybolur.",
+      "unsavedLeave": "Ayrıl",
+      "unsavedStay": "Kalmaya devam et",
+      "validation": {
+        "nameRequired": "Ürün adı zorunludur",
+        "priceRequired": "Fiyat zorunludur"
+      }
+    },
+    "groups": {
+      "title": "Seçenek Grupları",
+      "subtitle": "Boy, sos, ek malzeme gibi ürün seçeneklerini yönetin.",
+      "add": "Grup ekle",
+      "columns": {
+        "name": "Ad",
+        "rule": "Kural",
+        "options": "Seçenekler",
+        "products": "Ürünler",
+        "required": "Zorunlu"
+      },
+      "rule": {
+        "single": "Tek seçim",
+        "multiple": "Birden fazla",
+        "required": "Zorunlu",
+        "optional": "Opsiyonel",
+        "max": "en fazla {max}",
+        "unlimited": "Sınırsız"
+      },
+      "empty": {
+        "title": "Henüz grup eklenmedi",
+        "body": "Ürün seçenekleri için grup ekleyin.",
+        "cta": "İlk grubu ekle"
+      },
+      "deleteConfirm": {
+        "title": "Grup silinsin mi?",
+        "body": "{count} üründen kaldırılır, bu işlem geri alınamaz.",
+        "confirm": "Sil"
+      },
+      "toast": {
+        "created": "Grup oluşturuldu",
+        "updated": "Grup güncellendi",
+        "deleted": "Grup silindi",
+        "error": "İşlem tamamlanamadı"
+      }
+    },
+    "group": {
+      "new": "Yeni grup",
+      "edit": "Grubu düzenle",
+      "sections": {
+        "rule": "Kural",
+        "options": "Seçenekler",
+        "preview": "Müşteri böyle görür",
+        "usedBy": "Bu grubu kullanan ürünler"
+      },
+      "fields": {
+        "name": "Grup adı",
+        "nameHint": "örn: Boy Seçimi, Sos Seçimi",
+        "selection": "Müşteri kaç tane seçebilir?",
+        "selectionSingle": "Tek seçim",
+        "selectionMultiple": "Birden fazla",
+        "required": "Seçim zorunlu mu?",
+        "requiredNo": "Hayır",
+        "requiredYes": "Evet",
+        "max": "En fazla",
+        "maxUnlimited": "Sınırsız",
+        "maxHint": "Müşterinin bu gruptan seçebileceği en fazla seçenek sayısı."
+      },
+      "options": {
+        "name": "Ad",
+        "priceDelta": "Fiyat farkı",
+        "active": "Satışta",
+        "addRow": "Yeni seçenek…",
+        "addPlaceholder": "Seçenek adı",
+        "moveUp": "Yukarı taşı",
+        "moveDown": "Aşağı taşı",
+        "delete": "Sil",
+        "deleteConfirm": "Bu seçenek silinsin mi?",
+        "empty": "Bu grupta henüz seçenek yok.",
+        "hint": "Satıra tıklayıp yazın · Enter ile sonraki satır"
+      },
+      "preview": {
+        "title": "Müşteri böyle görür",
+        "optional": "İsteğe bağlı",
+        "required": "Zorunlu",
+        "free": "Ücretsiz",
+        "hint": "Yalnızca satıştaki seçenekler gösterilir."
+      },
+      "usedBy": {
+        "title": "Bu grubu kullanan ürünler",
+        "empty": "Henüz hiçbir üründe kullanılmıyor",
+        "hint": "Buradaki değişiklik {n} üründe de geçerli olur."
+      },
+      "save": "Kaydet",
+      "cancel": "Vazgeç",
+      "delete": "Sil",
+      "validation": {
+        "nameRequired": "Grup adı zorunludur",
+        "maxLessThanMin": "En fazla değeri en az değerinden küçük olamaz"
+      }
+    },
+    "common": {
+      "loading": "Yükleniyor…",
+      "retry": "Yeniden dene",
+      "loadFailed": "Yüklenemedi."
     }
   },
   "storefront": {

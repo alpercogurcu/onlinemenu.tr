@@ -26,10 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useModifierGroups } from "@/hooks/use-catalog"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import api from "@/lib/api"
-import type { ModifierGroup } from "@/types"
+import { useCreateModifierGroup, useModifierGroups } from "@/hooks/use-catalog"
 
 interface FormState {
   name: string
@@ -43,17 +40,6 @@ const defaultForm: FormState = {
   min_selections: "0",
   max_selections: "1",
   is_required: false,
-}
-
-function useCreateModifierGroup() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (body: Partial<ModifierGroup>) =>
-      api.post<ModifierGroup>("/api/v1/catalog/modifier-groups", body),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["modifier-groups"] })
-    },
-  })
 }
 
 export default function ModifiersPage() {

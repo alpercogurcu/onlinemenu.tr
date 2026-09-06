@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { Category, Menu, MenuItem, ModifierGroup, Product } from "@/types"
+import type { Category, Menu, MenuItem, Modifier, ModifierGroup, Product } from "@/types"
 
 export function useProducts(params?: { limit?: number; offset?: number }) {
   return useQuery({
@@ -138,5 +138,202 @@ export function useModifierGroups() {
       const { data } = await api.get<ModifierGroup[]>("/api/v1/catalog/modifier-groups")
       return data ?? []
     },
+  })
+}
+
+export function useModifierGroup(id: string) {
+  return useQuery({
+    queryKey: ["modifier-groups", id],
+    queryFn: async () => {
+      const { data } = await api.get<ModifierGroup>(`/api/v1/catalog/modifier-groups/${id}`)
+      return data
+    },
+    enabled: Boolean(id),
+  })
+}
+
+export function useCreateModifierGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Partial<ModifierGroup>) =>
+      api.post<ModifierGroup>("/api/v1/catalog/modifier-groups", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["modifier-groups"] })
+    },
+  })
+}
+
+export function useUpdateModifierGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }: Partial<ModifierGroup> & { id: string }) =>
+      api.put<ModifierGroup>(`/api/v1/catalog/modifier-groups/${id}`, body),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["modifier-groups"] })
+      void qc.invalidateQueries({ queryKey: ["modifier-groups", variables.id] })
+    },
+  })
+}
+
+export function useDeleteModifierGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/api/v1/catalog/modifier-groups/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["modifier-groups"] })
+    },
+  })
+}
+
+export function useModifiers(groupId: string) {
+  return useQuery({
+    queryKey: ["modifiers", groupId],
+    queryFn: async () => {
+      const { data } = await api.get<Modifier[]>(`/api/v1/catalog/modifier-groups/${groupId}/modifiers`)
+      return data ?? []
+    },
+    enabled: Boolean(groupId),
+  })
+}
+
+export function useCreateModifier() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      groupId,
+      ...body
+    }: {
+      groupId: string
+      name: string
+      price_delta: number
+      is_active: boolean
+      sort_order?: number
+    }) => api.post<Modifier>(`/api/v1/catalog/modifier-groups/${groupId}/modifiers`, body),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["modifiers", variables.groupId] })
+    },
+  })
+}
+
+export function useUpdateModifier() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      groupId,
+      id,
+      ...body
+    }: {
+      groupId: string
+      id: string
+      name?: string
+      price_delta?: number
+      is_active?: boolean
+      sort_order?: number
+    }) => api.put<Modifier>(`/api/v1/catalog/modifier-groups/${groupId}/modifiers/${id}`, body),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["modifiers", variables.groupId] })
+    },
+  })
+}
+
+export function useDeleteModifier() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ groupId, id }: { groupId: string; id: string }) =>
+      api.delete(`/api/v1/catalog/modifier-groups/${groupId}/modifiers/${id}`),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["modifiers", variables.groupId] })
+    },
+  })
+}
+
+// A product's assigned modifier group ids — GET /products/{id}/modifier-groups.
+export function useProductModifierGroupIds(productId: string) {
+  return useQuery({
+    queryKey: ["product-modifier-groups", productId],
+    queryFn: async () => {
+      const { data } = await api.get<string[]>(`/api/v1/catalog/products/${productId}/modifier-groups`)
+      return data ?? []
+    },
+    enabled: Boolean(productId),
+  })
+}
+
+// Batched version of useProductModifierGroupIds for a list page: one request
+// per product (useQueries, not a single joined call the backend does not
+// support), folded into a plain productId -> groupIds map so a table row can
+// read its own entry without re-deriving anything. Shares the exact same
+// query key as useProductModifierGroupIds, so both hooks read/write the same
+// cache entry per product.
+export function useProductsModifierGroupIds(productIds: string[]): Record<string, string[]> {
+  const results = useQueries({
+    queries: productIds.map((productId) => ({
+      queryKey: ["product-modifier-groups", productId] as const,
+      queryFn: async () => {
+        const { data } = await api.get<string[]>(`/api/v1/catalog/products/${productId}/modifier-groups`)
+        return data ?? []
+      },
+      enabled: Boolean(productId),
+    })),
+  })
+
+  const map: Record<string, string[]> = {}
+  productIds.forEach((productId, i) => {
+    map[productId] = results[i]?.data ?? []
+  })
+  return map
+}
+
+// Assigning/removing a group on a product invalidates BOTH sides of the
+// relationship: the product's own group list (product detail page) and the
+// group's product list (modifier group detail page's "used by" card) — see
+// query key sözleşmesi in the task brief.
+export function useAssignModifierGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      productId,
+      groupId,
+      sortOrder,
+    }: {
+      productId: string
+      groupId: string
+      sortOrder?: number
+    }) =>
+      api.post(`/api/v1/catalog/products/${productId}/modifier-groups`, {
+        group_id: groupId,
+        sort_order: sortOrder ?? 0,
+      }),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["product-modifier-groups", variables.productId] })
+      void qc.invalidateQueries({ queryKey: ["group-products", variables.groupId] })
+    },
+  })
+}
+
+export function useRemoveModifierGroup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ productId, groupId }: { productId: string; groupId: string }) =>
+      api.delete(`/api/v1/catalog/products/${productId}/modifier-groups/${groupId}`),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: ["product-modifier-groups", variables.productId] })
+      void qc.invalidateQueries({ queryKey: ["group-products", variables.groupId] })
+    },
+  })
+}
+
+// Products currently using a modifier group — GET
+// /modifier-groups/{id}/products (T1 ucu). Reverse of
+// useProductModifierGroupIds, used by the group detail page's "used by" card
+// and (batched via useQueries with the same query key) the groups list page.
+export function useGroupProductIds(groupId: string) {
+  return useQuery({
+    queryKey: ["group-products", groupId],
+    queryFn: async () => {
+      const { data } = await api.get<string[]>(`/api/v1/catalog/modifier-groups/${groupId}/products`)
+      return data ?? []
+    },
+    enabled: Boolean(groupId),
   })
 }

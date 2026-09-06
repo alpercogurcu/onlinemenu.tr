@@ -114,6 +114,71 @@ func (r *MembershipRepo) ListForTenant(
 	return collectMemberships(rows)
 }
 
+// ListDetailsForTenant is ListForTenant joined with persons and roles for the
+// admin user list. LEFT JOINs (not INNER) so a membership never disappears
+// because its person/role row is invisible under the current RLS context —
+// persons_select only exposes people who hold a membership in this tenant,
+// which every listed row satisfies, but the join must not turn a policy
+// change into silently missing users.
+func (r *MembershipRepo) ListDetailsForTenant(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID uuid.UUID,
+	personID *uuid.UUID,
+	branchID *uuid.UUID,
+) ([]domain.MembershipDetail, error) {
+	const base = `
+		SELECT m.id, m.person_id, m.tenant_id, m.branch_id, m.role_id, m.status, m.created_at, m.updated_at,
+		       COALESCE(p.full_name, ''), COALESCE(p.email, ''), COALESCE(r.name, '')
+		FROM memberships m
+		LEFT JOIN persons p ON p.id = m.person_id
+		LEFT JOIN roles r ON r.id = m.role_id
+		WHERE m.tenant_id = $1`
+
+	args := []any{tenantID}
+	q := base
+	if personID != nil {
+		args = append(args, *personID)
+		q += fmt.Sprintf(" AND m.person_id = $%d", len(args))
+	}
+	if branchID != nil {
+		args = append(args, *branchID)
+		q += fmt.Sprintf(" AND (m.branch_id = $%d OR m.branch_id IS NULL)", len(args))
+	}
+	q += " ORDER BY m.created_at"
+
+	rows, err := tx.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("identity/repo/membership: list details for tenant: %w", err)
+	}
+	defer rows.Close()
+
+	var details []domain.MembershipDetail
+	for rows.Next() {
+		var (
+			d         domain.MembershipDetail
+			status    string
+			createdAt time.Time
+			updatedAt time.Time
+		)
+		if err := rows.Scan(
+			&d.ID, &d.PersonID, &d.TenantID, &d.BranchID,
+			&d.RoleID, &status, &createdAt, &updatedAt,
+			&d.PersonName, &d.PersonEmail, &d.RoleName,
+		); err != nil {
+			return nil, fmt.Errorf("identity/repo/membership: scan detail: %w", err)
+		}
+		d.Status = domain.MembershipStatus(status)
+		d.CreatedAt = createdAt
+		d.UpdatedAt = updatedAt
+		details = append(details, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("identity/repo/membership: detail rows: %w", err)
+	}
+	return details, nil
+}
+
 // ListContextsForPerson returns a ContextItem for every active membership the person holds
 // across all tenants. This is a platform-level query: the caller must use
 // db.WithAllTenantsTx/WithAllTenantsReadTx (app.tenant_scope = 'all_tenants')

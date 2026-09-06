@@ -9,12 +9,15 @@ import (
 )
 
 type membershipResponse struct {
-	ID       uuid.UUID  `json:"id"`
-	PersonID uuid.UUID  `json:"person_id"`
-	TenantID uuid.UUID  `json:"tenant_id"`
-	BranchID *uuid.UUID `json:"branch_id,omitempty"`
-	RoleID   uuid.UUID  `json:"role_id"`
-	Status   string     `json:"status"`
+	ID          uuid.UUID  `json:"id"`
+	PersonID    uuid.UUID  `json:"person_id"`
+	PersonName  string     `json:"person_name"`
+	PersonEmail string     `json:"person_email"`
+	TenantID    uuid.UUID  `json:"tenant_id"`
+	BranchID    *uuid.UUID `json:"branch_id,omitempty"`
+	RoleID      uuid.UUID  `json:"role_id"`
+	RoleName    string     `json:"role_name"`
+	Status      string     `json:"status"`
 }
 
 type membershipListResponse struct {
@@ -58,7 +61,7 @@ func (h *Handler) ListMemberships(w http.ResponseWriter, r *http.Request) {
 		branchID = &id
 	}
 
-	memberships, err := h.memberships.List(r.Context(), tenantID, personID, branchID)
+	memberships, err := h.memberships.ListDetails(r.Context(), tenantID, personID, branchID)
 	if err != nil {
 		h.handleErr(w, err)
 		return
@@ -66,7 +69,7 @@ func (h *Handler) ListMemberships(w http.ResponseWriter, r *http.Request) {
 
 	dtos := make([]membershipResponse, len(memberships))
 	for i, m := range memberships {
-		dtos[i] = toMembershipResponse(m)
+		dtos[i] = toMembershipDetailResponse(m)
 	}
 
 	h.writeJSON(w, http.StatusOK, membershipListResponse{Memberships: dtos})
@@ -129,4 +132,12 @@ func toMembershipResponse(m domain.Membership) membershipResponse {
 		RoleID:   m.RoleID,
 		Status:   string(m.Status),
 	}
+}
+
+func toMembershipDetailResponse(d domain.MembershipDetail) membershipResponse {
+	resp := toMembershipResponse(d.Membership)
+	resp.PersonName = d.PersonName
+	resp.PersonEmail = d.PersonEmail
+	resp.RoleName = d.RoleName
+	return resp
 }

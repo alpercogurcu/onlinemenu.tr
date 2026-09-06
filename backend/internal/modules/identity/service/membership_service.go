@@ -64,6 +64,26 @@ func (s *MembershipService) List(
 	return memberships, nil
 }
 
+// ListDetails is List with the person and role display fields joined in
+// (see domain.MembershipDetail) — the shape the admin user list renders.
+func (s *MembershipService) ListDetails(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	personID *uuid.UUID,
+	branchID *uuid.UUID,
+) ([]domain.MembershipDetail, error) {
+	var details []domain.MembershipDetail
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		details, err = s.membershipRepo.ListDetailsForTenant(ctx, tx, tenantID, personID, branchID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("identity/service/membership: list details: %w", err)
+	}
+	return details, nil
+}
+
 // ListContexts returns the lightweight context summaries for all active memberships
 // belonging to the person identified by keycloakSub.
 // This is a platform-scope read: the memberships-by-person view spans tenants.

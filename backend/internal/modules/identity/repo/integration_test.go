@@ -526,6 +526,87 @@ func TestMembershipRepo_CreateAndGetByID(t *testing.T) {
 	})
 }
 
+func TestMembershipRepo_ListDetailsForTenant(t *testing.T) {
+	ctx := context.Background()
+	mr := repo.NewMembershipRepo()
+	pr := repo.NewPersonRepo()
+	cashierRoleID := systemRoleID(t, "cashier")
+	// manager is chain-wide — tenant B has no branch fixture, and a
+	// branch-scoped role would be rejected by the membership CHECK.
+	managerRoleID := systemRoleID(t, "manager")
+
+	suffix := uuid.NewString()
+	var alice, bob domain.Person
+	withPlatformTx(ctx, t, func(tx pgx.Tx) {
+		var err error
+		alice, err = pr.Create(ctx, tx, domain.Person{
+			KeycloakSub: "kc-alice-" + suffix,
+			Email:       "alice+" + suffix + "@example.com",
+			FullName:    "Alice Detail",
+		})
+		require.NoError(t, err)
+		bob, err = pr.Create(ctx, tx, domain.Person{
+			KeycloakSub: "kc-bob-" + suffix,
+			Email:       "bob+" + suffix + "@example.com",
+			FullName:    "Bob Detail",
+		})
+		require.NoError(t, err)
+	})
+
+	withTx(ctx, t, tenantA, func(tx pgx.Tx) {
+		_, err := mr.Create(ctx, tx, domain.Membership{
+			PersonID: alice.ID, TenantID: tenantA, BranchID: &branchA, RoleID: cashierRoleID, Status: domain.MembershipActive,
+		})
+		require.NoError(t, err)
+	})
+	withTx(ctx, t, tenantB, func(tx pgx.Tx) {
+		_, err := mr.Create(ctx, tx, domain.Membership{
+			PersonID: bob.ID, TenantID: tenantB, RoleID: managerRoleID, Status: domain.MembershipActive,
+		})
+		require.NoError(t, err)
+	})
+
+	byPerson := func(details []domain.MembershipDetail, personID uuid.UUID) *domain.MembershipDetail {
+		for i := range details {
+			if details[i].PersonID == personID {
+				return &details[i]
+			}
+		}
+		return nil
+	}
+
+	withReadTx(ctx, t, tenantA, func(tx pgx.Tx) {
+		details, err := mr.ListDetailsForTenant(ctx, tx, tenantA, nil, nil)
+		require.NoError(t, err)
+
+		got := byPerson(details, alice.ID)
+		require.NotNil(t, got, "alice's tenant A membership must be listed")
+		assert.Equal(t, "Alice Detail", got.PersonName)
+		assert.Equal(t, alice.Email, got.PersonEmail)
+		assert.Equal(t, "Kasiyer", got.RoleName)
+		assert.Equal(t, &branchA, got.BranchID)
+		assert.Equal(t, domain.MembershipActive, got.Status)
+
+		assert.Nil(t, byPerson(details, bob.ID), "tenant B membership must not leak into tenant A")
+	})
+
+	withReadTx(ctx, t, tenantA, func(tx pgx.Tx) {
+		details, err := mr.ListDetailsForTenant(ctx, tx, tenantA, &alice.ID, nil)
+		require.NoError(t, err)
+		require.Len(t, details, 1)
+		assert.Equal(t, alice.ID, details[0].PersonID)
+	})
+
+	withReadTx(ctx, t, tenantB, func(tx pgx.Tx) {
+		details, err := mr.ListDetailsForTenant(ctx, tx, tenantB, nil, nil)
+		require.NoError(t, err)
+		got := byPerson(details, bob.ID)
+		require.NotNil(t, got)
+		assert.Equal(t, "Yönetici", got.RoleName)
+		assert.Nil(t, got.BranchID)
+	})
+}
+
 func TestMembershipRepo_UpdateStatus(t *testing.T) {
 	ctx := context.Background()
 	mr := repo.NewMembershipRepo()

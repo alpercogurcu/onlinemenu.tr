@@ -35,6 +35,17 @@ type Membership struct {
 // IsActive reports whether the membership is in the active state.
 func (m Membership) IsActive() bool { return m.Status == MembershipActive }
 
+// MembershipDetail is a Membership joined with the display fields an admin
+// list needs (who the person is, which role they hold) so the client does
+// not have to fan out one request per row. Names come from persons/roles
+// under the caller's tenant RLS; a row the policy hides yields empty strings.
+type MembershipDetail struct {
+	Membership
+	PersonName  string
+	PersonEmail string
+	RoleName    string
+}
+
 // ContextItem is a lightweight summary of a membership used in the context-selection
 // response returned by GET /identity/me/contexts.
 type ContextItem struct {

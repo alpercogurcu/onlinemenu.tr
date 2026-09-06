@@ -215,6 +215,11 @@ export function useCreateModifier() {
   })
 }
 
+// Backend PUT replaces the whole row from the body, so a partial call here
+// would silently blank out whatever fields it omits — the variables type
+// requires all four so a partial patch is a compile error, not a runtime bug.
+// Callers (modifier-options-editor.tsx) build the full body via
+// buildFullBody() before calling this.
 export function useUpdateModifier() {
   const qc = useQueryClient()
   return useMutation({
@@ -225,10 +230,10 @@ export function useUpdateModifier() {
     }: {
       groupId: string
       id: string
-      name?: string
-      price_delta?: number
-      is_active?: boolean
-      sort_order?: number
+      name: string
+      price_delta: number
+      is_active: boolean
+      sort_order: number
     }) => api.put<Modifier>(`/api/v1/catalog/modifier-groups/${groupId}/modifiers/${id}`, body),
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ["modifiers", variables.groupId] })

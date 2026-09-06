@@ -28,6 +28,23 @@ import {
 import type { Modifier } from "@/types"
 
 type UpdatableFields = Partial<Pick<Modifier, "name" | "price_delta" | "is_active" | "sort_order">>
+type FullModifierBody = Pick<Modifier, "name" | "price_delta" | "is_active" | "sort_order">
+
+// Backend PUT REPLACES the whole modifier row from the request body. A
+// partial body (reorder sending only {sort_order}, a field edit sending only
+// the changed field) blanks out the rest of the row server-side — this is
+// how edited/reordered options used to end up with name:"" and
+// is_active:false. Every PUT must carry all four fields: merge them from the
+// current row (latest server data, plus any unsaved local edits for that row
+// folded in by the caller) with the just-changed field layered on top.
+function buildFullBody(current: Modifier, patch: UpdatableFields): FullModifierBody {
+  return {
+    name: patch.name ?? current.name,
+    price_delta: patch.price_delta ?? current.price_delta,
+    is_active: patch.is_active ?? current.is_active,
+    sort_order: patch.sort_order ?? current.sort_order,
+  }
+}
 
 interface ModifierOptionsEditorProps {
   // null while the group itself has not been created yet (the "new" route) —
@@ -75,9 +92,9 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
     document.getElementById(ADD_ROW_ID)?.focus()
   }
 
-  function handleUpdate(id: string, body: UpdatableFields) {
+  function handleUpdate(current: Modifier, patch: UpdatableFields) {
     if (!groupId) return
-    void updateModifier.mutateAsync({ groupId, id, ...body })
+    void updateModifier.mutateAsync({ groupId, id: current.id, ...buildFullBody(current, patch) })
   }
 
   function handleMove(index: number, direction: -1 | 1) {
@@ -85,8 +102,16 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
     const current = modifiers[index]
     const other = modifiers[index + direction]
     if (!current || !other) return
-    void updateModifier.mutateAsync({ groupId, id: current.id, sort_order: other.sort_order })
-    void updateModifier.mutateAsync({ groupId, id: other.id, sort_order: current.sort_order })
+    void updateModifier.mutateAsync({
+      groupId,
+      id: current.id,
+      ...buildFullBody(current, { sort_order: other.sort_order }),
+    })
+    void updateModifier.mutateAsync({
+      groupId,
+      id: other.id,
+      ...buildFullBody(other, { sort_order: current.sort_order }),
+    })
   }
 
   async function handleDelete() {
@@ -177,7 +202,7 @@ interface OptionRowProps {
   saving: boolean
   onMoveUp: () => void
   onMoveDown: () => void
-  onUpdate: (id: string, body: UpdatableFields) => void
+  onUpdate: (current: Modifier, patch: UpdatableFields) => void
   onRequestDelete: () => void
 }
 
@@ -192,28 +217,51 @@ function OptionRow({
   onRequestDelete,
 }: OptionRowProps) {
   const t = useTranslations("catalog.group.options")
+  const tValidation = useTranslations("catalog.group.validation")
   const [name, setName] = useState(modifier.name)
   const [priceKurus, setPriceKurus] = useState<number | null>(modifier.price_delta)
+  const [nameError, setNameError] = useState(false)
 
   // Re-sync local edit state whenever the server row changes underneath us
   // (a sibling row's sort_order swap refetches this row too, a delete removes
   // it, etc.) — without this, editing row A would keep showing row A's old
   // text after an unrelated mutation updated the cache.
-  useEffect(() => setName(modifier.name), [modifier.name])
+  useEffect(() => {
+    setName(modifier.name)
+    setNameError(false)
+  }, [modifier.name])
   useEffect(() => setPriceKurus(modifier.price_delta), [modifier.price_delta])
+
+  // The "current row" as far as this PUT is concerned: the latest server
+  // data, with whatever this row's own unsaved name/price edits currently
+  // hold folded in — so a PUT triggered by one field (e.g. the active
+  // toggle) doesn't clobber an in-progress edit to another field with a
+  // stale server value.
+  function currentRow(): Modifier {
+    return {
+      ...modifier,
+      name: name.trim() || modifier.name,
+      price_delta: priceKurus ?? modifier.price_delta,
+    }
+  }
 
   function commitName() {
     const trimmed = name.trim()
-    if (trimmed && trimmed !== modifier.name) {
-      onUpdate(modifier.id, { name: trimmed })
-    } else {
+    if (!trimmed) {
+      // Never send an empty name — restore the last known-good value and
+      // surface inline validation instead of firing the PUT.
       setName(modifier.name)
+      setNameError(true)
+      return
+    }
+    if (trimmed !== modifier.name) {
+      onUpdate(currentRow(), { name: trimmed })
     }
   }
 
   function commitPrice() {
     if (priceKurus !== null && priceKurus !== modifier.price_delta) {
-      onUpdate(modifier.id, { price_delta: priceKurus })
+      onUpdate(currentRow(), { price_delta: priceKurus })
     }
   }
 
@@ -226,6 +274,7 @@ function OptionRow({
             variant="ghost"
             size="icon-xs"
             disabled={isFirst}
+            aria-disabled={isFirst}
             aria-label={t("moveUp")}
             onClick={onMoveUp}
           >
@@ -236,6 +285,7 @@ function OptionRow({
             variant="ghost"
             size="icon-xs"
             disabled={isLast}
+            aria-disabled={isLast}
             aria-label={t("moveDown")}
             onClick={onMoveDown}
           >
@@ -250,12 +300,19 @@ function OptionRow({
         <Input
           id={`option-name-${modifier.id}`}
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value)
+            if (nameError) setNameError(false)
+          }}
           onBlur={commitName}
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur()
           }}
+          aria-invalid={nameError}
         />
+        {nameError ? (
+          <p className="text-sm text-destructive">{tValidation("nameRequired")}</p>
+        ) : null}
       </TableCell>
       <TableCell>
         <Label htmlFor={`option-price-${modifier.id}`} className="sr-only">
@@ -277,7 +334,7 @@ function OptionRow({
       <TableCell>
         <Switch
           checked={modifier.is_active}
-          onCheckedChange={(checked) => onUpdate(modifier.id, { is_active: checked })}
+          onCheckedChange={(checked) => onUpdate(currentRow(), { is_active: checked })}
           aria-label={t("active")}
         />
       </TableCell>

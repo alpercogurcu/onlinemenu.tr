@@ -192,8 +192,10 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     })
   })
 
-  it("parses a negative price delta with allowNegative", async () => {
-    modifiersForG1 = [makeModifier({ id: "m1", name: "Soğan", price_delta: 0 })]
+  it("parses a negative price delta with allowNegative, sending the full row body", async () => {
+    modifiersForG1 = [
+      makeModifier({ id: "m1", name: "Soğan", price_delta: 0, is_active: true, sort_order: 10 }),
+    ]
     put.mockResolvedValue({ data: modifiersForG1[0] })
 
     render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
@@ -205,14 +207,17 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
     expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {
+      name: "Soğan",
       price_delta: -500,
+      is_active: true,
+      sort_order: 10,
     })
   })
 
-  it("swaps sort_order with two PUTs when a row is moved down", async () => {
+  it("swaps sort_order with two full-body PUTs when a row is moved down", async () => {
     modifiersForG1 = [
-      makeModifier({ id: "m1", name: "Peynir", sort_order: 10 }),
-      makeModifier({ id: "m2", name: "Sosis", sort_order: 20 }),
+      makeModifier({ id: "m1", name: "Peynir", price_delta: 0, is_active: true, sort_order: 10 }),
+      makeModifier({ id: "m2", name: "Sosis", price_delta: 100, is_active: false, sort_order: 20 }),
     ]
     put.mockResolvedValue({ data: {} })
 
@@ -223,11 +228,51 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
     expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {
+      name: "Peynir",
+      price_delta: 0,
+      is_active: true,
       sort_order: 20,
     })
     expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m2", {
+      name: "Sosis",
+      price_delta: 100,
+      is_active: false,
       sort_order: 10,
     })
+  })
+
+  it("sends the unchanged name and price when toggling active", async () => {
+    modifiersForG1 = [
+      makeModifier({ id: "m1", name: "Peynir", price_delta: 250, is_active: true, sort_order: 10 }),
+    ]
+    put.mockResolvedValue({ data: modifiersForG1[0] })
+
+    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    await screen.findByDisplayValue("Peynir")
+
+    fireEvent.click(screen.getByLabelText("Satışta"))
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {
+      name: "Peynir",
+      price_delta: 250,
+      is_active: false,
+      sort_order: 10,
+    })
+  })
+
+  it("keeps the previous name and shows validation instead of sending an empty name", async () => {
+    modifiersForG1 = [makeModifier({ id: "m1", name: "Peynir" })]
+
+    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    const nameInput = await screen.findByDisplayValue("Peynir")
+
+    fireEvent.change(nameInput, { target: { value: "   " } })
+    fireEvent.blur(nameInput)
+
+    expect(put).not.toHaveBeenCalled()
+    expect(nameInput).toHaveValue("Peynir")
+    expect(screen.getByText("Grup adı zorunludur")).toBeInTheDocument()
   })
 })
 

@@ -47,12 +47,17 @@ func NewModifierService(p ModifierParams) *ModifierService {
 }
 
 func (s *ModifierService) CreateGroup(ctx context.Context, tenantID uuid.UUID, g domain.ModifierGroup) (domain.ModifierGroup, error) {
+	name, err := requireName(g.Name)
+	if err != nil {
+		return domain.ModifierGroup{}, err
+	}
+	g.Name = name
 	if err := validateModifierGroup(g); err != nil {
 		return domain.ModifierGroup{}, err
 	}
 	g.TenantID = tenantID
 	var created domain.ModifierGroup
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		created, err = s.groupRepo.Create(ctx, tx, g)
 		return err
@@ -90,11 +95,16 @@ func (s *ModifierService) ListGroups(ctx context.Context, tenantID uuid.UUID) ([
 }
 
 func (s *ModifierService) UpdateGroup(ctx context.Context, tenantID uuid.UUID, g domain.ModifierGroup) (domain.ModifierGroup, error) {
+	name, err := requireName(g.Name)
+	if err != nil {
+		return domain.ModifierGroup{}, err
+	}
+	g.Name = name
 	if err := validateModifierGroup(g); err != nil {
 		return domain.ModifierGroup{}, err
 	}
 	var updated domain.ModifierGroup
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		existing, err := s.groupRepo.GetByID(ctx, tx, g.ID)
 		if err != nil {
 			return err
@@ -125,12 +135,14 @@ func (s *ModifierService) DeleteGroup(ctx context.Context, tenantID, groupID uui
 }
 
 func (s *ModifierService) CreateModifier(ctx context.Context, tenantID uuid.UUID, m domain.Modifier) (domain.Modifier, error) {
-	if m.Name == "" {
-		return domain.Modifier{}, &pub.ValidationError{Msg: "modifier name is required"}
+	name, err := requireName(m.Name)
+	if err != nil {
+		return domain.Modifier{}, err
 	}
+	m.Name = name
 	m.TenantID = tenantID
 	var created domain.Modifier
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		// Verify group belongs to this tenant before inserting.
 		if _, err := s.groupRepo.GetByID(ctx, tx, m.GroupID); err != nil {
 			return err
@@ -159,8 +171,13 @@ func (s *ModifierService) ListModifiers(ctx context.Context, tenantID, groupID u
 }
 
 func (s *ModifierService) UpdateModifier(ctx context.Context, tenantID uuid.UUID, m domain.Modifier) (domain.Modifier, error) {
+	name, err := requireName(m.Name)
+	if err != nil {
+		return domain.Modifier{}, err
+	}
+	m.Name = name
 	var updated domain.Modifier
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		existing, err := s.modifierRepo.GetByID(ctx, tx, m.ID)
 		if err != nil {
 			return err

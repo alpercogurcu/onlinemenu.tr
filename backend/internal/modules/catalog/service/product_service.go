@@ -83,9 +83,14 @@ func (s *ProductService) ListByCategory(ctx context.Context, tenantID, categoryI
 
 // Create inserts a new product.
 func (s *ProductService) Create(ctx context.Context, tenantID uuid.UUID, p domain.Product) (domain.Product, error) {
+	name, err := requireName(p.Name)
+	if err != nil {
+		return domain.Product{}, err
+	}
+	p.Name = name
 	p.TenantID = tenantID
 	var created domain.Product
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		created, err = s.productRepo.Create(ctx, tx, p)
 		return err
@@ -98,8 +103,13 @@ func (s *ProductService) Create(ctx context.Context, tenantID uuid.UUID, p domai
 
 // Update modifies an existing product.
 func (s *ProductService) Update(ctx context.Context, tenantID uuid.UUID, p domain.Product) (domain.Product, error) {
+	name, err := requireName(p.Name)
+	if err != nil {
+		return domain.Product{}, err
+	}
+	p.Name = name
 	var updated domain.Product
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		existing, err := s.productRepo.GetByID(ctx, tx, p.ID)
 		if err != nil {
 			return err

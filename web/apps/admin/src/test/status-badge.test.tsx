@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge"
 import {
   checkStatusVariant,
   membershipStatusVariant,
-  orderStatusVariant,
   paymentStatusVariant,
   productStatusVariant,
   tableStatusVariant,
@@ -25,18 +24,6 @@ describe("status-badge mappings", () => {
     ["cancelled", "neutral"],
   ] as const)("checkStatusVariant(%s) → %s", (status, variant) => {
     expect(checkStatusVariant(status)).toBe(variant)
-  })
-
-  it.each([
-    ["pending", "warning"],
-    ["accepted", "info"],
-    ["preparing", "info"],
-    ["ready", "success"],
-    ["delivered", "success"],
-    ["rejected", "neutral"],
-    ["cancelled", "neutral"],
-  ] as const)("orderStatusVariant(%s) → %s", (status, variant) => {
-    expect(orderStatusVariant(status)).toBe(variant)
   })
 
   it.each([

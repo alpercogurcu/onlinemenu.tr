@@ -113,16 +113,17 @@ export default function TablesPage() {
 
         <div className="flex flex-wrap items-end gap-3">
           <div className="w-56 space-y-1">
-            <label className="text-sm font-medium" htmlFor="branch-select">
+            <span id="branch-label" className="text-sm font-medium">
               {t("branch")}
-            </label>
+            </span>
             {scopedBranchId ? (
-              <p id="branch-select" className="flex h-9 items-center text-sm font-medium">
+              <p aria-labelledby="branch-label" className="flex h-9 items-center text-sm font-medium">
                 {branches?.find((b) => b.id === branchId)?.name ?? "—"}
               </p>
             ) : (
               <Select
                 id="branch-select"
+                aria-labelledby="branch-label"
                 value={branchId}
                 onValueChange={setBranchId}
                 disabled={!branches || branches.length === 0}

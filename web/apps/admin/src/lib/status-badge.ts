@@ -1,4 +1,4 @@
-import type { CheckStatus, OrderStatus, PosTableStatus } from "@/types"
+import type { CheckStatus, PosTableStatus } from "@/types"
 
 // One place that decides which semantic colour a domain status carries, so
 // pages never encode "green means active" themselves and both themes stay in
@@ -15,22 +15,6 @@ export function checkStatusVariant(status: CheckStatus): StatusBadgeVariant {
       return "warning"
     case "closed":
       return "success"
-    case "cancelled":
-      return "neutral"
-  }
-}
-
-export function orderStatusVariant(status: OrderStatus): StatusBadgeVariant {
-  switch (status) {
-    case "pending":
-      return "warning"
-    case "accepted":
-    case "preparing":
-      return "info"
-    case "ready":
-    case "delivered":
-      return "success"
-    case "rejected":
     case "cancelled":
       return "neutral"
   }

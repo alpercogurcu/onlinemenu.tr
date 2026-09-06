@@ -418,17 +418,20 @@ export interface TenantContextListResponse {
 }
 
 // Tenant
+// GET /tenants/{id}/branches(/{id}) returns the full record only to a
+// tenant-scoped (manager) principal; branch-scoped roles get the directory
+// projection {id, tenant_id, name, is_active} — everything else is optional.
 export interface Branch {
   id: string
   tenant_id: string
   name: string
-  slug: string
-  ownership_type: string
-  operation_type: string
   is_active: boolean
-  phone: string
-  legal_name: string
-  tax_no: string
+  slug?: string
+  ownership_type?: string
+  operation_type?: string
+  phone?: string
+  legal_name?: string
+  tax_no?: string
 }
 export interface Tenant {
   id: string

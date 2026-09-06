@@ -350,7 +350,7 @@ export default function KitchenPage() {
           <ConnectionBadge status={status} />
 
           {scopedBranchId ? (
-            <span className="text-sm font-medium" aria-label="Şube seçimi">
+            <span className="text-sm font-medium">
               {branches?.find((b) => b.id === branchId)?.name ?? "—"}
             </span>
           ) : (

@@ -1,8 +1,10 @@
 "use client"
 
+import { useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronUp, Loader2, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useEffect, useState } from "react"
+import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
 import { MoneyInput } from "@/components/catalog/money-input"
@@ -55,6 +57,8 @@ interface ModifierOptionsEditorProps {
 
 export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
   const t = useTranslations("catalog.group")
+  const tGroups = useTranslations("catalog.groups")
+  const qc = useQueryClient()
   const { data } = useModifiers(groupId ?? "")
   const createModifier = useCreateModifier()
   const updateModifier = useUpdateModifier()
@@ -69,49 +73,78 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
 
   const modifiers = [...(data ?? [])].sort((a, b) => a.sort_order - b.sort_order)
 
-  // useUpdateModifier is one shared mutation instance for every row — while it
-  // is in flight, `.variables` still holds the last call's arguments, so the
-  // id on it tells us exactly which row's PUT is outstanding without any
-  // per-row mutation bookkeeping of our own.
-  const pendingVariables = updateModifier.variables as { id: string } | undefined
-  const savingId = updateModifier.isPending ? pendingVariables?.id : undefined
+  // Own bookkeeping rather than reading the shared updateModifier.variables:
+  // handleMove fires two sequential PUTs sharing this one mutation instance,
+  // so `.variables` only ever reflects whichever call is currently in
+  // flight — the other swapped row's spinner would never light up.
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
+
+  function withSaving<T>(ids: string[], run: () => Promise<T>): Promise<T> {
+    setSavingIds((prev) => new Set([...prev, ...ids]))
+    return run().finally(() => {
+      setSavingIds((prev) => {
+        const next = new Set(prev)
+        ids.forEach((id) => next.delete(id))
+        return next
+      })
+    })
+  }
 
   async function handleCreate(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter") return
     const trimmed = newName.trim()
     if (!trimmed || !groupId) return
     const lastOrder = modifiers.length > 0 ? modifiers[modifiers.length - 1].sort_order : 0
-    await createModifier.mutateAsync({
-      groupId,
-      name: trimmed,
-      price_delta: 0,
-      is_active: true,
-      sort_order: lastOrder + 10,
-    })
-    setNewName("")
-    document.getElementById(ADD_ROW_ID)?.focus()
+    try {
+      await createModifier.mutateAsync({
+        groupId,
+        name: trimmed,
+        price_delta: 0,
+        is_active: true,
+        sort_order: lastOrder + 10,
+      })
+      setNewName("")
+      document.getElementById(ADD_ROW_ID)?.focus()
+    } catch {
+      toast.error(tGroups("toast.error"))
+    }
   }
 
   function handleUpdate(current: Modifier, patch: UpdatableFields) {
     if (!groupId) return
-    void updateModifier.mutateAsync({ groupId, id: current.id, ...buildFullBody(current, patch) })
+    void withSaving([current.id], () =>
+      updateModifier.mutateAsync({ groupId, id: current.id, ...buildFullBody(current, patch) }),
+    ).catch(() => toast.error(tGroups("toast.error")))
   }
 
-  function handleMove(index: number, direction: -1 | 1) {
+  async function handleMove(index: number, direction: -1 | 1) {
     if (!groupId) return
     const current = modifiers[index]
     const other = modifiers[index + direction]
     if (!current || !other) return
-    void updateModifier.mutateAsync({
-      groupId,
-      id: current.id,
-      ...buildFullBody(current, { sort_order: other.sort_order }),
-    })
-    void updateModifier.mutateAsync({
-      groupId,
-      id: other.id,
-      ...buildFullBody(other, { sort_order: current.sort_order }),
-    })
+    try {
+      await withSaving([current.id, other.id], async () => {
+        // Two non-atomic PUTs — sequenced (not fired in parallel) so a
+        // failure on the second never leaves both rows sharing the same
+        // sort_order from a half-applied swap.
+        await updateModifier.mutateAsync({
+          groupId,
+          id: current.id,
+          ...buildFullBody(current, { sort_order: other.sort_order }),
+        })
+        await updateModifier.mutateAsync({
+          groupId,
+          id: other.id,
+          ...buildFullBody(other, { sort_order: current.sort_order }),
+        })
+      })
+    } catch {
+      toast.error(tGroups("toast.error"))
+      // The two rows' sort_order can now disagree with the server (only the
+      // first PUT may have landed) — refetch so the list reflects reality
+      // instead of the optimistic swap the UI already rendered.
+      void qc.invalidateQueries({ queryKey: ["modifiers", groupId] })
+    }
   }
 
   async function handleDelete() {
@@ -153,7 +186,7 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
                   modifier={modifier}
                   isFirst={index === 0}
                   isLast={index === modifiers.length - 1}
-                  saving={savingId === modifier.id}
+                  saving={savingIds.has(modifier.id)}
                   onMoveUp={() => handleMove(index, -1)}
                   onMoveDown={() => handleMove(index, 1)}
                   onUpdate={handleUpdate}
@@ -188,6 +221,7 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
         confirmLabel={t("options.delete")}
         destructive
         onConfirm={handleDelete}
+        onError={() => toast.error(tGroups("toast.error"))}
       />
     </Card>
   )

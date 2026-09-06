@@ -157,7 +157,9 @@ export function ProductModifierGroupsCard({ productId, assignedGroupIds }: Produ
       toast(t("removed", { name: groupName }), {
         action: {
           label: t("undo"),
-          onClick: () => void assignGroup.mutateAsync({ productId, groupId }),
+          onClick: () => {
+            assignGroup.mutateAsync({ productId, groupId }).catch(() => toast.error(tGroups("toast.error")))
+          },
         },
       })
     } catch {

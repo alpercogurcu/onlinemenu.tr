@@ -408,6 +408,7 @@ export function ProductEditor({ productId }: ProductEditorProps) {
           confirmLabel={tProducts("deleteConfirm.confirm")}
           destructive
           onConfirm={handleDelete}
+          onError={() => toast.error(tProducts("toast.error"))}
           secondaryAction={{
             label: tProducts("deleteConfirm.deactivateInstead"),
             onClick: () => void handleDeactivate(),

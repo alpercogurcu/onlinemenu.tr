@@ -335,3 +335,40 @@ func TestListBranches_ManagerPrincipal_GetsFullRecord(t *testing.T) {
 	require.Equal(t, branch.LegalName, row["legal_name"])
 	require.Contains(t, row, "tax_no")
 }
+
+// TestGetBranch_CashierPrincipal_GetsDirectoryProjectionOnly closes the
+// single-branch half of C1: a branch-scoped principal reading its own branch
+// gets the same directory projection as the list, never the IBAN/tax record.
+func TestGetBranch_CashierPrincipal_GetsDirectoryProjectionOnly(t *testing.T) {
+	ctx := context.Background()
+	tenant := createTestTenant(t, ctx, []string{"pos"})
+	branch := createTestBranch(t, ctx, tenant.ID)
+
+	h := newTestHandler(t)
+	mux := chi.NewMux()
+	h.RegisterRoutes(mux)
+
+	cashier := auth.Principal{
+		PersonID: uuid.New(),
+		Ctx:      auth.ContextStaff,
+		TenantID: tenant.ID,
+		BranchID: branch.ID,
+		RoleIDs:  []uuid.UUID{cashierRoleID},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/tenants/"+tenant.ID.String()+"/branches/"+branch.ID.String(), nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), cashier))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+
+	var row map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &row))
+	require.Equal(t, branch.ID.String(), row["id"])
+	require.Equal(t, branch.Name, row["name"])
+	require.Contains(t, row, "is_active")
+	for _, sensitive := range []string{"iban", "tax_no", "tax_office", "legal_name", "identity_type", "address", "phone", "supply_rules", "slug", "ownership_type", "operation_type"} {
+		require.NotContainsf(t, row, sensitive, "cashier's own-branch read must not carry %q", sensitive)
+	}
+}

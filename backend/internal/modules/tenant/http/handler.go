@@ -174,12 +174,24 @@ type branchDirectoryDTO struct {
 }
 
 // toBranchDirectory projects a full branch list down to the directory DTO.
+func toBranchDirectoryItem(b pub.Branch) branchDirectoryDTO {
+	return branchDirectoryDTO{ID: b.ID, TenantID: b.TenantID, Name: b.Name, IsActive: b.IsActive}
+}
+
 func toBranchDirectory(branches []pub.Branch) []branchDirectoryDTO {
 	out := make([]branchDirectoryDTO, len(branches))
 	for i, b := range branches {
-		out[i] = branchDirectoryDTO{ID: b.ID, TenantID: b.TenantID, Name: b.Name, IsActive: b.IsActive}
+		out[i] = toBranchDirectoryItem(b)
 	}
 	return out
+}
+
+// tenantScoped reports whether OPA resolved the request to tenant-wide
+// visibility (manager); every other scope only gets the branch directory
+// projection.
+func tenantScoped(r *http.Request) bool {
+	scope, ok := auth.ScopeFromContext(r.Context())
+	return ok && scope == "tenant"
 }
 
 // ListBranches handles GET /tenants/{tenantID}/branches.
@@ -196,7 +208,7 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if scope, ok := auth.ScopeFromContext(r.Context()); !ok || scope != "tenant" {
+	if !tenantScoped(r) {
 		h.writeJSON(w, r, http.StatusOK, toBranchDirectory(branches))
 		return
 	}
@@ -213,6 +225,10 @@ func (h *Handler) GetBranch(w http.ResponseWriter, r *http.Request) {
 	b, err := h.svc.GetBranch(r.Context(), tenantID, branchID)
 	if err != nil {
 		h.handleServiceErr(w, r, err, "branch not found")
+		return
+	}
+	if !tenantScoped(r) {
+		h.writeJSON(w, r, http.StatusOK, toBranchDirectoryItem(b))
 		return
 	}
 	h.writeJSON(w, r, http.StatusOK, b)

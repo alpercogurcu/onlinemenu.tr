@@ -408,6 +408,9 @@ export interface Tenant {
   name: string
   slug: string
   plan: string
+  // Module keys the tenant has bought (pos, catalog, inventory, …); absent on
+  // older backends — see lib/modules.ts for how the sidebar treats that.
+  enabled_modules?: string[]
   is_active: boolean
   created_at: string
 }

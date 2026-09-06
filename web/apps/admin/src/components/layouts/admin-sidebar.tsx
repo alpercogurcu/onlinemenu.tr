@@ -11,27 +11,25 @@ import {
   SidebarHeader,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { useEnabledModules } from "@/lib/modules"
+import { useAuthStore } from "@/store/auth-store"
 
 import { MenuGenerator } from "./menu-generator"
 import NavProfile from "./nav-profile"
-import {
-  getBillingMenuConfig,
-  getCatalogMenuConfig,
-  getHRMenuConfig,
-  getInventoryMenuConfig,
-  getOverviewMenuConfig,
-  getPOSMenuConfig,
-  getPartyMenuConfig,
-  getPaymentMenuConfig,
-  getSettingsMenuConfig,
-} from "./sidebar-menu-config"
+import { getSidebarSections } from "./sidebar-menu-config"
 
 export default function AdminSidebar({
   ...props
 }: React.ComponentProps<typeof Sidebar>) {
   const t = useTranslations()
+  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
+  const enabledModules = useEnabledModules(tenantId)
 
   const tFn = (key: string) => t(key as Parameters<typeof t>[0])
+
+  const sections = getSidebarSections(tFn).filter(
+    (section) => !section.module || enabledModules.includes(section.module),
+  )
 
   return (
     <Sidebar variant="inset" {...props}>
@@ -43,42 +41,13 @@ export default function AdminSidebar({
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <MenuGenerator
-          items={getOverviewMenuConfig(tFn)}
-          groupLabel="Genel"
-        />
-        <MenuGenerator
-          items={getPOSMenuConfig(tFn)}
-          groupLabel="POS"
-        />
-        <MenuGenerator
-          items={getCatalogMenuConfig(tFn)}
-          groupLabel="Katalog"
-        />
-        <MenuGenerator
-          items={getInventoryMenuConfig(tFn)}
-          groupLabel="Stok"
-        />
-        <MenuGenerator
-          items={getPartyMenuConfig(tFn)}
-          groupLabel="Müşteriler"
-        />
-        <MenuGenerator
-          items={getPaymentMenuConfig(tFn)}
-          groupLabel="Ödeme"
-        />
-        <MenuGenerator
-          items={getBillingMenuConfig(tFn)}
-          groupLabel="Fatura"
-        />
-        <MenuGenerator
-          items={getHRMenuConfig(tFn)}
-          groupLabel="Personel"
-        />
-        <MenuGenerator
-          items={getSettingsMenuConfig(tFn)}
-          groupLabel="İşletme"
-        />
+        {sections.map((section) => (
+          <MenuGenerator
+            key={section.label}
+            items={section.items}
+            groupLabel={section.label}
+          />
+        ))}
       </SidebarContent>
       <SidebarFooter>
         <NavProfile />

@@ -58,4 +58,34 @@ describe("DynamicBreadcrumb", () => {
 
     expect(screen.getByText("Prod 2")).toBeInTheDocument()
   })
+
+  it("names every inventory and settings segment in Turkish", () => {
+    pathname = "/inventory/supply-policies"
+    const { unmount } = render(<DynamicBreadcrumb />, { wrapper: Wrapper })
+    expect(screen.getByText("Stok")).toBeInTheDocument()
+    expect(screen.getByText("Tedarik Politikaları")).toBeInTheDocument()
+    unmount()
+
+    pathname = "/settings/fiscal-sections"
+    render(<DynamicBreadcrumb />, { wrapper: Wrapper })
+    expect(screen.getByText("İşletme")).toBeInTheDocument()
+    expect(screen.getByText("Kısım Eşleme")).toBeInTheDocument()
+    expect(screen.queryByText("Fiscal Sections")).not.toBeInTheDocument()
+  })
+
+  it("labels /billing/settings as the provider settings, not the business section", () => {
+    pathname = "/billing/settings"
+    render(<DynamicBreadcrumb />, { wrapper: Wrapper })
+
+    expect(screen.getByText("Fatura")).toBeInTheDocument()
+    expect(screen.getByText("Sağlayıcı Ayarları")).toBeInTheDocument()
+    expect(screen.queryByText("İşletme")).not.toBeInTheDocument()
+  })
+
+  it('renders "Detay" for an unlabeled UUID segment', () => {
+    pathname = "/catalog/products/0b0d3f4e-8e0a-4c1e-9b4a-2f1c6d7e8a9b"
+    render(<DynamicBreadcrumb />, { wrapper: Wrapper })
+
+    expect(screen.getByText("Detay")).toBeInTheDocument()
+  })
 })

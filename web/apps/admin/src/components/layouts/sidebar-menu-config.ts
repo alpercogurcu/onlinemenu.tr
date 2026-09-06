@@ -22,6 +22,17 @@ import {
 } from "lucide-react"
 
 import type { MenuItem } from "@/lib/menu-utils"
+import type { ModuleKey } from "@/lib/modules"
+
+// One labelled sidebar group. `module` names the backend module the group's
+// screens talk to; a group without one (overview, business settings) is
+// always shown. admin-sidebar.tsx drops groups whose module the tenant has
+// not enabled — or that the API does not mount yet (see lib/modules.ts).
+export interface SidebarSection {
+  label: string
+  module?: ModuleKey
+  items: MenuItem[]
+}
 
 export function getOverviewMenuConfig(t: (key: string) => string): MenuItem[] {
   return [
@@ -199,5 +210,21 @@ export function getSettingsMenuConfig(
       url: "/settings/fiscal-sections",
       icon: ListTree,
     },
+  ]
+}
+
+export function getSidebarSections(t: (key: string) => string): SidebarSection[] {
+  return [
+    { label: t("navigation.general"), items: getOverviewMenuConfig(t) },
+    { label: t("navigation.pos"), module: "pos", items: getPOSMenuConfig(t) },
+    { label: t("navigation.catalog"), module: "catalog", items: getCatalogMenuConfig(t) },
+    { label: t("navigation.inventory"), module: "inventory", items: getInventoryMenuConfig(t) },
+    { label: t("navigation.parties"), module: "party", items: getPartyMenuConfig(t) },
+    // Payments are served by the pos module (payment/public is consumed
+    // through pos), so they follow the pos flag rather than their own.
+    { label: t("navigation.payment"), module: "pos", items: getPaymentMenuConfig(t) },
+    { label: t("navigation.billing"), module: "billing", items: getBillingMenuConfig(t) },
+    { label: t("navigation.hr"), module: "hr", items: getHRMenuConfig(t) },
+    { label: t("navigation.business"), items: getSettingsMenuConfig(t) },
   ]
 }

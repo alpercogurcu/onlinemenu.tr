@@ -65,6 +65,12 @@ export function useBreadcrumbLabel(label: string | undefined) {
   }, [pathname, label])
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function isUuid(segment: string): boolean {
+  return UUID_RE.test(segment)
+}
+
 export default function DynamicBreadcrumb() {
   const t = useTranslations("navigation")
   const pathname = usePathname()
@@ -92,22 +98,36 @@ export default function DynamicBreadcrumb() {
     menus: t("menus"),
     inventory: t("inventory"),
     warehouses: t("warehouses"),
+    "stock-items": t("stockItems"),
     "stock-levels": t("stockLevels"),
     movements: t("stockMovements"),
+    "supply-policies": t("supplyPolicies"),
+    "purchase-receipts": t("purchaseReceipts"),
     payment: t("payment"),
     payments: t("payments"),
     billing: t("billing"),
     invoices: t("invoices"),
-    settings: t("settings"),
+    // The top-level "/settings" section is labelled "İşletme" in the sidebar;
+    // the breadcrumb mirrors that so the two never disagree.
+    settings: t("business"),
     branches: t("branches"),
     users: t("users"),
     roles: t("roles"),
     general: t("generalSettings"),
     integrations: t("integrations"),
+    "fiscal-terminals": t("fiscalTerminals"),
+    "fiscal-sections": t("fiscalSections"),
     parties: t("parties"),
     customers: t("customers"),
     hr: t("hr"),
     employees: t("employees"),
+  }
+
+  // Segments whose name depends on the section they sit in, keyed by
+  // "<parent>/<segment>" — "/billing/settings" is the provider settings
+  // page, not the business section.
+  const CONTEXT_NAMES: { [key: string]: string } = {
+    "billing/settings": t("billingSettings"),
   }
 
   const pathSegments = pathname
@@ -131,8 +151,15 @@ export default function DynamicBreadcrumb() {
       // for the current route's last segment — use it instead of the raw
       // UUID route param.
       label = labelEntry.label
+    } else if (isUuid(segment)) {
+      // A detail route whose page has not (yet) registered its entity name —
+      // a short generic word reads better than a title-cased UUID.
+      label = t("detail")
     } else {
-      label = ROUTE_NAMES[segment] || titleCased
+      label =
+        CONTEXT_NAMES[`${pathSegments[index - 1]}/${segment}`] ||
+        ROUTE_NAMES[segment] ||
+        titleCased
     }
     return { href, label, isCurrent }
   })

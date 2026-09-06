@@ -26,7 +26,7 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 | Secrets | HashiCorp Vault (runtime) + SOPS/age (bootstrap & git) |
 | Nesne depolama | MinIO |
 | Container build | ko (distroless, Dockerfile yok) |
-| Test | testcontainers-go, goleak, stretchr/testify, k6 |
+| Test | testcontainers-go, goleak, stretchr/testify, k6; admin: vitest (`task web:test`), Playwright rol e2e (`task web:e2e`, yığın dışarıdan ayakta) |
 | Dev hot-reload | air (`task dev` ile başlatılır) |
 | Komut çalıştırıcı | Taskfile — `task <name>`, `task --list` (Makefile yok) |
 | Admin frontend | Next.js 16 App Router + shadcn/ui (CLI v4) + TanStack Query |

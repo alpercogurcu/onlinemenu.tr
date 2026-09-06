@@ -9,7 +9,16 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectItem } from "@/components/ui/select"
 import type { SelectionType } from "@/types"
 
-const MAX_SELECTION_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+// Starts at 1 (not 2) — a "multiple" group capped at exactly one pick is a
+// legitimate rule on its own (kept distinct from "single" because is_required
+// / preview copy differ). This still doesn't make modifier-group-editor's
+// max < min validation reachable purely by picking a value here: min_selections
+// tops out at 1 (is_required), so 1 is equal to, never less than, min. That
+// branch stays defensive — it only fires for a group whose max_selections
+// arrived from the API already below min_selections (e.g. legacy data, or a
+// row edited directly against the backend) — see the "0/1 is still valid,
+// only server-supplied max < min errors" tests in modifier-group-detail.test.tsx.
+const MAX_SELECTION_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 interface ModifierGroupFormProps {
   name: string

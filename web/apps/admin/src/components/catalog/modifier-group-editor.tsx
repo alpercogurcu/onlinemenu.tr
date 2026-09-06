@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
 import { ModifierGroupForm } from "@/components/catalog/modifier-group-form"
 import { ModifierOptionsEditor } from "@/components/catalog/modifier-options-editor"
 import { ModifierPreview } from "@/components/catalog/modifier-preview"
+import { useBreadcrumbLabel } from "@/components/layouts/dynamic-breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -37,6 +38,11 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
   const isNew = groupId === null
 
   const { data: group, isLoading: groupLoading } = useModifierGroup(groupId ?? "")
+  // Lets the shared breadcrumb show the group's own name as the last crumb
+  // instead of the raw UUID route param (mirrors ProductEditor). Undefined
+  // while loading or on the "new" route, where the breadcrumb already falls
+  // back to "Yeni Grup" via NEW_SEGMENT_NAMES.
+  useBreadcrumbLabel(group?.name)
   const { data: modifiersData } = useModifiers(groupId ?? "")
   const { data: productIdsData } = useGroupProductIds(groupId ?? "")
   const { data: productsData } = useProducts()
@@ -136,10 +142,8 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
           {!isNew ? (
-            // No i18n key covers this composed summary line yet — see Task 5
-            // report's open points.
             <p className="text-muted-foreground">
-              {`${modifiers.length} seçenek · ${productIds.length} üründe kullanılıyor`}
+              {t("summary", { options: modifiers.length, products: productIds.length })}
             </p>
           ) : null}
         </div>

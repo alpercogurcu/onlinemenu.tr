@@ -127,9 +127,7 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
       </CardHeader>
       <CardContent>
         {groupId === null ? (
-          // No dedicated i18n key covers this notice — see Task 5 report's
-          // open points, flagged for the team rather than added to tr.json.
-          <p className="text-sm text-muted-foreground">{"Önce grubu kaydedin."}</p>
+          <p className="text-sm text-muted-foreground">{t("options.saveFirst")}</p>
         ) : (
           <Table>
             <TableHeader>
@@ -321,8 +319,18 @@ function OptionRow({
         {/* MoneyInput doesn't forward onBlur/onKeyDown to its own callers, so
             the wrapping div catches both: React implements onBlur via
             capture-phase focus/blur listening, so it fires for the nested
-            input's blur even though native "blur" itself never bubbles. */}
-        <div onBlur={commitPrice} onKeyDown={(e) => e.key === "Enter" && commitPrice()}>
+            input's blur even though native "blur" itself never bubbles.
+            Enter blurs the real input (e.target, not currentTarget — the
+            div itself isn't focusable) instead of calling commitPrice
+            directly, so onBlur stays the single commit path: without this,
+            Enter committed once and a following Tab's real blur committed
+            again, firing a duplicate PUT. */}
+        <div
+          onBlur={commitPrice}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLElement).blur()
+          }}
+        >
           <MoneyInput
             id={`option-price-${modifier.id}`}
             valueKurus={priceKurus}

@@ -21,6 +21,10 @@ const push = vi.fn()
 const replace = vi.fn()
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace }),
+  // useBreadcrumbLabel (wired into ModifierGroupEditor) reads this — it
+  // doesn't affect any assertion here since no DynamicBreadcrumb is mounted
+  // in these tests, but the hook throws without a usePathname to call.
+  usePathname: () => "/catalog/modifiers/g1",
 }))
 
 const get = vi.fn()
@@ -157,6 +161,74 @@ describe("ModifierGroupEditor — Kural card", () => {
       }),
     )
   })
+
+  it("shows the save-group-first notice on the options card before the group exists", () => {
+    render(<ModifierGroupEditor groupId={null} />, { wrapper: Wrapper })
+
+    expect(
+      screen.getByText("Seçenek eklemek için önce grubu kaydedin."),
+    ).toBeInTheDocument()
+  })
+
+  it("accepts max_selections:1 on a required multiple-selection group (max is not < min)", async () => {
+    render(<ModifierGroupEditor groupId={null} />, { wrapper: Wrapper })
+
+    fireEvent.click(screen.getByRole("button", { name: "Birden fazla" }))
+    fireEvent.change(screen.getByLabelText("En fazla"), { target: { value: "1" } })
+    fireEvent.click(screen.getByRole("button", { name: "Evet, en az 1" }))
+    fireEvent.change(screen.getByLabelText(/Grup adı/), { target: { value: "Tek Ek" } })
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    expect(post).toHaveBeenCalledWith(
+      "/api/v1/catalog/modifier-groups",
+      expect.objectContaining({
+        selection_type: "multiple",
+        max_selections: 1,
+        min_selections: 1,
+        is_required: true,
+      }),
+    )
+    expect(
+      screen.queryByText("En fazla değeri en az değerinden küçük olamaz"),
+    ).not.toBeInTheDocument()
+  })
+
+  it("rejects max_selections < min_selections — reachable only via a group already saved that way", async () => {
+    // MAX_SELECTION_OPTIONS starts at 1 and min_selections tops out at 1
+    // (is_required), so this branch can never be triggered by picking values
+    // in the form itself — it's a defensive check against a row whose
+    // max_selections arrived from the API already below min_selections
+    // (legacy data, or an edit made directly against the backend).
+    const badGroup: ModifierGroup = {
+      ...GROUP,
+      id: "g-bad",
+      selection_type: "multiple",
+      is_required: true,
+      min_selections: 1,
+      max_selections: 0,
+    }
+    get.mockImplementation((url: string) => {
+      if (url === "/api/v1/catalog/modifier-groups/g-bad") return Promise.resolve({ data: badGroup })
+      if (url === "/api/v1/catalog/modifier-groups/g-bad/modifiers") return Promise.resolve({ data: [] })
+      if (url === "/api/v1/catalog/modifier-groups/g-bad/products") return Promise.resolve({ data: [] })
+      if (url === "/api/v1/catalog/products") return Promise.resolve({ data: [] })
+      return Promise.resolve({ data: [] })
+    })
+
+    render(<ModifierGroupEditor groupId="g-bad" />, { wrapper: Wrapper })
+    await screen.findByDisplayValue("Ek Malzeme")
+
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    expect(
+      await screen.findByText("En fazla değeri en az değerinden küçük olamaz"),
+    ).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalledWith(
+      "/api/v1/catalog/modifier-groups/g-bad",
+      expect.anything(),
+    )
+  })
 })
 
 describe("ModifierGroupEditor — Seçenekler card", () => {
@@ -202,6 +274,7 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     await screen.findByDisplayValue("Soğan")
 
     const priceInput = screen.getByLabelText("Fiyat farkı")
+    priceInput.focus()
     fireEvent.change(priceInput, { target: { value: "-5" } })
     fireEvent.keyDown(priceInput, { key: "Enter" })
 
@@ -214,6 +287,39 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     })
   })
 
+  it("blurs the price field on Enter so a following Tab doesn't fire a second PUT", async () => {
+    modifiersForG1 = [
+      makeModifier({ id: "m1", name: "Soğan", price_delta: 0, is_active: true, sort_order: 10 }),
+    ]
+    put.mockResolvedValue({ data: modifiersForG1[0] })
+
+    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    await screen.findByDisplayValue("Soğan")
+
+    const priceInput = screen.getByLabelText("Fiyat farkı")
+    priceInput.focus()
+    fireEvent.change(priceInput, { target: { value: "-5" } })
+    fireEvent.keyDown(priceInput, { key: "Enter" })
+
+    // Enter commits by really blurring the field (not by calling the commit
+    // function directly), so focus has already moved on by the time Enter's
+    // handler returns.
+    expect(document.activeElement).not.toBe(priceInput)
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+
+    fireEvent.keyDown(priceInput, { key: "Tab" })
+    expect(put).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows the composed options/products summary line for an existing group", async () => {
+    modifiersForG1 = [makeModifier({ id: "m1" }), makeModifier({ id: "m2", sort_order: 20 })]
+    productIdsForG1 = ["prod-1", "prod-2", "prod-3"]
+
+    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+
+    expect(await screen.findByText("2 seçenek · 3 üründe kullanılıyor")).toBeInTheDocument()
+  })
+
   it("swaps sort_order with two full-body PUTs when a row is moved down", async () => {
     modifiersForG1 = [
       makeModifier({ id: "m1", name: "Peynir", price_delta: 0, is_active: true, sort_order: 10 }),
@@ -224,7 +330,16 @@ describe("ModifierGroupEditor — Seçenekler card", () => {
     render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
     await screen.findByDisplayValue("Peynir")
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Aşağı taşı" })[0])
+    const moveUpButtons = screen.getAllByRole("button", { name: "Yukarı taşı" })
+    const moveDownButtons = screen.getAllByRole("button", { name: "Aşağı taşı" })
+    expect(moveUpButtons[0]).toBeDisabled()
+    expect(moveUpButtons[0]).toHaveAttribute("aria-disabled", "true")
+    expect(moveUpButtons[1]).not.toBeDisabled()
+    expect(moveDownButtons[0]).not.toBeDisabled()
+    expect(moveDownButtons[1]).toBeDisabled()
+    expect(moveDownButtons[1]).toHaveAttribute("aria-disabled", "true")
+
+    fireEvent.click(moveDownButtons[0])
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
     expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/modifiers/m1", {

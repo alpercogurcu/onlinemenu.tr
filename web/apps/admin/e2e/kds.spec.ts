@@ -36,40 +36,53 @@ test("mutfak yeni bileti görür ve kabul eder; cihaz koyu modu sayfaya sınırl
   expect(order.ok(), await order.text()).toBeTruthy()
   const orderId = ((await order.json()) as { id: string }).id
 
-  await loginAs(page, USERS.kitchen)
-  await gotoSpa(page, "/pos/kitchen")
-  await expect(page.getByText("Canlı", { exact: true })).toBeVisible()
+  try {
+    await loginAs(page, USERS.kitchen)
+    await gotoSpa(page, "/pos/kitchen")
+    await expect(page.getByText("Canlı", { exact: true })).toBeVisible()
 
-  // Accepting is a counter decision (pos.order.accept): the kitchen sees the
-  // new ticket but gets no "Kabul Et" — the counter takes it via the API.
-  const card = page.locator("[data-kds-root] [data-slot=card]").filter({ hasText: label }).first()
-  await card.scrollIntoViewIfNeeded()
-  await expect(card).toBeVisible()
-  await expect(card.getByText("Kasa onayı bekleniyor")).toBeVisible()
-  await expect(card.getByRole("button", { name: "Kabul Et" })).toHaveCount(0)
+    // Accepting is a counter decision (pos.order.accept): the kitchen sees the
+    // new ticket but gets no "Kabul Et" — the counter takes it via the API.
+    const card = page.locator("[data-kds-root] [data-slot=card]").filter({ hasText: label }).first()
+    await card.scrollIntoViewIfNeeded()
+    await expect(card).toBeVisible()
+    await expect(card.getByText("Kasa onayı bekleniyor")).toBeVisible()
+    await expect(card.getByRole("button", { name: "Kabul Et" })).toHaveCount(0)
 
-  const accept = await request.post(`${API_URL}/api/v1/pos/orders/${orderId}/accept`, { headers })
-  expect(accept.ok(), await accept.text()).toBeTruthy()
+    const accept = await request.post(`${API_URL}/api/v1/pos/orders/${orderId}/accept`, { headers })
+    expect(accept.ok(), await accept.text()).toBeTruthy()
 
-  // The card re-mounts in the "Kabul Edildi" column when the stream delivers
-  // the accept — wait on the new button rather than the old element.
-  const startButton = card.getByRole("button", { name: "Hazırlamaya Başla" })
-  await expect(startButton).toBeVisible()
-  await startButton.click()
-  await expect(card.getByRole("button", { name: "Hazır", exact: true })).toBeVisible()
+    // The card re-mounts in the "Kabul Edildi" column when the stream delivers
+    // the accept — wait on the new button rather than the old element.
+    const startButton = card.getByRole("button", { name: "Hazırlamaya Başla" })
+    await expect(startButton).toBeVisible()
+    await startButton.click()
+    await expect(card.getByRole("button", { name: "Hazır", exact: true })).toBeVisible()
 
-  // The switch is an sr-only checkbox behind a styled label — toggle it by
-  // clicking its label, which is the only pointer target a user gets too.
-  const root = page.locator("[data-kds-root]")
-  const deviceDark = page.getByRole("switch", { name: "Bu cihazda koyu mod" })
-  const deviceDarkLabel = page.locator("label").filter({ has: deviceDark })
-  await expect(root).not.toHaveClass(/\bdark\b/)
-  await deviceDarkLabel.scrollIntoViewIfNeeded()
-  await deviceDarkLabel.click()
-  await expect(deviceDark).toBeChecked()
-  await expect(root).toHaveClass(/\bdark\b/)
-  await expect(page.locator("html")).not.toHaveClass(/\bdark\b/)
-  await deviceDarkLabel.click()
-  await expect(deviceDark).not.toBeChecked()
-  await expect(root).not.toHaveClass(/\bdark\b/)
+    // The switch is an sr-only checkbox behind a styled label — toggle it by
+    // clicking its label, which is the only pointer target a user gets too.
+    const root = page.locator("[data-kds-root]")
+    const deviceDark = page.getByRole("switch", { name: "Bu cihazda koyu mod" })
+    const deviceDarkLabel = page.locator("label").filter({ has: deviceDark })
+    await expect(root).not.toHaveClass(/\bdark\b/)
+    await deviceDarkLabel.scrollIntoViewIfNeeded()
+    await deviceDarkLabel.click()
+    await expect(deviceDark).toBeChecked()
+    await expect(root).toHaveClass(/\bdark\b/)
+    await expect(page.locator("html")).not.toHaveClass(/\bdark\b/)
+    await deviceDarkLabel.click()
+    await expect(deviceDark).not.toBeChecked()
+    await expect(root).not.toHaveClass(/\bdark\b/)
+  } finally {
+    // Leave the kitchen board as we found it: walk the ticket to delivered
+    // and cancel its check (cleanup is best-effort; the assertions above
+    // are what fail the test).
+    for (const status of ["preparing", "ready", "delivered"]) {
+      await request.post(`${API_URL}/api/v1/pos/orders/${orderId}/advance`, { headers, data: { status } })
+    }
+    await request.post(`${API_URL}/api/v1/pos/checks/${checkId}/cancel`, {
+      headers,
+      data: { reason: "e2e cleanup" },
+    })
+  }
 })

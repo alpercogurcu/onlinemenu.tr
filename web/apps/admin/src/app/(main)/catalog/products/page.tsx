@@ -34,6 +34,7 @@ import {
   useUpdateProduct,
 } from "@/hooks/use-catalog"
 import { formatKurus } from "@/lib/money"
+import { productStatusVariant } from "@/lib/status-badge"
 import type { Product } from "@/types"
 
 type StatusFilter = "all" | "active" | "inactive"
@@ -311,14 +312,7 @@ export default function ProductsPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={
-                            product.is_active
-                              ? "bg-status-success-bg text-status-success-fg border-status-success-border"
-                              : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
-                          }
-                        >
+                        <Badge variant={productStatusVariant(product.is_active)}>
                           {product.is_active ? t("status.active") : t("status.inactive")}
                         </Badge>
                       </TableCell>

@@ -34,9 +34,9 @@ function partyTypeBadge(type: PartyType): string {
     case "customer":
       return "bg-status-info-bg text-status-info-fg border-status-info-border"
     case "supplier":
-      return "bg-purple-100 text-purple-700 border-purple-200"
+      return "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
     case "both":
-      return "bg-teal-100 text-teal-700 border-teal-200"
+      return "bg-status-info-bg text-status-info-fg border-status-info-border"
   }
 }
 

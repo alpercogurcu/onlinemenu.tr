@@ -30,7 +30,7 @@ function movementTypeBadge(type: MovementType): string {
     case "adjust":
       return "bg-status-info-bg text-status-info-fg border-status-info-border"
     case "transfer":
-      return "bg-purple-100 text-purple-700 border-purple-200"
+      return "bg-status-info-bg text-status-info-fg border-status-info-border"
     case "reserve":
       return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
     case "release":

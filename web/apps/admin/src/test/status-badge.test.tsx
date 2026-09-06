@@ -43,7 +43,7 @@ describe("status-badge mappings", () => {
     ["empty", "neutral"],
     ["occupied", "warning"],
     ["reserved", "info"],
-    ["cleaning", "neutral"],
+    ["cleaning", "warning"],
   ] as const)("tableStatusVariant(%s) → %s", (status, variant) => {
     expect(tableStatusVariant(status)).toBe(variant)
   })
@@ -60,8 +60,8 @@ describe("status-badge mappings", () => {
 
   it.each([
     ["active", "success"],
-    ["pending", "warning"],
-    ["inactive", "neutral"],
+    ["suspended", "neutral"],
+    ["terminated", "neutral"],
   ] as const)("membershipStatusVariant(%s) → %s", (status, variant) => {
     expect(membershipStatusVariant(status)).toBe(variant)
   })

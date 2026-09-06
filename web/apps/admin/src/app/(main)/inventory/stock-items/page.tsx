@@ -49,7 +49,7 @@ const KIND_LABELS: Record<StockItemKind, string> = {
 const KIND_BADGE_CLASS: Record<StockItemKind, string> = {
   raw: "bg-status-warning-bg text-status-warning-fg border-status-warning-border",
   intermediate: "bg-status-info-bg text-status-info-fg border-status-info-border",
-  packaging: "bg-purple-100 text-purple-700 border-purple-200",
+  packaging: "bg-status-info-bg text-status-info-fg border-status-info-border",
   finished: "bg-status-success-bg text-status-success-fg border-status-success-border",
 }
 
@@ -63,8 +63,8 @@ const SUPPLY_MODE_LABELS: Record<SupplyMode, string> = {
 }
 
 const SUPPLY_MODE_BADGE_CLASS: Record<SupplyMode, string> = {
-  exclusive_hq: "bg-slate-100 text-slate-700 border-slate-200",
-  approved_suppliers: "bg-sky-100 text-sky-700 border-sky-200",
+  exclusive_hq: "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border",
+  approved_suppliers: "bg-status-info-bg text-status-info-fg border-status-info-border",
   free: "bg-status-success-bg text-status-success-fg border-status-success-border",
 }
 

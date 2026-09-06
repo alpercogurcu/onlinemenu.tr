@@ -45,7 +45,7 @@ export function tableStatusVariant(status: PosTableStatus): StatusBadgeVariant {
     case "reserved":
       return "info"
     case "cleaning":
-      return "neutral"
+      return "warning"
   }
 }
 
@@ -67,9 +67,6 @@ export function membershipStatusVariant(status: string): StatusBadgeVariant {
   switch (status) {
     case "active":
       return "success"
-    case "pending":
-    case "invited":
-      return "warning"
     default:
       return "neutral"
   }

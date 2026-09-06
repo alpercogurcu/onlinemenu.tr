@@ -57,8 +57,8 @@ const MODE_LABELS: Record<SupplyMode, string> = {
 }
 
 const MODE_BADGE_CLASS: Record<SupplyMode, string> = {
-  exclusive_hq: "bg-slate-100 text-slate-700 border-slate-200",
-  approved_suppliers: "bg-sky-100 text-sky-700 border-sky-200",
+  exclusive_hq: "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border",
+  approved_suppliers: "bg-status-info-bg text-status-info-fg border-status-info-border",
   free: "bg-status-success-bg text-status-success-fg border-status-success-border",
 }
 

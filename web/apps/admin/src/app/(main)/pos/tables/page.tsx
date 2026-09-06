@@ -16,23 +16,11 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCan } from "@/hooks/use-can"
 import { currentBranchId } from "@/lib/permissions"
+import { tableStatusVariant } from "@/lib/status-badge"
 import { useSetTableStatus, useTables, useZones, type ManualTableStatus } from "@/hooks/use-pos"
 import { useBranches } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
 import type { PosTable, PosTableStatus, PosZone } from "@/types"
-
-function statusBadgeClass(status: PosTableStatus): string {
-  switch (status) {
-    case "empty":
-      return "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
-    case "occupied":
-      return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
-    case "reserved":
-      return "bg-status-info-bg text-status-info-fg border-status-info-border"
-    case "cleaning":
-      return "bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-100"
-  }
-}
 
 // Mirrors domain.allowedTableTransitions (backend/internal/modules/pos/domain/
 // table.go) MINUS "occupied": TableService.SetStatus rejects that target
@@ -214,7 +202,7 @@ export default function TablesPage() {
                         </CardHeader>
                         <CardContent className="space-y-2 px-4 pb-4">
                           <div className="flex flex-wrap gap-1.5">
-                            <Badge className={statusBadgeClass(table.status)} variant="outline">
+                            <Badge variant={tableStatusVariant(table.status)}>
                               {t(`status.${table.status}`)}
                             </Badge>
                             {/* `occupied` is set by manual status changes too, so it

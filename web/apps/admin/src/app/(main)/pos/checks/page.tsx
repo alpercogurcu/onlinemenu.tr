@@ -16,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useCancelCheck, useChecks, useCloseCheck } from "@/hooks/use-pos"
+import { checkStatusVariant } from "@/lib/status-badge"
 import { cn } from "@/lib/utils"
 import {
   formatCheckDuration,
@@ -23,19 +24,8 @@ import {
   formatOpenDuration,
   isLongOpenCheck,
 } from "@/lib/pos-format"
-import type { Check, CheckStatus } from "@/types"
+import type { Check } from "@/types"
 import { toast } from "sonner"
-
-function statusBadgeClass(status: CheckStatus): string {
-  switch (status) {
-    case "open":
-      return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
-    case "closed":
-      return "bg-status-success-bg text-status-success-fg border-status-success-border"
-    case "cancelled":
-      return "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
-  }
-}
 
 // durationFor renders the "Süre" column with two different formatters on
 // purpose. An open check is a live, still-growing figure and keeps the
@@ -126,10 +116,7 @@ export default function ChecksPage() {
                             badge stays invisible until the backend exposes it,
                             rather than mislabelling every check as POS. */}
                         {check.source === "online_qr" && (
-                          <Badge
-                            variant="outline"
-                            className="border-sky-200 bg-sky-50 text-sky-700"
-                          >
+                          <Badge variant="info">
                             <QrCode className="size-3" />
                             {t("sourceOnlineQr")}
                           </Badge>
@@ -147,7 +134,7 @@ export default function ChecksPage() {
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">{check.note || "—"}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className={statusBadgeClass(check.status)}>
+                      <Badge variant={checkStatusVariant(check.status)}>
                         {t(`status.${check.status}`)}
                       </Badge>
                     </TableCell>

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table"
 import { useQuery } from "@tanstack/react-query"
 import api from "@/lib/api"
+import { paymentStatusVariant } from "@/lib/status-badge"
 import type { Payment, PaymentMethod } from "@/types"
 
 interface PaymentListResponse { payments: Payment[] }
@@ -116,16 +117,7 @@ export default function PaymentsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          payment.status === "completed"
-                            ? "bg-status-success-bg text-status-success-fg border-status-success-border"
-                            : payment.status === "failed"
-                              ? "bg-status-danger-bg text-status-danger-fg border-status-danger-border"
-                              : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
-                        }
-                      >
+                      <Badge variant={paymentStatusVariant(payment.status)}>
                         {payment.status}
                       </Badge>
                     </TableCell>

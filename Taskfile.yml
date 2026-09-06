@@ -76,6 +76,12 @@ tasks:
     cmds:
       - pnpm run test:run
 
+  web:e2e:
+    desc: "Rol bazlı Playwright e2e (yığın ayakta olmalı: compose + API :8081 + admin :3000; E2E_BASE_URL ile port değişir)"
+    dir: web/apps/admin
+    cmds:
+      - pnpm run e2e
+
   menu:dev:
     desc: "Misafir QR menü uygulaması dev server (Next.js, :3001)"
     dir: web/apps/menu

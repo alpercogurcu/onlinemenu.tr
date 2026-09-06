@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -116,6 +117,23 @@ func (s *ProductService) Update(ctx context.Context, tenantID uuid.UUID, p domai
 		}
 		// Preserve tenant isolation — never allow cross-tenant writes via Update.
 		p.TenantID = existing.TenantID
+		// The PUT contract (http/handler.go updateProduct) carries no sku/
+		// image_key/barcode fields, but repo.Update writes every column
+		// unconditionally — without this, any PUT from any client silently
+		// blanks these out. Restore them from the row that's already there.
+		p.SKU = existing.SKU
+		p.ImageKey = existing.ImageKey
+		p.Barcode = existing.Barcode
+		// currency is CHAR(3) NOT NULL; an empty/whitespace value from the
+		// request body must not be written as-is (it would persist as
+		// "   "), so fall back to the existing value, and to "TRY" if even
+		// that is somehow blank.
+		if strings.TrimSpace(p.Currency) == "" {
+			p.Currency = existing.Currency
+			if strings.TrimSpace(p.Currency) == "" {
+				p.Currency = "TRY"
+			}
+		}
 		updated, err = s.productRepo.Update(ctx, tx, p)
 		return err
 	})

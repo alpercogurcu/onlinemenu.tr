@@ -948,15 +948,15 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		return
 	}
 	if errors.Is(err, service.ErrInvalidRange) {
-		http.Error(w, "from must be before to", http.StatusUnprocessableEntity)
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidRange, "from must be before to")
 		return
 	}
 	if errors.Is(err, service.ErrRangeTooLong) {
-		http.Error(w, "range exceeds 92 days", http.StatusUnprocessableEntity)
+		respondError(w, http.StatusUnprocessableEntity, codeRangeTooLong, "range exceeds 92 days")
 		return
 	}
 	if errors.Is(err, service.ErrInvalidTimezone) {
-		http.Error(w, "invalid tz", http.StatusUnprocessableEntity)
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidTimezone, "invalid tz")
 		return
 	}
 	h.logger.Error("pos handler error", zap.Error(err))
@@ -974,6 +974,11 @@ const (
 	codeInsufficientPayment = "insufficient_payment"
 	codeInvalidTransition   = "invalid_transition"
 	codeTableOccupied       = "table_occupied"
+	codeInvalidBranchID     = "invalid_branch_id"
+	codeInvalidRange        = "invalid_range"
+	codeRangeTooLong        = "range_too_long"
+	codeInvalidTimezone     = "invalid_tz"
+	codeInvalidDateParams   = "invalid_date_params"
 )
 
 type errorResponse struct {

@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/pos/domain"
+	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/service"
 	"onlinemenu.tr/internal/platform/auth"
 )
@@ -40,44 +41,52 @@ func TestSaleDetails_ValidationErrors(t *testing.T) {
 	branchID := uuid.New().String()
 
 	tests := []struct {
-		name    string
-		query   string
-		wantMsg string
+		name     string
+		query    string
+		wantCode string
+		wantMsg  string
 	}{
 		{
-			name:    "missing branch_id",
-			query:   "from=2026-09-04T00:00:00Z&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
-			wantMsg: "invalid branch_id",
+			name:     "missing branch_id",
+			query:    "from=2026-09-04T00:00:00Z&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
+			wantCode: codeInvalidBranchID,
+			wantMsg:  "invalid branch_id",
 		},
 		{
-			name:    "malformed branch_id",
-			query:   "branch_id=not-a-uuid&from=2026-09-04T00:00:00Z&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
-			wantMsg: "invalid branch_id",
+			name:     "malformed branch_id",
+			query:    "branch_id=not-a-uuid&from=2026-09-04T00:00:00Z&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
+			wantCode: codeInvalidBranchID,
+			wantMsg:  "invalid branch_id",
 		},
 		{
-			name:    "missing from",
-			query:   "branch_id=" + branchID + "&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
-			wantMsg: "from and to are required (RFC3339)",
+			name:     "missing from",
+			query:    "branch_id=" + branchID + "&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
+			wantCode: codeInvalidDateParams,
+			wantMsg:  "from and to are required (RFC3339)",
 		},
 		{
-			name:    "missing to",
-			query:   "branch_id=" + branchID + "&from=2026-09-04T00:00:00Z&tz=Europe/Istanbul",
-			wantMsg: "from and to are required (RFC3339)",
+			name:     "missing to",
+			query:    "branch_id=" + branchID + "&from=2026-09-04T00:00:00Z&tz=Europe/Istanbul",
+			wantCode: codeInvalidDateParams,
+			wantMsg:  "from and to are required (RFC3339)",
 		},
 		{
-			name:    "malformed from",
-			query:   "branch_id=" + branchID + "&from=not-a-time&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
-			wantMsg: "from and to are required (RFC3339)",
+			name:     "malformed from",
+			query:    "branch_id=" + branchID + "&from=not-a-time&to=2026-09-05T00:00:00Z&tz=Europe/Istanbul",
+			wantCode: codeInvalidDateParams,
+			wantMsg:  "from and to are required (RFC3339)",
 		},
 		{
-			name:    "malformed to",
-			query:   "branch_id=" + branchID + "&from=2026-09-04T00:00:00Z&to=not-a-time&tz=Europe/Istanbul",
-			wantMsg: "from and to are required (RFC3339)",
+			name:     "malformed to",
+			query:    "branch_id=" + branchID + "&from=2026-09-04T00:00:00Z&to=not-a-time&tz=Europe/Istanbul",
+			wantCode: codeInvalidDateParams,
+			wantMsg:  "from and to are required (RFC3339)",
 		},
 		{
-			name:    "non-RFC3339 date-only from/to",
-			query:   "branch_id=" + branchID + "&from=2026-09-04&to=2026-09-05&tz=Europe/Istanbul",
-			wantMsg: "from and to are required (RFC3339)",
+			name:     "non-RFC3339 date-only from/to",
+			query:    "branch_id=" + branchID + "&from=2026-09-04&to=2026-09-05&tz=Europe/Istanbul",
+			wantCode: codeInvalidDateParams,
+			wantMsg:  "from and to are required (RFC3339)",
 		},
 	}
 
@@ -87,7 +96,10 @@ func TestSaleDetails_ValidationErrors(t *testing.T) {
 			h.saleDetails(rec, newSaleDetailsRequest(tt.query))
 
 			require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
-			assert.Equal(t, tt.wantMsg+"\n", rec.Body.String())
+			var body errorResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			assert.Equal(t, tt.wantCode, body.Code)
+			assert.Equal(t, tt.wantMsg, body.Error)
 		})
 	}
 }
@@ -103,6 +115,28 @@ func TestSaleDetails_Unauthorized(t *testing.T) {
 	h.saleDetails(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+// TestReportError_BranchForbidden pins the report endpoint's own 403 body:
+// unlike every other endpoint (h.error's generic text/plain "forbidden",
+// left unchanged), a branch-forbidden SaleDetails error gets a
+// machine-readable code here (see reportError's doc comment in
+// report_handler.go) — tested directly against h.reportError rather than
+// through h.saleDetails, since h.reports is a concrete *service.ReportService
+// with no DB-free fake available in this package (same constraint noted at
+// the top of this file).
+func TestReportError_BranchForbidden(t *testing.T) {
+	h := &Handler{logger: zap.NewNop()}
+	rec := httptest.NewRecorder()
+	req := newSaleDetailsRequest("branch_id=" + uuid.New().String())
+
+	h.reportError(rec, req, pub.ErrBranchForbidden)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	var body errorResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "branch_forbidden", body.Code)
+	assert.Equal(t, "forbidden", body.Error)
 }
 
 // TestResolveReportTZ pins the tz-optional contract (task-4 fix round 1: tz

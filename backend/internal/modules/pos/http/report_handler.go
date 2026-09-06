@@ -1,11 +1,13 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 
+	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/service"
 )
 
@@ -22,7 +24,7 @@ func (h *Handler) saleDetails(w http.ResponseWriter, r *http.Request) {
 
 	branchID, err := uuid.Parse(r.URL.Query().Get("branch_id"))
 	if err != nil {
-		http.Error(w, "invalid branch_id", http.StatusUnprocessableEntity)
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidBranchID, "invalid branch_id")
 		return
 	}
 
@@ -31,7 +33,7 @@ func (h *Handler) saleDetails(w http.ResponseWriter, r *http.Request) {
 	from, fromErr := time.Parse(time.RFC3339, fromRaw)
 	to, toErr := time.Parse(time.RFC3339, toRaw)
 	if fromRaw == "" || toRaw == "" || fromErr != nil || toErr != nil {
-		http.Error(w, "from and to are required (RFC3339)", http.StatusUnprocessableEntity)
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidDateParams, "from and to are required (RFC3339)")
 		return
 	}
 
@@ -44,11 +46,27 @@ func (h *Handler) saleDetails(w http.ResponseWriter, r *http.Request) {
 		TZ:       tz,
 	})
 	if err != nil {
-		h.error(w, r, err)
+		h.reportError(w, r, err)
 		return
 	}
 
 	respondJSON(w, http.StatusOK, toSaleDetailsResponse(branchID, from, to, tz, details))
+}
+
+// reportError maps a SaleDetails error to a response. Its 403 is handled
+// here, not in h.error: every other endpoint's ErrBranchForbidden stays a
+// generic text/plain 403 (h.error's existing mapping, left untouched), but
+// this endpoint's 422s already carry a machine-readable code (see
+// saleDetails above), so its 403 gets one too rather than mixing conventions
+// within one response contract. Split out from saleDetails so the mapping is
+// unit-testable without a live *service.ReportService (see
+// report_handler_test.go).
+func (h *Handler) reportError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		respondError(w, http.StatusForbidden, "branch_forbidden", "forbidden")
+		return
+	}
+	h.error(w, r, err)
 }
 
 // resolveReportTZ applies service.DefaultReportTZ (tz is optional — pilot

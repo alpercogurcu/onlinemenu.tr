@@ -221,6 +221,19 @@ func (s *ModifierService) ListProductGroups(ctx context.Context, tenantID, produ
 	return ids, nil
 }
 
+func (s *ModifierService) ListGroupProducts(ctx context.Context, tenantID, groupID uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		ids, err = s.pmgRepo.ListProductIDsByGroup(ctx, tx, groupID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("catalog/service/modifier: list group products: %w", err)
+	}
+	return ids, nil
+}
+
 // validateModifierGroup enforces SelectionType validity and min/max invariant.
 func validateModifierGroup(g domain.ModifierGroup) error {
 	if !g.SelectionType.Valid() {

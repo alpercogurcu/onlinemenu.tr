@@ -303,3 +303,29 @@ func (r *ProductModifierGroupRepo) ListByProduct(ctx context.Context, tx pgx.Tx,
 	}
 	return out, rows.Err()
 }
+
+// ListProductIDsByGroup returns the IDs of products using a modifier group,
+// ordered by sort_order. Existence of the group itself is not checked; an
+// unknown group_id yields an empty slice.
+func (r *ProductModifierGroupRepo) ListProductIDsByGroup(ctx context.Context, tx pgx.Tx, groupID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT product_id FROM product_modifier_groups
+		WHERE group_id = $1
+		ORDER BY sort_order, product_id`,
+		groupID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("catalog/repo/product_modifier_group: list product ids by group: %w", err)
+	}
+	defer rows.Close()
+
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("catalog/repo/product_modifier_group: list product ids by group scan: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

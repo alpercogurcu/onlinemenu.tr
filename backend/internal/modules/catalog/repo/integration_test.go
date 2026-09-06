@@ -664,6 +664,85 @@ func TestProductModifierGroupRepo_AssignAndList(t *testing.T) {
 	assert.Equal(t, g2.ID, ids[0])
 }
 
+// TestProductModifierGroupRepo_ListProductIDsByGroup proves ListProductIDsByGroup
+// returns only the products assigned to the given group, ordered by sort_order,
+// and that RLS hides those products from other tenants.
+func TestProductModifierGroupRepo_ListProductIDsByGroup(t *testing.T) {
+	ctx := context.Background()
+	pr := repo.NewProductRepo()
+	gr := repo.NewModifierGroupRepo()
+	pmgr := repo.NewProductModifierGroupRepo()
+	tid := uuid.New()
+
+	var p1, p2, p3 domain.Product
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		p1, err = pr.Create(ctx, tx, domain.Product{
+			TenantID: tid, Name: "Pizza", PriceAmount: 15000,
+			Currency: "TRY", Unit: "adet", TaxRateBPS: 1800, IsActive: true,
+		})
+		if err != nil {
+			return err
+		}
+		p2, err = pr.Create(ctx, tx, domain.Product{
+			TenantID: tid, Name: "Burger", PriceAmount: 9000,
+			Currency: "TRY", Unit: "adet", TaxRateBPS: 1800, IsActive: true,
+		})
+		if err != nil {
+			return err
+		}
+		p3, err = pr.Create(ctx, tx, domain.Product{
+			TenantID: tid, Name: "Salata", PriceAmount: 6000,
+			Currency: "TRY", Unit: "adet", TaxRateBPS: 1800, IsActive: true,
+		})
+		return err
+	}))
+
+	var g, other domain.ModifierGroup
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		g, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID: tid, Name: "Ekstra", SelectionType: domain.SelectionMultiple,
+		})
+		if err != nil {
+			return err
+		}
+		other, err = gr.Create(ctx, tx, domain.ModifierGroup{
+			TenantID: tid, Name: "Sos", SelectionType: domain.SelectionSingle,
+		})
+		return err
+	}))
+
+	// p2 must sort before p1 within group g; p3 belongs to a different group
+	// and must not appear in g's product list.
+	require.NoError(t, sharedPool.WithTenantTx(ctx, tid, func(tx pgx.Tx) error {
+		if err := pmgr.Assign(ctx, tx, p1.ID, g.ID, tid, 1); err != nil {
+			return err
+		}
+		if err := pmgr.Assign(ctx, tx, p2.ID, g.ID, tid, 0); err != nil {
+			return err
+		}
+		return pmgr.Assign(ctx, tx, p3.ID, other.ID, tid, 0)
+	}))
+
+	var ids []uuid.UUID
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, tid, func(tx pgx.Tx) error {
+		var err error
+		ids, err = pmgr.ListProductIDsByGroup(ctx, tx, g.ID)
+		return err
+	}))
+	assert.Equal(t, []uuid.UUID{p2.ID, p1.ID}, ids, "products must be ordered by sort_order")
+
+	// A different tenant must not see group g's products, even by ID (RLS).
+	otherTenant := uuid.New()
+	require.NoError(t, sharedPool.WithTenantReadTx(ctx, otherTenant, func(tx pgx.Tx) error {
+		var err error
+		ids, err = pmgr.ListProductIDsByGroup(ctx, tx, g.ID)
+		return err
+	}))
+	assert.Empty(t, ids)
+}
+
 // ---------------------------------------------------------------------------
 // Menu tests
 // ---------------------------------------------------------------------------

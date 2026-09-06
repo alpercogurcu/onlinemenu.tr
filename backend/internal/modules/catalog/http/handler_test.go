@@ -15,9 +15,16 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/catalog/domain"
+	cataloghttp "onlinemenu.tr/internal/modules/catalog/http"
 	"onlinemenu.tr/internal/modules/catalog/service"
 	"onlinemenu.tr/internal/platform/auth"
 )
+
+// managerRoleID is the seeded system role that OPA's wildcard "manager" rule
+// (configs/opa/bundles/authz.rego) grants every action to — used here to reach
+// past the permission gate so handler-level branches (like the invalid-id 400)
+// are actually exercised instead of short-circuiting on 403.
+var managerRoleID = uuid.MustParse("00000001-0000-0000-0000-000000000006")
 
 // --- stubs ---
 
@@ -165,4 +172,35 @@ func TestCreateCategory_WritesCorrectTenant(t *testing.T) {
 	p, err := auth.FromContext(req.Context())
 	require.NoError(t, err)
 	assert.Equal(t, expectedTenant, p.TenantID, "tenantID must come from Principal, not request body")
+}
+
+// TestListGroupProducts_InvalidGroupID_Returns400 proves the malformed-id branch
+// of GET /modifier-groups/{id}/products answers 400 with "invalid group id" —
+// the contract documented in .superpowers/sdd/2026-09-06-katalog-ux/task-1-brief.md.
+// Routed through the real mux (not called directly, since Handler methods are
+// unexported) with a manager-role principal so the OPA permission gate lets the
+// request reach the handler instead of short-circuiting on 403.
+func TestListGroupProducts_InvalidGroupID_Returns400(t *testing.T) {
+	engine := newSmokeTestEngine(t)
+	h := cataloghttp.NewHandler(cataloghttp.Params{
+		Logger: zap.NewNop(),
+		Engine: engine,
+	})
+
+	mux := chi.NewMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/catalog/modifier-groups/not-a-uuid/products", nil)
+	req = req.WithContext(auth.WithPrincipal(req.Context(), auth.Principal{
+		PersonID: uuid.New(),
+		Ctx:      auth.ContextStaff,
+		TenantID: uuid.New(),
+		BranchID: uuid.New(),
+		RoleIDs:  []uuid.UUID{managerRoleID},
+	}))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid group id")
 }

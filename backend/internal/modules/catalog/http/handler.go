@@ -77,6 +77,7 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 		r.With(h.permit("catalog.modifier_group.read")).Get("/modifier-groups/{id}", h.getModifierGroup)
 		r.With(h.permit("catalog.modifier_group.update")).Put("/modifier-groups/{id}", h.updateModifierGroup)
 		r.With(h.permit("catalog.modifier_group.delete")).Delete("/modifier-groups/{id}", h.deleteModifierGroup)
+		r.With(h.permit("catalog.modifier_group.read")).Get("/modifier-groups/{id}/products", h.listGroupProducts)
 
 		// Modifiers within a group
 		r.With(h.permit("catalog.modifier.create")).Post("/modifier-groups/{id}/modifiers", h.createModifier)
@@ -676,6 +677,24 @@ func (h *Handler) listProductModifierGroups(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	ids, err := h.modifiers.ListProductGroups(r.Context(), tenantID, productID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, ids)
+}
+
+func (h *Handler) listGroupProducts(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	groupID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	ids, err := h.modifiers.ListGroupProducts(r.Context(), tenantID, groupID)
 	if err != nil {
 		h.error(w, r, err)
 		return

@@ -51,6 +51,11 @@ export default function TablesPage() {
   const canViewQR = useCan("storefront.qr.read")
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches } = useBranches(tenantId)
+  // Non-null for a branch-scoped operator — they always work their own
+  // branch, so the branch control below renders as static text for them
+  // instead of a Select that would let them pick a branch they have no
+  // access to and land on an empty/403'd board.
+  const scopedBranchId = currentBranchId()
   const [branchId, setBranchId] = useState("")
   const [qrTable, setQrTable] = useState<SelectedTable | null>(null)
   const [zoneDialog, setZoneDialog] = useState<{ zone?: PosZone } | null>(null)
@@ -111,19 +116,25 @@ export default function TablesPage() {
             <label className="text-sm font-medium" htmlFor="branch-select">
               {t("branch")}
             </label>
-            <Select
-              id="branch-select"
-              value={branchId}
-              onValueChange={setBranchId}
-              disabled={!branches || branches.length === 0}
-            >
-              <SelectItem value="">{t("branchPlaceholder")}</SelectItem>
-              {(branches ?? []).map((branch) => (
-                <SelectItem key={branch.id} value={branch.id}>
-                  {branch.name}
-                </SelectItem>
-              ))}
-            </Select>
+            {scopedBranchId ? (
+              <p id="branch-select" className="flex h-9 items-center text-sm font-medium">
+                {branches?.find((b) => b.id === branchId)?.name ?? "—"}
+              </p>
+            ) : (
+              <Select
+                id="branch-select"
+                value={branchId}
+                onValueChange={setBranchId}
+                disabled={!branches || branches.length === 0}
+              >
+                <SelectItem value="">{t("branchPlaceholder")}</SelectItem>
+                {(branches ?? []).map((branch) => (
+                  <SelectItem key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </SelectItem>
+                ))}
+              </Select>
+            )}
           </div>
 
           <Button variant="outline" onClick={() => setZoneDialog({})} disabled={branchId === ""}>

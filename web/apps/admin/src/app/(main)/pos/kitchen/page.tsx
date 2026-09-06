@@ -141,7 +141,7 @@ function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
   )
 }
 
-function KitchenOrderCard({
+export function KitchenOrderCard({
   order,
   detail,
   now,
@@ -230,6 +230,11 @@ function KitchenOrderCard({
 export default function KitchenPage() {
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches, isLoading: branchesLoading } = useBranches(tenantId)
+  // Non-null for a branch-scoped operator (cashier/waiter/kitchen/bar/...) —
+  // they always work their own branch, so the branch control below renders
+  // as static text for them instead of a Select that would let them pick a
+  // branch they have no access to and land on an empty/403'd board.
+  const scopedBranchId = currentBranchId()
   const [branchId, setBranchId] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -325,9 +330,11 @@ export default function KitchenPage() {
   const totalActive = Object.values(columns).reduce((sum, list) => sum + list.length, 0)
 
   return (
+    // Portalled content (the branch Select's dropdown, sonner toasts) renders
+    // outside this root via a React portal, so it follows the app theme
+    // rather than `deviceDark` — acceptable for a wall tablet, not a bug.
     <div
       data-kds-root
-      data-theme={deviceDark ? "dark" : undefined}
       className={cn(deviceDark && "dark", "min-h-screen bg-background p-4 text-foreground md:p-6")}
     >
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -342,19 +349,26 @@ export default function KitchenPage() {
         <div className="flex flex-wrap items-center gap-3">
           <ConnectionBadge status={status} />
 
-          {branches && branches.length > 1 && (
-            <Select
-              className="w-48"
-              value={branchId ?? ""}
-              onValueChange={handleBranchChange}
-              aria-label="Şube seçimi"
-            >
-              {branches.map((branch) => (
-                <SelectItem key={branch.id} value={branch.id}>
-                  {branch.name}
-                </SelectItem>
-              ))}
-            </Select>
+          {scopedBranchId ? (
+            <span className="text-sm font-medium" aria-label="Şube seçimi">
+              {branches?.find((b) => b.id === branchId)?.name ?? "—"}
+            </span>
+          ) : (
+            branches &&
+            branches.length > 1 && (
+              <Select
+                className="w-48"
+                value={branchId ?? ""}
+                onValueChange={handleBranchChange}
+                aria-label="Şube seçimi"
+              >
+                {branches.map((branch) => (
+                  <SelectItem key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </SelectItem>
+                ))}
+              </Select>
+            )
           )}
 
           <div className="flex items-center gap-2">

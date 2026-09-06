@@ -26,15 +26,15 @@ const statusConfig: Record<
 > = {
   active: {
     label: "Aktif",
-    className: "bg-green-100 text-green-700 border-green-200",
+    className: "bg-status-success-bg text-status-success-fg border-status-success-border",
   },
   on_leave: {
     label: "İzinli",
-    className: "bg-yellow-100 text-yellow-700 border-yellow-200",
+    className: "bg-status-warning-bg text-status-warning-fg border-status-warning-border",
   },
   terminated: {
     label: "Ayrıldı",
-    className: "bg-red-100 text-red-700 border-red-200",
+    className: "bg-status-danger-bg text-status-danger-fg border-status-danger-border",
   },
 }
 

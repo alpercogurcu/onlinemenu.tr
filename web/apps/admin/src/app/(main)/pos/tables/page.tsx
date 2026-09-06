@@ -23,11 +23,11 @@ import type { PosTable, PosTableStatus, PosZone } from "@/types"
 function statusBadgeClass(status: PosTableStatus): string {
   switch (status) {
     case "empty":
-      return "bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-100"
+      return "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
     case "occupied":
-      return "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100"
+      return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
     case "reserved":
-      return "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100"
+      return "bg-status-info-bg text-status-info-fg border-status-info-border"
     case "cleaning":
       return "bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-100"
   }
@@ -221,7 +221,7 @@ export default function TablesPage() {
                             {table.active_check_id && (
                               <Badge
                                 variant="outline"
-                                className="border-amber-200 bg-amber-50 text-amber-700"
+                                className="border-status-warning-border bg-status-warning-bg text-status-warning-fg"
                               >
                                 {t("hasOpenCheck")}
                               </Badge>

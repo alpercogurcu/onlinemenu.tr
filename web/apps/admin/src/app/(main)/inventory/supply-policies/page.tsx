@@ -59,7 +59,7 @@ const MODE_LABELS: Record<SupplyMode, string> = {
 const MODE_BADGE_CLASS: Record<SupplyMode, string> = {
   exclusive_hq: "bg-slate-100 text-slate-700 border-slate-200",
   approved_suppliers: "bg-sky-100 text-sky-700 border-sky-200",
-  free: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  free: "bg-status-success-bg text-status-success-fg border-status-success-border",
 }
 
 interface SupplyPolicyFormState {

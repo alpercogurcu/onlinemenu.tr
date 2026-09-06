@@ -21,13 +21,13 @@ import type { InvoiceStatus } from "@/types"
 function statusBadgeClass(status: InvoiceStatus): string {
   switch (status) {
     case "sent":
-      return "bg-green-100 text-green-700 border-green-200"
+      return "bg-status-success-bg text-status-success-fg border-status-success-border"
     case "pending":
-      return "bg-yellow-100 text-yellow-700 border-yellow-200"
+      return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
     case "failed":
-      return "bg-red-100 text-red-700 border-red-200"
+      return "bg-status-danger-bg text-status-danger-fg border-status-danger-border"
     case "cancelled":
-      return "bg-gray-100 text-gray-600 border-gray-200"
+      return "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
   }
 }
 
@@ -65,7 +65,7 @@ export default function InvoicesPage() {
           <p className="text-muted-foreground">e-Fatura ve e-Arşiv işlemlerini takip edin.</p>
         </div>
         {failedCount > 0 && (
-          <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200">
+          <Badge variant="outline" className="bg-status-danger-bg text-status-danger-fg border-status-danger-border">
             {failedCount} başarısız
           </Badge>
         )}

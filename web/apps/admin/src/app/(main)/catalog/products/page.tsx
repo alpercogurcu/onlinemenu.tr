@@ -291,7 +291,7 @@ export default function ProductsPage() {
                         {category ? (
                           category.name
                         ) : (
-                          <span className="text-amber-600">{t("filter.uncategorized")}</span>
+                          <span className="text-status-warning-fg">{t("filter.uncategorized")}</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -315,8 +315,8 @@ export default function ProductsPage() {
                           variant="outline"
                           className={
                             product.is_active
-                              ? "bg-green-100 text-green-700 border-green-200"
-                              : "bg-gray-100 text-gray-600 border-gray-200"
+                              ? "bg-status-success-bg text-status-success-fg border-status-success-border"
+                              : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
                           }
                         >
                           {product.is_active ? t("status.active") : t("status.inactive")}

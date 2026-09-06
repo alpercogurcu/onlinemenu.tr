@@ -29,11 +29,11 @@ import { toast } from "sonner"
 function statusBadgeClass(status: CheckStatus): string {
   switch (status) {
     case "open":
-      return "bg-amber-100 text-amber-700 border-amber-200"
+      return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
     case "closed":
-      return "bg-green-100 text-green-700 border-green-200"
+      return "bg-status-success-bg text-status-success-fg border-status-success-border"
     case "cancelled":
-      return "bg-gray-100 text-gray-600 border-gray-200"
+      return "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
   }
 }
 
@@ -163,7 +163,7 @@ export default function ChecksPage() {
                       className={cn(
                         "text-sm tabular-nums",
                         check.status === "open" && isLongOpenCheck(check.opened_at)
-                          ? "font-medium text-amber-600"
+                          ? "font-medium text-status-warning-fg"
                           : "text-muted-foreground",
                       )}
                     >

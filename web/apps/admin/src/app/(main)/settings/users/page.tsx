@@ -305,8 +305,8 @@ export default function UsersPage() {
                         variant="outline"
                         className={
                           member.status === "active"
-                            ? "bg-green-100 text-green-700 border-green-200"
-                            : "bg-gray-100 text-gray-600 border-gray-200"
+                            ? "bg-status-success-bg text-status-success-fg border-status-success-border"
+                            : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
                         }
                       >
                         {member.status === "active" ? "Aktif" : member.status}
@@ -335,8 +335,8 @@ export default function UsersPage() {
                 className={cn(
                   "space-y-2 rounded-md border p-4 text-sm",
                   inviteNeedsAction(inviteResult)
-                    ? "border-amber-300 bg-amber-50 text-amber-900"
-                    : "border-green-200 bg-green-50 text-green-900",
+                    ? "border-status-warning-border bg-status-warning-bg text-status-warning-fg"
+                    : "border-status-success-border bg-status-success-bg text-status-success-fg",
                 )}
               >
                 <div className="flex items-center gap-2 font-medium">
@@ -360,7 +360,7 @@ export default function UsersPage() {
                 {!inviteResult.keycloak_user_created && (
                   <p
                     className={
-                      inviteNeedsAction(inviteResult) ? "text-amber-800" : "text-green-800"
+                      inviteNeedsAction(inviteResult) ? "text-status-warning-fg" : "text-status-success-fg"
                     }
                   >
                     Bu e-posta ile sistemde zaten bir Keycloak hesabı vardı (başka bir işletmede
@@ -377,7 +377,7 @@ export default function UsersPage() {
                       olabilir).
                     </p>
                     {inviteResult.notification_error && (
-                      <p className="rounded bg-amber-100 p-2 font-mono text-xs break-all text-amber-900">
+                      <p className="rounded bg-status-warning-bg p-2 font-mono text-xs break-all text-status-warning-fg">
                         {inviteResult.notification_error}
                       </p>
                     )}

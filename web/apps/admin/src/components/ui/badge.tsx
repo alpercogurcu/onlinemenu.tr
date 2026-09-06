@@ -18,6 +18,18 @@ const badgeVariants = cva(
           "border-transparent bg-destructive text-white [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
           "text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+        // Status variants read the semantic status tokens (globals.css) so the
+        // same badge is legible in both themes; pages must not paint raw
+        // tailwind palette colours for a status.
+        success:
+          "bg-status-success-bg text-status-success-fg border-status-success-border",
+        warning:
+          "bg-status-warning-bg text-status-warning-fg border-status-warning-border",
+        info: "bg-status-info-bg text-status-info-fg border-status-info-border",
+        danger:
+          "bg-status-danger-bg text-status-danger-fg border-status-danger-border",
+        neutral:
+          "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border",
       },
     },
     defaultVariants: {

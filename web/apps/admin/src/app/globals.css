@@ -75,9 +75,21 @@
   --color-nb-status-pink: var(--nb-status-pink);
   --color-nb-status-gray: var(--nb-status-gray);
   --color-nb-folder-default: var(--nb-folder-default);
+  --color-status-success-bg: var(--status-success-bg); --color-status-success-fg: var(--status-success-fg); --color-status-success-border: var(--status-success-border);
+  --color-status-warning-bg: var(--status-warning-bg); --color-status-warning-fg: var(--status-warning-fg); --color-status-warning-border: var(--status-warning-border);
+  --color-status-info-bg: var(--status-info-bg); --color-status-info-fg: var(--status-info-fg); --color-status-info-border: var(--status-info-border);
+  --color-status-danger-bg: var(--status-danger-bg); --color-status-danger-fg: var(--status-danger-fg); --color-status-danger-border: var(--status-danger-border);
+  --color-status-neutral-bg: var(--status-neutral-bg); --color-status-neutral-fg: var(--status-neutral-fg); --color-status-neutral-border: var(--status-neutral-border);
 }
 
 :root {
+  /* Semantic status colours — bg/fg/border triples so a badge or notice is
+     legible in both themes; pages use bg-status-*-bg etc., never raw palette. */
+  --status-success-bg: #ecfdf3; --status-success-fg: #067647; --status-success-border: #abefc6;
+  --status-warning-bg: #fff4e5; --status-warning-fg: #b45309; --status-warning-border: #fcd9a6;
+  --status-info-bg: #eef4ff; --status-info-fg: #1d4ed8; --status-info-border: #c7d7fe;
+  --status-danger-bg: #fef2f2; --status-danger-fg: #b91c1c; --status-danger-border: #fecaca;
+  --status-neutral-bg: #f5f5f5; --status-neutral-fg: #525252; --status-neutral-border: #e5e5e5;
   --radius: 0.5rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -123,11 +135,16 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  --status-success-bg: rgba(34, 197, 94, 0.14); --status-success-fg: #86efac; --status-success-border: rgba(34, 197, 94, 0.35);
+  --status-warning-bg: rgba(245, 158, 11, 0.14); --status-warning-fg: #fcd34d; --status-warning-border: rgba(245, 158, 11, 0.35);
+  --status-info-bg: rgba(59, 130, 246, 0.14); --status-info-fg: #93c5fd; --status-info-border: rgba(59, 130, 246, 0.35);
+  --status-danger-bg: rgba(239, 68, 68, 0.14); --status-danger-fg: #fca5a5; --status-danger-border: rgba(239, 68, 68, 0.35);
+  --status-neutral-bg: rgba(255, 255, 255, 0.08); --status-neutral-fg: #d4d4d4; --status-neutral-border: rgba(255, 255, 255, 0.14);
+  --background: oklch(0.16 0 0);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: oklch(0.22 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
+  --popover: oklch(0.22 0 0);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.65 0.20 25);
   --primary-foreground: oklch(0.205 0 0);
@@ -138,17 +155,17 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
+  --border: oklch(1 0 0 / 14%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  --chart-1: oklch(0.70 0.18 25);
+  --chart-2: oklch(0.75 0 0);
+  --chart-3: oklch(0.55 0 0);
+  --chart-4: oklch(0.80 0.10 25);
+  --chart-5: oklch(0.40 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.65 0.20 25);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);

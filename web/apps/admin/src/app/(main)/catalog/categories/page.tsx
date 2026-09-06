@@ -121,8 +121,8 @@ export default function CategoriesPage() {
                         variant="outline"
                         className={
                           cat.is_active
-                            ? "bg-green-100 text-green-700 border-green-200"
-                            : "bg-gray-100 text-gray-600 border-gray-200"
+                            ? "bg-status-success-bg text-status-success-fg border-status-success-border"
+                            : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
                         }
                       >
                         {cat.is_active ? "Aktif" : "Pasif"}

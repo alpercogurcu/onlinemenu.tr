@@ -206,14 +206,14 @@ export function QRCodeDialog({
               </div>
             </div>
 
-            <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            <p className="flex items-start gap-2 rounded-md border border-status-warning-border bg-status-warning-bg p-3 text-xs text-status-warning-fg">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               {t("qr.oneTimeWarning")}
             </p>
           </div>
         ) : activeCode ? (
           <div className="flex flex-col items-center gap-3 py-4">
-            <Badge variant="outline" className="border-green-200 bg-green-100 text-green-700">
+            <Badge variant="outline" className="bg-status-success-bg text-status-success-fg border-status-success-border">
               {t("qr.statusActive")}
             </Badge>
             <p className="text-center text-sm text-muted-foreground">

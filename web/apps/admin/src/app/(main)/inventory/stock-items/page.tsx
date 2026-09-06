@@ -47,10 +47,10 @@ const KIND_LABELS: Record<StockItemKind, string> = {
 }
 
 const KIND_BADGE_CLASS: Record<StockItemKind, string> = {
-  raw: "bg-amber-100 text-amber-700 border-amber-200",
-  intermediate: "bg-blue-100 text-blue-700 border-blue-200",
+  raw: "bg-status-warning-bg text-status-warning-fg border-status-warning-border",
+  intermediate: "bg-status-info-bg text-status-info-fg border-status-info-border",
   packaging: "bg-purple-100 text-purple-700 border-purple-200",
-  finished: "bg-green-100 text-green-700 border-green-200",
+  finished: "bg-status-success-bg text-status-success-fg border-status-success-border",
 }
 
 // ADR-DATA-007: supply_mode is only resolved (and only meaningful) on the
@@ -65,7 +65,7 @@ const SUPPLY_MODE_LABELS: Record<SupplyMode, string> = {
 const SUPPLY_MODE_BADGE_CLASS: Record<SupplyMode, string> = {
   exclusive_hq: "bg-slate-100 text-slate-700 border-slate-200",
   approved_suppliers: "bg-sky-100 text-sky-700 border-sky-200",
-  free: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  free: "bg-status-success-bg text-status-success-fg border-status-success-border",
 }
 
 interface StockItemFormState {
@@ -212,8 +212,8 @@ export default function StockItemsPage() {
                             variant="outline"
                             className={
                               full.is_active
-                                ? "bg-green-100 text-green-700 border-green-200"
-                                : "bg-gray-100 text-gray-600 border-gray-200"
+                                ? "bg-status-success-bg text-status-success-fg border-status-success-border"
+                                : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
                             }
                           >
                             {full.is_active ? "Aktif" : "Pasif"}

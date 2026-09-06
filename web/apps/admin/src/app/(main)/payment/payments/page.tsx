@@ -32,9 +32,9 @@ function usePayments(params?: { limit?: number; offset?: number }) {
 function methodBadgeClass(method: PaymentMethod): string {
   switch (method) {
     case "cash":
-      return "bg-green-100 text-green-700 border-green-200"
+      return "bg-status-success-bg text-status-success-fg border-status-success-border"
     case "terminal":
-      return "bg-blue-100 text-blue-700 border-blue-200"
+      return "bg-status-info-bg text-status-info-fg border-status-info-border"
   }
 }
 
@@ -120,10 +120,10 @@ export default function PaymentsPage() {
                         variant="outline"
                         className={
                           payment.status === "completed"
-                            ? "bg-green-100 text-green-700 border-green-200"
+                            ? "bg-status-success-bg text-status-success-fg border-status-success-border"
                             : payment.status === "failed"
-                              ? "bg-red-100 text-red-700 border-red-200"
-                              : "bg-gray-100 text-gray-600 border-gray-200"
+                              ? "bg-status-danger-bg text-status-danger-fg border-status-danger-border"
+                              : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
                         }
                       >
                         {payment.status}

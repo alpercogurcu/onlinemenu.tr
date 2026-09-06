@@ -21,9 +21,9 @@ import type { InventoryLevel } from "@/types"
 
 function stockBadgeClass(level: InventoryLevel): string {
   const threshold = level.reorder_point ?? 10
-  if (level.available <= 0) return "bg-red-100 text-red-700 border-red-200"
-  if (level.available <= threshold) return "bg-yellow-100 text-yellow-700 border-yellow-200"
-  return "bg-green-100 text-green-700 border-green-200"
+  if (level.available <= 0) return "bg-status-danger-bg text-status-danger-fg border-status-danger-border"
+  if (level.available <= threshold) return "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
+  return "bg-status-success-bg text-status-success-fg border-status-success-border"
 }
 
 function stockLabel(level: InventoryLevel): string {
@@ -56,7 +56,7 @@ export default function StockLevelsPage() {
           <p className="text-muted-foreground">Depo bazlı stok durumlarını takip edin.</p>
         </div>
         {criticalCount > 0 && (
-          <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200">
+          <Badge variant="outline" className="bg-status-danger-bg text-status-danger-fg border-status-danger-border">
             {criticalCount} kritik ürün
           </Badge>
         )}

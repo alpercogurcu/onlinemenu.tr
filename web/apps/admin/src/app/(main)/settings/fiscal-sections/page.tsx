@@ -233,7 +233,7 @@ export default function FiscalSectionMappingPage() {
       </Card>
 
       {unmappedCount > 0 && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="flex items-center gap-2 rounded-md border border-status-warning-border bg-status-warning-bg px-4 py-3 text-sm text-status-warning-fg">
           <AlertTriangle className="size-4 shrink-0" />
           <span>
             {unmappedCount} kategori eşlenmemiş — bu kategorilerde satış mali kayda gönderilemez.
@@ -279,7 +279,7 @@ export default function FiscalSectionMappingPage() {
                         <span className="flex items-center gap-2">
                           {mappedSectionNo === undefined && (
                             <AlertTriangle
-                              className="size-4 shrink-0 text-amber-500"
+                              className="size-4 shrink-0 text-status-warning-fg"
                               aria-label="Eşlenmemiş kategori"
                             />
                           )}

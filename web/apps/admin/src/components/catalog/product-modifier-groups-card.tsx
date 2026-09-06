@@ -59,8 +59,8 @@ function GroupRow({ group, onRemove }: GroupRowProps) {
             variant="outline"
             className={
               group.is_required
-                ? "border-orange-200 bg-orange-100 text-orange-700"
-                : "border-gray-200 bg-gray-100 text-gray-600"
+                ? "bg-status-warning-bg text-status-warning-fg border-status-warning-border"
+                : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
             }
           >
             {group.is_required ? t("required") : t("optional")}

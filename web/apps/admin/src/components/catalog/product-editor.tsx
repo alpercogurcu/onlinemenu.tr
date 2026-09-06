@@ -337,8 +337,8 @@ export function ProductEditor({ productId }: ProductEditorProps) {
                 variant="outline"
                 className={
                   values.isActive
-                    ? "border-green-200 bg-green-100 text-green-700"
-                    : "border-gray-200 bg-gray-100 text-gray-600"
+                    ? "bg-status-success-bg text-status-success-fg border-status-success-border"
+                    : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
                 }
               >
                 {values.isActive ? tProducts("status.active") : tProducts("status.inactive")}

@@ -32,7 +32,7 @@ import type { PartyType } from "@/types"
 function partyTypeBadge(type: PartyType): string {
   switch (type) {
     case "customer":
-      return "bg-blue-100 text-blue-700 border-blue-200"
+      return "bg-status-info-bg text-status-info-fg border-status-info-border"
     case "supplier":
       return "bg-purple-100 text-purple-700 border-purple-200"
     case "both":

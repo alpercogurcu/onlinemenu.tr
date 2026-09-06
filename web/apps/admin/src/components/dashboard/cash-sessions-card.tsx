@@ -18,7 +18,7 @@ function DifferenceBadge({ amount }: { amount: number | null }) {
   return (
     <Badge
       variant={amount === 0 ? "secondary" : "destructive"}
-      className={amount === 0 ? "border-transparent bg-green-100 text-green-700" : undefined}
+      className={amount === 0 ? "border-transparent bg-status-success-bg text-status-success-fg" : undefined}
     >
       {formatKurus(amount)}
     </Badge>

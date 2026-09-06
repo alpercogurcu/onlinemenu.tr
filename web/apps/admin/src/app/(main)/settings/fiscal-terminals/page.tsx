@@ -76,12 +76,12 @@ function parseQR(qr: string): { merchantRef: string; branchRef: string; serial: 
 
 function basketModeBadge(mode: BasketMode) {
   return mode === "instant" ? (
-    <Badge variant="outline" className="bg-green-100 text-green-700 border-green-200">
+    <Badge variant="outline" className="bg-status-success-bg text-status-success-fg border-status-success-border">
       <Zap className="size-3" />
       Hemen öde
     </Badge>
   ) : (
-    <Badge variant="outline" className="bg-blue-100 text-blue-700 border-blue-200">
+    <Badge variant="outline" className="bg-status-info-bg text-status-info-fg border-status-info-border">
       <List className="size-3" />
       Cihazda listele
     </Badge>
@@ -94,8 +94,8 @@ function statusBadge(isActive: boolean) {
       variant="outline"
       className={
         isActive
-          ? "bg-green-100 text-green-700 border-green-200"
-          : "bg-gray-100 text-gray-600 border-gray-200"
+          ? "bg-status-success-bg text-status-success-fg border-status-success-border"
+          : "bg-status-neutral-bg text-status-neutral-fg border-status-neutral-border"
       }
     >
       {isActive ? <CircleCheck className="size-3" /> : <CircleX className="size-3" />}
@@ -360,7 +360,7 @@ export default function FiscalTerminalsPage() {
                             {terminal.is_active ? (
                               <CircleX className="size-4 text-destructive" />
                             ) : (
-                              <CircleCheck className="size-4 text-green-600" />
+                              <CircleCheck className="size-4 text-status-success-fg" />
                             )}
                           </Button>
                         </div>

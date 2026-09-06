@@ -271,4 +271,17 @@ describe("ProductEditor", () => {
     await waitFor(() => expect(del).toHaveBeenCalledWith(`/api/v1/catalog/products/${PRODUCT.id}`))
     await waitFor(() => expect(push).toHaveBeenCalledWith("/catalog/products"))
   })
+
+  it("deactivates instead of deleting via the delete dialog's secondary action", async () => {
+    renderEditor()
+
+    await screen.findByLabelText("Ad *")
+    fireEvent.click(screen.getByRole("button", { name: "Sil" }))
+
+    const dialog = await screen.findByRole("alertdialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Satıştan kaldır" }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(`/api/v1/catalog/products/${PRODUCT.id}`, { is_active: false }))
+    expect(del).not.toHaveBeenCalled()
+  })
 })

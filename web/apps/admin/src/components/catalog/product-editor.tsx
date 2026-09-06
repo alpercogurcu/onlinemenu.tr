@@ -211,13 +211,16 @@ export function ProductEditor({ productId }: ProductEditorProps) {
   }
 
   const category = categories.find((c) => c.id === values.categoryId)
-  // Design calls for "{n} seçenek grubu · {m} menüde" here too, but tr.json
-  // has no key for either composed count phrase — rather than inventing
-  // Turkish copy inline, those two segments are omitted; see task-4 report.
+  // Design calls for "{n} seçenek grubu · {m} menüde" here too, and for a
+  // "%10 KDV" tax segment, but tr.json has no key for either composed count
+  // phrase, nor one that pairs a rate with the word "KDV" (catalog.product's
+  // own "KDV" appearances are all fixed labels, not %{rate}-shaped) — rather
+  // than inventing Turkish copy inline, all three are reduced to numeral-only
+  // data (bare "%10") or omitted entirely; see task-4 report.
   const summaryParts = [
     category?.name,
     values.priceKurus != null ? formatKurus(values.priceKurus) : null,
-    `%${values.taxRateBps / 100} KDV`,
+    `%${values.taxRateBps / 100}`,
   ].filter((part): part is string => Boolean(part))
 
   return (

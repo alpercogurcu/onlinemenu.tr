@@ -248,6 +248,7 @@
     "product": {
       "new": "Yeni ürün",
       "edit": "Ürünü düzenle",
+      "summary": "{category} · {price} · %{rate} KDV · {groups} seçenek grubu · {menus} menüde",
       "sections": {
         "basics": "Temel bilgiler",
         "pricing": "Fiyat ve vergi",
@@ -280,12 +281,16 @@
         "remove": "Kaldır",
         "addPlaceholder": "Grup ara veya ekle",
         "createNew": "Yeni grup: \"{name}\"",
-        "empty": "Bu ürüne henüz seçenek grubu atanmadı."
+        "empty": "Bu ürüne henüz seçenek grubu atanmadı.",
+        "removed": "\"{name}\" üründen kaldırıldı",
+        "undo": "Geri al",
+        "saveFirst": "Seçenek grubu eklemek için önce ürünü kaydedin."
       },
       "menus": {
         "title": "Menüler",
         "hint": "Ürünün görüneceği menüleri seçin.",
-        "priceDefault": "Ürünün kendi fiyatı kullanılır"
+        "priceDefault": "Ürünün kendi fiyatı kullanılır",
+        "saveFirst": "Menüye eklemek için önce ürünü kaydedin."
       },
       "save": "Kaydet",
       "cancel": "Vazgeç",
@@ -338,6 +343,7 @@
     "group": {
       "new": "Yeni grup",
       "edit": "Grubu düzenle",
+      "summary": "{options} seçenek · {products} üründe kullanılıyor",
       "sections": {
         "rule": "Kural",
         "options": "Seçenekler",
@@ -351,8 +357,8 @@
         "selectionSingle": "Tek seçim",
         "selectionMultiple": "Birden fazla",
         "required": "Seçim zorunlu mu?",
-        "requiredNo": "Hayır",
-        "requiredYes": "Evet",
+        "requiredNo": "Hayır, atlanabilir",
+        "requiredYes": "Evet, en az 1",
         "max": "En fazla",
         "maxUnlimited": "Sınırsız",
         "maxHint": "Müşterinin bu gruptan seçebileceği en fazla seçenek sayısı."
@@ -368,7 +374,8 @@
         "delete": "Sil",
         "deleteConfirm": "Bu seçenek silinsin mi?",
         "empty": "Bu grupta henüz seçenek yok.",
-        "hint": "Satıra tıklayıp yazın · Enter ile sonraki satır"
+        "hint": "Satıra tıklayıp yazın · Enter ile sonraki satır",
+        "saveFirst": "Seçenek eklemek için önce grubu kaydedin."
       },
       "preview": {
         "title": "Müşteri böyle görür",

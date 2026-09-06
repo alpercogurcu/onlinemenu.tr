@@ -16,6 +16,7 @@ import { ProductMenusCard } from "@/components/catalog/product-menus-card"
 import { ProductModifierGroupsCard } from "@/components/catalog/product-modifier-groups-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   useCategories,
@@ -36,7 +37,9 @@ const emptyValues: ProductFormValues = {
   unit: UNIT_OPTIONS[0],
   description: "",
   priceKurus: null,
-  taxRateBps: TAX_RATE_OPTIONS[0],
+  // Defaults to %10 rather than TAX_RATE_OPTIONS[0] (%0) — %10 is the common
+  // case for new products and %0 is easy to leave unnoticed.
+  taxRateBps: 1000,
   sortOrder: 0,
   isActive: true,
 }
@@ -247,17 +250,18 @@ export function ProductEditor({ productId }: ProductEditorProps) {
   }
 
   const category = categories.find((c) => c.id === values.categoryId)
-  // Design calls for "{n} seçenek grubu · {m} menüde" here too, and for a
-  // "%10 KDV" tax segment, but tr.json has no key for either composed count
-  // phrase, nor one that pairs a rate with the word "KDV" (catalog.product's
-  // own "KDV" appearances are all fixed labels, not %{rate}-shaped) — rather
-  // than inventing Turkish copy inline, all three are reduced to numeral-only
-  // data (bare "%10") or omitted entirely; see task-4 report.
-  const summaryParts = [
-    category?.name,
-    values.priceKurus != null ? formatKurus(values.priceKurus) : null,
-    `%${values.taxRateBps / 100}`,
-  ].filter((part): part is string => Boolean(part))
+  // catalog.product.summary composes the whole line in one ICU string —
+  // category/price/rate come straight from the form's own values, groups and
+  // menus counts are the same assignedGroupIds/menuIdsWithProduct this
+  // component already fetches for the two cards below (no lifting needed,
+  // both live in this scope).
+  const summary = t("summary", {
+    category: category?.name ?? tProducts("filter.uncategorized"),
+    price: values.priceKurus != null ? formatKurus(values.priceKurus) : "—",
+    rate: values.taxRateBps / 100,
+    groups: assignedGroupIds.length,
+    menus: menuIdsWithProduct.size,
+  })
 
   return (
     <div className="space-y-6">
@@ -278,9 +282,7 @@ export function ProductEditor({ productId }: ProductEditorProps) {
               </Badge>
             ) : null}
           </div>
-          {!isNew && summaryParts.length > 0 ? (
-            <p className="text-sm text-muted-foreground">{summaryParts.join(" · ")}</p>
-          ) : null}
+          {!isNew ? <p className="text-sm text-muted-foreground">{summary}</p> : null}
         </div>
         <div className="flex items-center gap-2">
           {!isNew ? (
@@ -306,12 +308,33 @@ export function ProductEditor({ productId }: ProductEditorProps) {
         <div className="lg:col-span-7">
           <ProductForm values={values} errors={errors} categories={categories} onChange={handleChange} />
         </div>
-        {!isNew && productId ? (
-          <div className="space-y-6 lg:col-span-5">
-            <ProductModifierGroupsCard productId={productId} assignedGroupIds={assignedGroupIds} />
-            <ProductMenusCard productId={productId} menus={menus} menuIdsWithProduct={menuIdsWithProduct} />
-          </div>
-        ) : null}
+        <div className="space-y-6 lg:col-span-5">
+          {!isNew && productId ? (
+            <>
+              <ProductModifierGroupsCard productId={productId} assignedGroupIds={assignedGroupIds} />
+              <ProductMenusCard productId={productId} menus={menus} menuIdsWithProduct={menuIdsWithProduct} />
+            </>
+          ) : (
+            <>
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t("groups.title")}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">{t("groups.saveFirst")}</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t("menus.title")}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">{t("menus.saveFirst")}</p>
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </div>
       </div>
 
       {!isNew && productId ? (

@@ -367,22 +367,22 @@ describe("ProductEditor", () => {
     const dialog = await screen.findByRole("alertdialog")
     fireEvent.click(within(dialog).getByRole("button", { name: "Satıştan kaldır" }))
 
-    // Backend PUT REPLACES the whole row — a body with only is_active would
-    // zero out every other field, so this must carry the complete product.
+    // Backend PUT REPLACES the whole row — a body missing any field would
+    // zero it out server-side, so this must carry the complete product
+    // (currency and source_stock_item_id included).
     await waitFor(() =>
-      expect(put).toHaveBeenCalledWith(
-        `/api/v1/catalog/products/${PRODUCT.id}`,
-        expect.objectContaining({
-          name: PRODUCT.name,
-          price_amount: PRODUCT.price_amount,
-          unit: PRODUCT.unit,
-          tax_rate_bps: PRODUCT.tax_rate_bps,
-          category_id: PRODUCT.category_id,
-          sort_order: PRODUCT.sort_order,
-          currency: PRODUCT.currency,
-          is_active: false,
-        }),
-      ),
+      expect(put).toHaveBeenCalledWith(`/api/v1/catalog/products/${PRODUCT.id}`, {
+        name: PRODUCT.name,
+        price_amount: PRODUCT.price_amount,
+        unit: PRODUCT.unit,
+        description: PRODUCT.description,
+        tax_rate_bps: PRODUCT.tax_rate_bps,
+        category_id: PRODUCT.category_id,
+        sort_order: PRODUCT.sort_order,
+        currency: PRODUCT.currency,
+        is_active: false,
+        source_stock_item_id: null,
+      }),
     )
     expect(del).not.toHaveBeenCalled()
   })

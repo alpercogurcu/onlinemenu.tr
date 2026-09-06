@@ -1,7 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { Category, Menu, MenuItem, Modifier, ModifierGroup, Product } from "@/types"
+import type { Category, Menu, MenuItem, Modifier, ModifierGroup, Product, SelectionType } from "@/types"
 
 export function useProducts(params?: { limit?: number; offset?: number }) {
   return useQuery({
@@ -34,11 +34,30 @@ export function useCreateProduct() {
   })
 }
 
+// Backend PUT replaces the whole row from the body, so a partial call here
+// would silently blank out whatever fields it omits (see C1 in the katalog-ux
+// final review) — the variables type requires the full replace set so a
+// missing field is a compile error, not a data-loss bug. Callers build it via
+// toProductBody() in components/catalog/product-editor.tsx.
 export function useUpdateProduct() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, ...body }: Partial<Product> & { id: string }) =>
-      api.put<Product>(`/api/v1/catalog/products/${id}`, body),
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string
+      category_id: string | null
+      name: string
+      description: string
+      price_amount: number
+      currency: string
+      unit: string
+      tax_rate_bps: number
+      is_active: boolean
+      sort_order: number
+      source_stock_item_id: string | null
+    }) => api.put<Product>(`/api/v1/catalog/products/${id}`, body),
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ["products"] })
       void qc.invalidateQueries({ queryKey: ["products", variables.id] })
@@ -163,11 +182,23 @@ export function useCreateModifierGroup() {
   })
 }
 
+// Same reasoning as useUpdateProduct — full replace body required (see I1 in
+// the katalog-ux final review, group sort_order silently reset to 0).
 export function useUpdateModifierGroup() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, ...body }: Partial<ModifierGroup> & { id: string }) =>
-      api.put<ModifierGroup>(`/api/v1/catalog/modifier-groups/${id}`, body),
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string
+      name: string
+      selection_type: SelectionType
+      min_selections: number
+      max_selections: number | null
+      is_required: boolean
+      sort_order: number
+    }) => api.put<ModifierGroup>(`/api/v1/catalog/modifier-groups/${id}`, body),
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ["modifier-groups"] })
       void qc.invalidateQueries({ queryKey: ["modifier-groups", variables.id] })

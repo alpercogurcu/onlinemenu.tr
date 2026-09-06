@@ -162,6 +162,27 @@ describe("ModifierGroupEditor — Kural card", () => {
     )
   })
 
+  it("saves an existing group with the full body, including sort_order", async () => {
+    // Backend PUT REPLACES the whole row — omitting sort_order used to reset
+    // it to 0 on every save (I1 in the katalog-ux final review).
+    put.mockResolvedValue({ data: GROUP })
+    render(<ModifierGroupEditor groupId="g1" />, { wrapper: Wrapper })
+    await screen.findByDisplayValue(GROUP.name)
+
+    fireEvent.change(screen.getByLabelText(/Grup adı/), { target: { value: "Ek Malzeme (v2)" } })
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1", {
+      name: "Ek Malzeme (v2)",
+      selection_type: GROUP.selection_type,
+      max_selections: GROUP.max_selections,
+      min_selections: GROUP.min_selections,
+      is_required: GROUP.is_required,
+      sort_order: GROUP.sort_order,
+    })
+  })
+
   it("shows the save-group-first notice on the options card before the group exists", () => {
     render(<ModifierGroupEditor groupId={null} />, { wrapper: Wrapper })
 

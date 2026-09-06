@@ -22,6 +22,13 @@ export interface Product {
   tax_rate_bps: number
   is_active: boolean
   sort_order: number
+  // ADR-DATA-005 product↔stock-item link. Backend serializes this with
+  // `omitempty` — absent from the JSON entirely (not `null`) when the
+  // product has no stock backing, hence optional here rather than always
+  // `string | null`. Every product PUT must round-trip it (see
+  // toProductBody in components/catalog/product-editor.tsx) or a save
+  // silently drops the link.
+  source_stock_item_id?: string | null
   created_at: string
   updated_at: string
 }

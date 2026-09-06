@@ -97,6 +97,11 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
       max_selections: effectiveMax,
       min_selections: minSelections,
       is_required: isRequired,
+      // Backend PUT replaces the whole row — omitting sort_order here reset
+      // it to 0 on every save. Carried from the loaded group; 0 for a
+      // brand-new one (create doesn't send it either, so the row starts at 0
+      // server-side anyway).
+      sort_order: group?.sort_order ?? 0,
     }
 
     try {

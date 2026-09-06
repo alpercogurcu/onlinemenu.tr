@@ -52,7 +52,7 @@ const emptyValues: ProductFormValues = {
   isActive: true,
 }
 
-// Backend PUT /catalog/products/{id} REPLACES the whole row from these nine
+// Backend PUT /catalog/products/{id} REPLACES the whole row from these ten
 // fields — a body missing any of them zeroes it out server-side. Every PUT
 // call (here and in the products list page) must go through this so a
 // single-field action like "deactivate" can never regress into a partial
@@ -71,6 +71,7 @@ export function toProductBody(
       | "tax_rate_bps"
       | "is_active"
       | "sort_order"
+      | "source_stock_item_id"
     >
   > = {},
 ) {
@@ -84,6 +85,9 @@ export function toProductBody(
     tax_rate_bps: product.tax_rate_bps,
     is_active: product.is_active,
     sort_order: product.sort_order,
+    // omitempty on the wire — undefined (never assigned) and null (explicitly
+    // cleared) both mean "no stock link", so both fold to null here.
+    source_stock_item_id: product.source_stock_item_id ?? null,
     ...overrides,
   }
 }
@@ -213,15 +217,23 @@ export function ProductEditor({ productId }: ProductEditorProps) {
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
+    // currency and source_stock_item_id aren't form-editable fields — the
+    // form only ever changes the eight ProductFormValues above — so they're
+    // carried through from the loaded product rather than from `values`.
+    // `product?.` (not `product!`) because on a non-404 GET failure
+    // `notFound` stays false and `productLoading` settles false too, so the
+    // form can render with `product` still `undefined`.
     const body = {
       name: values.name.trim(),
       category_id: values.categoryId,
       unit: values.unit,
       description: values.description,
       price_amount: values.priceKurus as number,
+      currency: product?.currency ?? "TRY",
       tax_rate_bps: values.taxRateBps,
       sort_order: values.sortOrder,
       is_active: values.isActive,
+      source_stock_item_id: product?.source_stock_item_id ?? null,
     }
 
     try {

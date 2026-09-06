@@ -43,7 +43,7 @@ Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
 - [ ] `.env.prod.sops` üretimi (SOPS/age), SMTP bilgileri dahil — şablon: `deploy/.env.prod.example`
 - [ ] `task deploy:smoke` ile canlı doğrulama
 - [ ] Vault: bugün yalnız Keycloak admin-client secret'ı Vault'tan okunuyor; DB/NATS/TokenX sırları `.env.sops` üzerinden düz env. Pilot için kabul; Faz 2'de dynamic secrets (CLAUDE.md düzeltildi)
-- [ ] Alertmanager / bildirim kanalı **yok** — `deploy/prometheus/rules.yml` kuralları tetiklense de kimseye ulaşmıyor (plan R6, ürün kararı bekliyor). Ek kural önerisi: `absent(onlinemenu_outbox_pending)` (dispatcher kapalıyken seri doğmuyor)
+- [ ] Alertmanager / bildirim kanalı **yok** — `deploy/prometheus/rules.yml` kuralları tetiklense de kimseye ulaşmıyor (plan R6, ürün kararı bekliyor). [x] `absent(onlinemenu_outbox_pending)` kuralı eklendi (`OutboxMetricMissing`, dispatcher kapalıyken seri doğmuyor)
 - [ ] `deploy/prometheus/prometheus.yml` `external_labels` dev/prod paylaşımlı (`environment=development`) — prod için ayrıştırılmalı
 - [ ] SEC-005 deploy-öncesi/sonrası sorguları prod'da koşulmalı (bkz. backlog-fiscal.md)
 
@@ -69,6 +69,7 @@ Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
 - [ ] Rapor 422/403 gövdeleri düz metin (kod alanı yok); admin istemcisi metin eşleştirmemeli
 - [ ] `domain.NewTaxLine` negatif/absürt bps için guard'sız (DB verisinden erişilemez)
 - [ ] Dashboard yetkisiz rolde de istek atıyor (403 alıyor) — kozmetik kapı var, istek de kapatılabilir
+- [ ] Satış ve ödeme panelleri farklı kolonlara göre pencereleniyor: satış tarafı `checks.closed_at`, ödeme tarafı `payments.created_at` — 23:58'de ödenip 00:02'de kapanan bir adisyon iki panelde farklı gün kovasına düşer (plan R2, kasıtlı). Dashboard'da ödemeler kartının altında bu farkı belirten bir not var
 
 ### 5. Test kapsamı borçları (bu sprintte kayda geçen minörler)
 

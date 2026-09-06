@@ -21,6 +21,8 @@ func systemRoleUUID(t *testing.T, key string) uuid.UUID {
 		"kitchen":       "00000001-0000-0000-0000-000000000004",
 		"bar":           "00000001-0000-0000-0000-000000000005",
 		"manager":       "00000001-0000-0000-0000-000000000006",
+		"warehouse":     "00000001-0000-0000-0000-000000000007",
+		"waiter":        "00000001-0000-0000-0000-000000000008",
 	}
 	id, err := uuid.Parse(ids[key])
 	require.NoError(t, err)
@@ -194,4 +196,26 @@ func TestEngine_Decide_ShiftManager_PaymentRead(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, d.Allow)
 	require.Equal(t, "branch", d.Scope)
+}
+
+func TestEngine_Decide_BranchFacingRoles_BranchDirectoryRead(t *testing.T) {
+	eng := newTestEngine(t)
+
+	for _, key := range []string{"cashier", "shift_manager", "waiter", "kitchen", "bar", "driver", "warehouse"} {
+		p := Principal{
+			Ctx:      ContextStaff,
+			TenantID: uuid.New(),
+			BranchID: uuid.New(),
+			RoleIDs:  []uuid.UUID{systemRoleUUID(t, key)},
+		}
+		d, err := eng.Decide(context.Background(), "tenant.branch.read", p)
+		require.NoError(t, err)
+		require.Truef(t, d.Allow, "%s must be able to list branches", key)
+
+		for _, denied := range []string{"tenant.branch.create", "tenant.branch.update", "tenant.tenant.read"} {
+			d, err := eng.Decide(context.Background(), denied, p)
+			require.NoError(t, err)
+			require.Falsef(t, d.Allow, "%s must not get %s", key, denied)
+		}
+	}
 }

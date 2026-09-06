@@ -212,6 +212,19 @@ allow if {
 	any_role({"kitchen", "bar"})
 }
 
+# -- Tenant: branch directory. Every branch-facing role needs the branch list
+# to pick (or merely name) the branch it works in — the table plan and the
+# kitchen display are keyed by branch id, and a role that cannot list branches
+# is stuck on "Önce bir şube seçin" forever. Names and addresses are not
+# sensitive; everything else under tenant.* (tenant profile, branch CRUD,
+# documents, hours) stays manager-only via the wildcard.
+tenant_branch_read_actions := {"tenant.branch.read"}
+
+allow if {
+	input.action in tenant_branch_read_actions
+	any_role({"cashier", "shift_manager", "waiter", "kitchen", "bar", "driver", "warehouse"})
+}
+
 # -- POS: table plan (Sprint-5 Wave 1, docs/db-schema.md TABLE_ZONES/TABLES).
 # Reading the floor plan (pos.table.read) is open to every branch-facing role
 # that needs to see table state — cashier/shift_manager at the counter,

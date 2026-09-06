@@ -10,7 +10,7 @@ import { renderHook, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useAssignModifierGroup, useProductsModifierGroupIds } from "@/hooks/use-catalog"
+import { useAssignModifierGroup, useGroupProductIds, useProductsModifierGroupIds } from "@/hooks/use-catalog"
 
 const get = vi.fn()
 const post = vi.fn()
@@ -63,6 +63,36 @@ describe("useProductsModifierGroupIds", () => {
     })
 
     expect(result.current.p1).toEqual([])
+  })
+
+  // The id-list endpoints (GET /products/{id}/modifier-groups,
+  // GET /modifier-groups/{id}/products, GET /modifier-groups/{gid}/modifiers)
+  // serialize an empty result as JSON null, not []. Every list hook must
+  // fold that into [] rather than handing a table row `.map` over `null`.
+  it("folds a null response body into an empty array, not null", async () => {
+    get.mockReset()
+    get.mockResolvedValue({ data: null })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    const { result } = renderHook(() => useProductsModifierGroupIds(["p1"]), {
+      wrapper: wrapperWithClient(client),
+    })
+
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(result.current).toEqual({ p1: [] }))
+  })
+})
+
+describe("useGroupProductIds", () => {
+  it("folds a null response body into an empty array, not null", async () => {
+    get.mockReset()
+    get.mockResolvedValue({ data: null })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    const { result } = renderHook(() => useGroupProductIds("g1"), { wrapper: wrapperWithClient(client) })
+
+    await waitFor(() => expect(result.current.data).toEqual([]))
+    expect(get).toHaveBeenCalledWith("/api/v1/catalog/modifier-groups/g1/products")
   })
 })
 

@@ -11,8 +11,8 @@ DECLARE
 BEGIN
     -- Tenant
     INSERT INTO tenants (id, name, slug, plan, enabled_modules, is_active)
-    VALUES (v_tenant_id, 'Test Restoran', 'test-restoran', 'starter', '["pos","catalog","inventory","billing","party","hr","storefront"]'::jsonb, TRUE)
-    ON CONFLICT (id) DO NOTHING;
+    VALUES (v_tenant_id, 'Test Restoran', 'test-restoran', 'starter', '["pos","catalog","inventory","storefront"]'::jsonb, TRUE)
+    ON CONFLICT (id) DO UPDATE SET enabled_modules = EXCLUDED.enabled_modules;
 
     -- Branch
     INSERT INTO branches (id, tenant_id, name, is_active)
@@ -29,7 +29,25 @@ BEGIN
     VALUES (v_person_id, v_tenant_id, NULL, v_manager_role, 'active')
     ON CONFLICT (person_id, tenant_id, branch_id, role_id) DO NOTHING;
 
-    RAISE NOTICE 'Dev seed OK — admin@onlinemenu.tr | tenant: %', v_tenant_id;
+    -- Rol kullanıcıları (e2e / rol bazlı ekran testleri): sabit UUID'ler,
+    -- dev login e-posta ile girer (APP_ENV=dev). Şube kapsamlı roller Ana Şube'ye bağlı.
+    INSERT INTO persons (id, keycloak_sub, email, full_name)
+    VALUES
+        ('ffffffff-0000-0000-0000-000000000001', 'dev-shift-sub',   'shift@dev.onlinemenu.tr',   'Selin Vardiya'),
+        ('ffffffff-0000-0000-0000-000000000002', 'dev-kasiyer-sub', 'kasiyer@dev.onlinemenu.tr', 'Kerem Kasa'),
+        ('ffffffff-0000-0000-0000-000000000003', 'dev-garson-sub',  'garson@dev.onlinemenu.tr',  'Gamze Garson'),
+        ('ffffffff-0000-0000-0000-000000000004', 'dev-mutfak-sub',  'mutfak@dev.onlinemenu.tr',  'Murat Mutfak')
+    ON CONFLICT (id) DO NOTHING;
+
+    INSERT INTO memberships (person_id, tenant_id, branch_id, role_id, status)
+    VALUES
+        ('ffffffff-0000-0000-0000-000000000001', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000002', 'active'),
+        ('ffffffff-0000-0000-0000-000000000002', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000001', 'active'),
+        ('ffffffff-0000-0000-0000-000000000003', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000008', 'active'),
+        ('ffffffff-0000-0000-0000-000000000004', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000004', 'active')
+    ON CONFLICT (person_id, tenant_id, branch_id, role_id) DO NOTHING;
+
+    RAISE NOTICE 'Dev seed OK — admin@onlinemenu.tr (+ shift/kasiyer/garson/mutfak@dev.onlinemenu.tr) | tenant: %', v_tenant_id;
 END$$;
 
 -- Storefront (QR menü) için asgari veri: masa planı + menü + modifier.

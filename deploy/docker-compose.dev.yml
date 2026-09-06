@@ -241,7 +241,7 @@ services:
   # minio/mc kullanarak invoices, menu-images, hr-documents bucket'larını açar
   # ---------------------------------------------------------------------------
   minio-init:
-    image: minio/mc:RELEASE.2025-04-16T13-07-22Z
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z  # mc etiketleri registry'den silinebiliyor; yalnız `docker manifest inspect` ile doğrulanmış etiket pinlenir
     profiles: [storage]
     restart: no
     depends_on:

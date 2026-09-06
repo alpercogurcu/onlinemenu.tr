@@ -28,7 +28,7 @@ import {
 } from "@/hooks/use-catalog"
 import api from "@/lib/api"
 import { formatKurus } from "@/lib/money"
-import { TAX_RATE_OPTIONS, UNIT_OPTIONS, type MenuItem } from "@/types"
+import { TAX_RATE_OPTIONS, UNIT_OPTIONS, type MenuItem, type Product } from "@/types"
 
 const emptyValues: ProductFormValues = {
   name: "",
@@ -39,6 +39,42 @@ const emptyValues: ProductFormValues = {
   taxRateBps: TAX_RATE_OPTIONS[0],
   sortOrder: 0,
   isActive: true,
+}
+
+// Backend PUT /catalog/products/{id} REPLACES the whole row from these nine
+// fields — a body missing any of them zeroes it out server-side. Every PUT
+// call (here and in the products list page) must go through this so a
+// single-field action like "deactivate" can never regress into a partial
+// body again.
+export function toProductBody(
+  product: Product,
+  overrides: Partial<
+    Pick<
+      Product,
+      | "category_id"
+      | "name"
+      | "description"
+      | "price_amount"
+      | "currency"
+      | "unit"
+      | "tax_rate_bps"
+      | "is_active"
+      | "sort_order"
+    >
+  > = {},
+) {
+  return {
+    category_id: product.category_id,
+    name: product.name,
+    description: product.description,
+    price_amount: product.price_amount,
+    currency: product.currency,
+    unit: product.unit,
+    tax_rate_bps: product.tax_rate_bps,
+    is_active: product.is_active,
+    sort_order: product.sort_order,
+    ...overrides,
+  }
 }
 
 interface ProductEditorProps {
@@ -192,9 +228,9 @@ export function ProductEditor({ productId }: ProductEditorProps) {
   }
 
   async function handleDeactivate() {
-    if (!productId) return
+    if (!productId || !product) return
     try {
-      await updateProduct.mutateAsync({ id: productId, is_active: false })
+      await updateProduct.mutateAsync({ id: productId, ...toProductBody(product, { is_active: false }) })
       toast.success(tProducts("toast.deactivated"))
     } catch {
       toast.error(tProducts("toast.error"))

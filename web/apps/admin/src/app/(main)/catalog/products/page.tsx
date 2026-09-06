@@ -8,6 +8,7 @@ import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
 import { ProductRowActions } from "@/components/catalog/product-row-actions"
+import { toProductBody } from "@/components/catalog/product-editor"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -126,7 +127,7 @@ export default function ProductsPage() {
 
   const handleToggleActive = async (product: Product, isActive: boolean) => {
     try {
-      await updateProduct.mutateAsync({ id: product.id, is_active: isActive })
+      await updateProduct.mutateAsync({ id: product.id, ...toProductBody(product, { is_active: isActive }) })
       toast.success(isActive ? t("toast.activated") : t("toast.deactivated"))
     } catch {
       toast.error(t("toast.error"))

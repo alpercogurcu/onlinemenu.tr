@@ -190,6 +190,31 @@ describe("ProductsPage", () => {
     await waitFor(() => expect(del).toHaveBeenCalledWith("/api/v1/catalog/products/p1"))
   })
 
+  it("sends the full product body when toggling active state from the row kebab menu", async () => {
+    put.mockResolvedValue({ data: { ...PRODUCTS[0], is_active: false } })
+    render(<ProductsPage />, { wrapper: Wrapper })
+    await screen.findByText("Latte")
+
+    openRowMenu("Latte için işlemler")
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Satıştan kaldır" }))
+
+    // Backend PUT REPLACES the whole row — a body with only is_active would
+    // zero out name/price/unit/etc. server-side.
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/api/v1/catalog/products/p1", {
+        category_id: PRODUCTS[0].category_id,
+        name: PRODUCTS[0].name,
+        description: PRODUCTS[0].description,
+        price_amount: PRODUCTS[0].price_amount,
+        currency: PRODUCTS[0].currency,
+        unit: PRODUCTS[0].unit,
+        tax_rate_bps: PRODUCTS[0].tax_rate_bps,
+        is_active: false,
+        sort_order: PRODUCTS[0].sort_order,
+      }),
+    )
+  })
+
   it("deactivates instead of deleting via the confirm dialog's secondary action", async () => {
     put.mockResolvedValue({ data: { ...PRODUCTS[0], is_active: false } })
     render(<ProductsPage />, { wrapper: Wrapper })

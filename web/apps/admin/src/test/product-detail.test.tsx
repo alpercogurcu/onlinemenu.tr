@@ -272,7 +272,7 @@ describe("ProductEditor", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/catalog/products"))
   })
 
-  it("deactivates instead of deleting via the delete dialog's secondary action", async () => {
+  it("deactivates instead of deleting via the delete dialog's secondary action, sending the full product body", async () => {
     renderEditor()
 
     await screen.findByLabelText("Ad *")
@@ -281,7 +281,23 @@ describe("ProductEditor", () => {
     const dialog = await screen.findByRole("alertdialog")
     fireEvent.click(within(dialog).getByRole("button", { name: "Satıştan kaldır" }))
 
-    await waitFor(() => expect(put).toHaveBeenCalledWith(`/api/v1/catalog/products/${PRODUCT.id}`, { is_active: false }))
+    // Backend PUT REPLACES the whole row — a body with only is_active would
+    // zero out every other field, so this must carry the complete product.
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        `/api/v1/catalog/products/${PRODUCT.id}`,
+        expect.objectContaining({
+          name: PRODUCT.name,
+          price_amount: PRODUCT.price_amount,
+          unit: PRODUCT.unit,
+          tax_rate_bps: PRODUCT.tax_rate_bps,
+          category_id: PRODUCT.category_id,
+          sort_order: PRODUCT.sort_order,
+          currency: PRODUCT.currency,
+          is_active: false,
+        }),
+      ),
+    )
     expect(del).not.toHaveBeenCalled()
   })
 })

@@ -6,6 +6,7 @@ import {
   Loader2,
   Maximize,
   Minimize,
+  Moon,
   QrCode,
   Volume2,
   VolumeX,
@@ -24,12 +25,16 @@ import { Switch } from "@/components/ui/switch"
 import { useAcceptOrder, useAdvanceOrder, useOrderDetails } from "@/hooks/use-pos"
 import { useBranches } from "@/hooks/use-tenant"
 import { type KitchenConnectionStatus, useKitchenStream } from "@/hooks/use-kitchen-stream"
+import { ELAPSED_TONE_CLASS, elapsedTone, formatElapsed } from "@/lib/kds-format"
 import { kitchenOrdersByStatus, type KitchenOrder } from "@/lib/kitchen-events"
+import { useDeviceDark } from "@/lib/use-device-dark"
+import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/store/auth-store"
 import type { Order, OrderStatus } from "@/types"
 
 const BRANCH_STORAGE_KEY = "kds-branch-id"
 const SOUND_STORAGE_KEY = "kds-sound-enabled"
+const DARK_STORAGE_KEY = "kds-dark"
 
 const COLUMN_ORDER: Extract<OrderStatus, "pending" | "accepted" | "preparing" | "ready">[] = [
   "pending",
@@ -45,11 +50,13 @@ const COLUMN_LABEL: Record<(typeof COLUMN_ORDER)[number], string> = {
   ready: "Hazır",
 }
 
+// Column accents read the semantic status tokens so the board follows the
+// app theme (and the per-device dark toggle) instead of painting its own.
 const COLUMN_ACCENT: Record<(typeof COLUMN_ORDER)[number], string> = {
-  pending: "border-t-yellow-500",
-  accepted: "border-t-blue-500",
-  preparing: "border-t-orange-500",
-  ready: "border-t-green-500",
+  pending: "border-t-status-warning-fg",
+  accepted: "border-t-status-info-fg",
+  preparing: "border-t-status-info-fg",
+  ready: "border-t-status-success-fg",
 }
 
 // The order status machine only allows one specific next status per state
@@ -91,26 +98,10 @@ function playBeep() {
   }
 }
 
-// Beyond this the exact figure carries no kitchen signal — the ticket is
-// simply stale (a forgotten order, or dev/loadtest data left in the DB). It
-// is capped so the counter cannot render as "45308:58" and blow out the card
-// layout, while still reading as "far too old".
-const MAX_ELAPSED_MINUTES = 99
-
-function formatElapsed(occurredAt: string, now: number): string {
-  const occurredMs = new Date(occurredAt).getTime()
-  if (Number.isNaN(occurredMs)) return "—"
-  const elapsedSec = Math.max(0, Math.floor((now - occurredMs) / 1000))
-  const minutes = Math.floor(elapsedSec / 60)
-  if (minutes >= MAX_ELAPSED_MINUTES) return `${MAX_ELAPSED_MINUTES}+ dk`
-  const seconds = elapsedSec % 60
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`
-}
-
 function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
   if (status === "live") {
     return (
-      <Badge className="border-green-500/40 bg-green-500/15 text-green-400">
+      <Badge variant="success">
         <Wifi className="mr-1 size-3.5" />
         Canlı
       </Badge>
@@ -118,7 +109,7 @@ function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
   }
   if (status === "syncing") {
     return (
-      <Badge className="border-sky-500/40 bg-sky-500/15 text-sky-300">
+      <Badge variant="info">
         <Loader2 className="mr-1 size-3.5 animate-spin" />
         Senkronize ediliyor
       </Badge>
@@ -126,7 +117,7 @@ function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
   }
   if (status === "reconnecting") {
     return (
-      <Badge className="animate-pulse border-amber-500/40 bg-amber-500/15 text-amber-400">
+      <Badge variant="warning" className="animate-pulse">
         <Loader2 className="mr-1 size-3.5 animate-spin" />
         Yeniden bağlanıyor
       </Badge>
@@ -134,14 +125,14 @@ function ConnectionBadge({ status }: { status: KitchenConnectionStatus }) {
   }
   if (status === "error") {
     return (
-      <Badge className="border-red-500/40 bg-red-500/15 text-red-400">
+      <Badge variant="danger">
         <AlertTriangle className="mr-1 size-3.5" />
         Bağlantı hatası
       </Badge>
     )
   }
   return (
-    <Badge className="border-neutral-600 bg-neutral-800 text-neutral-300">
+    <Badge variant="neutral">
       <WifiOff className="mr-1 size-3.5" />
       Bağlanıyor
     </Badge>
@@ -165,9 +156,11 @@ function KitchenOrderCard({
 }) {
   return (
     <Card
-      className={`border-t-4 bg-neutral-900 text-neutral-100 ${COLUMN_ACCENT[order.status as (typeof COLUMN_ORDER)[number]]} ${
-        isNew ? "ring-4 ring-amber-400 animate-pulse" : ""
-      }`}
+      className={cn(
+        "border-t-4 bg-card text-card-foreground",
+        COLUMN_ACCENT[order.status as (typeof COLUMN_ORDER)[number]],
+        isNew && "animate-pulse ring-4 ring-status-warning-border",
+      )}
     >
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
@@ -180,7 +173,7 @@ function KitchenOrderCard({
             {order.source === "online_qr" && (
               <Badge
                 variant="outline"
-                className="shrink-0 border-sky-500/40 bg-sky-500/15 text-sky-300"
+                className="shrink-0 border-status-info-border bg-status-info-bg text-status-info-fg"
                 title="QR ile müşteri siparişi"
               >
                 <QrCode className="mr-1 size-3" />
@@ -188,7 +181,11 @@ function KitchenOrderCard({
               </Badge>
             )}
           </CardTitle>
-          <span className="shrink-0 font-mono text-sm text-neutral-400">{formatElapsed(order.occurredAt, now)}</span>
+          <span
+            className={cn("shrink-0 font-mono text-sm tabular-nums", ELAPSED_TONE_CLASS[elapsedTone(order.occurredAt, now)])}
+          >
+            {formatElapsed(order.occurredAt, now)}
+          </span>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -197,12 +194,12 @@ function KitchenOrderCard({
             {detail.items.map((item) => (
               <li key={item.id} className="flex justify-between text-sm">
                 <span>{item.product_name}</span>
-                <span className="text-neutral-400">×{item.quantity}</span>
+                <span className="text-muted-foreground">×{item.quantity}</span>
               </li>
             ))}
           </ul>
         ) : (
-          <Skeleton className="h-10 w-full bg-neutral-800" />
+          <Skeleton className="h-10 w-full" />
         )}
         <Button
           size="lg"
@@ -224,6 +221,7 @@ export default function KitchenPage() {
   const [now, setNow] = useState(() => Date.now())
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(false)
+  const [deviceDark, setDeviceDark] = useDeviceDark(DARK_STORAGE_KEY)
   const seenIdsRef = useRef<Set<string>>(new Set())
 
   const acceptOrder = useAcceptOrder()
@@ -309,7 +307,11 @@ export default function KitchenPage() {
   const totalActive = Object.values(columns).reduce((sum, list) => sum + list.length, 0)
 
   return (
-    <div className="dark min-h-screen bg-background p-4 text-foreground md:p-6">
+    <div
+      data-kds-root
+      data-theme={deviceDark ? "dark" : undefined}
+      className={cn(deviceDark && "dark", "min-h-screen bg-background p-4 text-foreground md:p-6")}
+    >
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <ChefHat className="size-8 text-primary" />
@@ -342,6 +344,11 @@ export default function KitchenPage() {
             <Switch checked={soundEnabled} onCheckedChange={handleSoundToggle} aria-label="Bildirim sesi" />
           </div>
 
+          <div className="flex items-center gap-2">
+            <Moon className="size-4" />
+            <Switch checked={deviceDark} onCheckedChange={setDeviceDark} aria-label="Bu cihazda koyu mod" />
+          </div>
+
           <Button variant="outline" size="icon" onClick={toggleFullscreen} aria-label="Tam ekran">
             {isFullscreen ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
           </Button>
@@ -356,8 +363,8 @@ export default function KitchenPage() {
           role="status"
           className={
             status === "error"
-              ? "mb-4 flex items-center gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300"
-              : "mb-4 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
+              ? "mb-4 flex items-center gap-2 rounded-md border border-status-danger-border bg-status-danger-bg px-4 py-3 text-sm text-status-danger-fg"
+              : "mb-4 flex items-center gap-2 rounded-md border border-status-warning-border bg-status-warning-bg px-4 py-3 text-sm text-status-warning-fg"
           }
         >
           <AlertTriangle className="size-4 shrink-0" />
@@ -368,7 +375,7 @@ export default function KitchenPage() {
       {branchesLoading || !branchId ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-64 rounded-lg bg-neutral-800" />
+            <Skeleton key={i} className="h-64 rounded-lg" />
           ))}
         </div>
       ) : totalActive === 0 ? (
@@ -382,8 +389,8 @@ export default function KitchenPage() {
           {COLUMN_ORDER.map((columnStatus) => (
             <div key={columnStatus} className="space-y-3">
               <div className="flex items-center justify-between px-1">
-                <h2 className="text-sm font-semibold text-neutral-300">{COLUMN_LABEL[columnStatus]}</h2>
-                <Badge variant="outline" className="border-neutral-700 text-neutral-400">
+                <h2 className="text-sm font-semibold text-muted-foreground">{COLUMN_LABEL[columnStatus]}</h2>
+                <Badge variant="neutral">
                   {columns[columnStatus].length}
                 </Badge>
               </div>

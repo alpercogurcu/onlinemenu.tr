@@ -35,10 +35,9 @@ BEGIN
 
     -- Rol kullanıcıları (e2e / rol bazlı ekran testleri): sabit UUID'ler,
     -- dev login e-posta ile girer (APP_ENV=dev). Şube kapsamlı roller Ana Şube'ye bağlı.
-    -- Hedef çakışma sütunu verilmeden ON CONFLICT DO NOTHING kullanılıyor:
-    -- elle düzenlenmiş bir dev DB'de aynı id farklı e-postayla ya da aynı
-    -- e-posta farklı id ile önceden var olabilir; hedefsiz DO NOTHING her iki
-    -- unique kısıtı (id, email) için de seed'i tekrar koşturulabilir kılar.
+    -- Yeniden koşturulabilirlik: kişi id çakışırsa ya da aynı e-posta farklı
+    -- bir id ile zaten varsa insert sessizce atlanır; üyelikler sabit id yerine
+    -- e-postadan çözülen id'ye bağlanır, böylece FK zinciri hiçbir durumda kopmaz.
     INSERT INTO persons (id, keycloak_sub, email, full_name)
     VALUES
         ('ffffffff-0000-0000-0000-000000000001', 'dev-shift-sub',   'shift@dev.onlinemenu.tr',   'Selin Vardiya'),
@@ -48,11 +47,14 @@ BEGIN
     ON CONFLICT DO NOTHING;
 
     INSERT INTO memberships (person_id, tenant_id, branch_id, role_id, status)
-    VALUES
-        ('ffffffff-0000-0000-0000-000000000001', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000002', 'active'),
-        ('ffffffff-0000-0000-0000-000000000002', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000001', 'active'),
-        ('ffffffff-0000-0000-0000-000000000003', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000008', 'active'),
-        ('ffffffff-0000-0000-0000-000000000004', v_tenant_id, v_branch_id, '00000001-0000-0000-0000-000000000004', 'active')
+    SELECT p.id, v_tenant_id, v_branch_id, r.role_id, 'active'
+    FROM (VALUES
+        ('shift@dev.onlinemenu.tr',   '00000001-0000-0000-0000-000000000002'::uuid),
+        ('kasiyer@dev.onlinemenu.tr', '00000001-0000-0000-0000-000000000001'::uuid),
+        ('garson@dev.onlinemenu.tr',  '00000001-0000-0000-0000-000000000008'::uuid),
+        ('mutfak@dev.onlinemenu.tr',  '00000001-0000-0000-0000-000000000004'::uuid)
+    ) AS r(email, role_id)
+    JOIN persons p ON p.email = r.email
     ON CONFLICT (person_id, tenant_id, branch_id, role_id) DO NOTHING;
 
     RAISE NOTICE 'Dev seed OK — admin@onlinemenu.tr (+ shift/kasiyer/garson/mutfak@dev.onlinemenu.tr) | tenant: %', v_tenant_id;

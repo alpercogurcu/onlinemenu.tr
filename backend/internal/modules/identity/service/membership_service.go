@@ -44,27 +44,8 @@ func NewMembershipService(p MembershipParams) *MembershipService {
 	}
 }
 
-// List returns memberships for the given tenant, optionally filtered by personID
-// and/or branchID.
-func (s *MembershipService) List(
-	ctx context.Context,
-	tenantID uuid.UUID,
-	personID *uuid.UUID,
-	branchID *uuid.UUID,
-) ([]domain.Membership, error) {
-	var memberships []domain.Membership
-	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
-		memberships, err = s.membershipRepo.ListForTenant(ctx, tx, tenantID, personID, branchID)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("identity/service/membership: list: %w", err)
-	}
-	return memberships, nil
-}
-
-// ListDetails is List with the person and role display fields joined in
+// ListDetails returns memberships for the given tenant, optionally filtered by
+// personID and/or branchID, with the person and role display fields joined in
 // (see domain.MembershipDetail) — the shape the admin user list renders.
 func (s *MembershipService) ListDetails(
 	ctx context.Context,

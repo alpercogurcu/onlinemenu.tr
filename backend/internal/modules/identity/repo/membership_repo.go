@@ -79,42 +79,7 @@ func (r *MembershipRepo) ListByPerson(ctx context.Context, tx pgx.Tx, tenantID, 
 	return collectMemberships(rows)
 }
 
-// ListForTenant returns all memberships within a tenant. When personID is non-nil
-// the result is filtered to that person; when branchID is non-nil the result is
-// further filtered to that branch (including chain-wide memberships with nil branch_id).
-func (r *MembershipRepo) ListForTenant(
-	ctx context.Context,
-	tx pgx.Tx,
-	tenantID uuid.UUID,
-	personID *uuid.UUID,
-	branchID *uuid.UUID,
-) ([]domain.Membership, error) {
-	const base = `
-		SELECT id, person_id, tenant_id, branch_id, role_id, status, created_at, updated_at
-		FROM memberships
-		WHERE tenant_id = $1`
-
-	args := []any{tenantID}
-	q := base
-	if personID != nil {
-		args = append(args, *personID)
-		q += fmt.Sprintf(" AND person_id = $%d", len(args))
-	}
-	if branchID != nil {
-		args = append(args, *branchID)
-		q += fmt.Sprintf(" AND (branch_id = $%d OR branch_id IS NULL)", len(args))
-	}
-	q += " ORDER BY created_at"
-
-	rows, err := tx.Query(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("identity/repo/membership: list for tenant: %w", err)
-	}
-	defer rows.Close()
-	return collectMemberships(rows)
-}
-
-// ListDetailsForTenant is ListForTenant joined with persons and roles for the
+// ListDetailsForTenant returns all memberships within a tenant joined with persons and roles for the
 // admin user list. LEFT JOINs (not INNER) so a membership never disappears
 // because its person/role row is invisible under the current RLS context —
 // persons_select only exposes people who hold a membership in this tenant,

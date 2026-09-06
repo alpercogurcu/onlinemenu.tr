@@ -114,7 +114,7 @@ func TestStaffInvite_FreshInvite_CreatesEverything(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, email, person.Email)
 
-	memberships, err := membershipSvc.List(ctx, tenantA, &result.Person.ID, nil)
+	memberships, err := membershipSvc.ListDetails(ctx, tenantA, &result.Person.ID, nil)
 	require.NoError(t, err)
 	require.Len(t, memberships, 1)
 	assert.Equal(t, cashierRoleID, memberships[0].RoleID)
@@ -146,7 +146,7 @@ func TestStaffInvite_RepeatInvite_IsIdempotent(t *testing.T) {
 	assert.Equal(t, first.Membership.ID, second.Membership.ID)
 	assert.Equal(t, 1, admin.createCalls, "exactly one keycloak user must ever be created across both attempts")
 
-	memberships, err := membershipSvc.List(ctx, tenantA, &first.Person.ID, nil)
+	memberships, err := membershipSvc.ListDetails(ctx, tenantA, &first.Person.ID, nil)
 	require.NoError(t, err)
 	require.Len(t, memberships, 1, "the retry must not create a second membership row")
 }
@@ -226,7 +226,7 @@ func TestStaffInvite_DBFailureAfterKeycloakWrite_RecoversOnRetry(t *testing.T) {
 
 	// Sanity check: no membership exists yet — the "crash" really did land
 	// between the person write and the membership write.
-	preRetryMemberships, err := membershipSvc.List(ctx, tenantA, &seededPerson.ID, nil)
+	preRetryMemberships, err := membershipSvc.ListDetails(ctx, tenantA, &seededPerson.ID, nil)
 	require.NoError(t, err)
 	require.Empty(t, preRetryMemberships)
 
@@ -240,7 +240,7 @@ func TestStaffInvite_DBFailureAfterKeycloakWrite_RecoversOnRetry(t *testing.T) {
 	assert.False(t, result.KeycloakUserCreated)
 	assert.Equal(t, seededPerson.ID, result.Person.ID, "retry must reuse the person committed by the prior attempt")
 
-	memberships, err := membershipSvc.List(ctx, tenantA, &result.Person.ID, nil)
+	memberships, err := membershipSvc.ListDetails(ctx, tenantA, &result.Person.ID, nil)
 	require.NoError(t, err)
 	require.Len(t, memberships, 1)
 	assert.Equal(t, branchA, *memberships[0].BranchID)

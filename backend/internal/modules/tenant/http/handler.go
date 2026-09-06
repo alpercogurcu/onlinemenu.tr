@@ -115,6 +115,30 @@ func (h *Handler) GetTenant(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, r, http.StatusOK, t)
 }
 
+// enabledModulesDTO is the sole field of pub.Tenant that every staff role may
+// read (permission tenant.modules.read) without widening tenant.tenant.read,
+// which also carries IBAN/tax/legal identity (see C1/M1 in
+// .superpowers/sdd/2026-09-06-tema-e2e/final-review-report.md).
+type enabledModulesDTO struct {
+	EnabledModules []string `json:"enabled_modules"`
+}
+
+// GetEnabledModules handles GET /tenants/{tenantID}/modules.
+func (h *Handler) GetEnabledModules(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := pathUUID(r, "tenantID")
+	if err != nil {
+		h.writeError(w, r, http.StatusBadRequest, "invalid tenant id")
+		return
+	}
+
+	t, err := h.svc.GetByID(r.Context(), tenantID)
+	if err != nil {
+		h.handleServiceErr(w, r, err, "tenant not found")
+		return
+	}
+	h.writeJSON(w, r, http.StatusOK, enabledModulesDTO{EnabledModules: t.EnabledModules})
+}
+
 // UpdateTenant handles PUT /tenants/{tenantID}.
 func (h *Handler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := pathUUID(r, "tenantID")

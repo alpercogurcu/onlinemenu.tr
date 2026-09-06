@@ -12,6 +12,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 
 		r.With(h.permit("tenant.tenant.read")).Get("/", h.GetTenant)
 		r.With(h.permit("tenant.tenant.update")).Put("/", h.UpdateTenant)
+		r.With(h.permit("tenant.modules.read")).Get("/modules", h.GetEnabledModules)
 
 		r.Route("/branches", func(r chi.Router) {
 			r.With(h.permit("tenant.branch.read")).Get("/", h.ListBranches)

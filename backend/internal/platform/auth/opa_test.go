@@ -220,3 +220,24 @@ func TestEngine_Decide_BranchFacingRoles_BranchDirectoryRead(t *testing.T) {
 		}
 	}
 }
+
+func TestEngine_Decide_BranchFacingRoles_ModulesRead(t *testing.T) {
+	eng := newTestEngine(t)
+
+	for _, key := range []string{"cashier", "shift_manager", "waiter", "kitchen", "bar", "driver", "warehouse"} {
+		p := Principal{
+			Ctx:      ContextStaff,
+			TenantID: uuid.New(),
+			BranchID: uuid.New(),
+			RoleIDs:  []uuid.UUID{systemRoleUUID(t, key)},
+		}
+		d, err := eng.Decide(context.Background(), "tenant.modules.read", p)
+		require.NoError(t, err)
+		require.Truef(t, d.Allow, "%s must be able to read enabled_modules", key)
+		require.Equal(t, "branch", d.Scope)
+
+		d, err = eng.Decide(context.Background(), "tenant.tenant.read", p)
+		require.NoError(t, err)
+		require.Falsef(t, d.Allow, "%s must not get tenant.tenant.read", key)
+	}
+}

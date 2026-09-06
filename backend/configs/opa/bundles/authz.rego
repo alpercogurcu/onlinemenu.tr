@@ -225,6 +225,20 @@ allow if {
 	any_role({"cashier", "shift_manager", "waiter", "kitchen", "bar", "driver", "warehouse"})
 }
 
+# -- Tenant: enabled_modules projection (M1, final-review-report.md). Every
+# staff role needs to know which modules are mounted for its tenant (to hide
+# sidebar sections the tenant hasn't bought), but tenant.tenant.read stays
+# manager-only because pub.Tenant also carries IBAN/tax/legal identity.
+# tenant.modules.read is a distinct action guarding a handler that projects
+# out only the single non-sensitive `enabled_modules` field — it does not
+# widen what tenant.tenant.read exposes.
+tenant_modules_read_actions := {"tenant.modules.read"}
+
+allow if {
+	input.action in tenant_modules_read_actions
+	any_role({"cashier", "shift_manager", "waiter", "kitchen", "bar", "driver", "warehouse"})
+}
+
 # -- POS: table plan (Sprint-5 Wave 1, docs/db-schema.md TABLE_ZONES/TABLES).
 # Reading the floor plan (pos.table.read) is open to every branch-facing role
 # that needs to see table state — cashier/shift_manager at the counter,

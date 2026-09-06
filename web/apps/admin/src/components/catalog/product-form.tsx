@@ -133,11 +133,17 @@ export function ProductForm({ values, errors, categories, onChange }: ProductFor
               id="product-price"
               valueKurus={values.priceKurus}
               onChangeKurus={(value) => onChange({ priceKurus: value })}
+              aria-invalid={Boolean(errors.price)}
+              aria-describedby={errors.price ? "product-price-error" : "product-price-hint"}
             />
             {errors.price ? (
-              <p className="text-sm text-destructive">{errors.price}</p>
+              <p id="product-price-error" className="text-sm text-destructive">
+                {errors.price}
+              </p>
             ) : (
-              <p className="text-xs text-muted-foreground">{t("fields.priceHint")}</p>
+              <p id="product-price-hint" className="text-xs text-muted-foreground">
+                {t("fields.priceHint")}
+              </p>
             )}
           </div>
 

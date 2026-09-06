@@ -335,7 +335,7 @@ describe("ProductEditor", () => {
   it("adds the product to a menu via its switch", async () => {
     renderEditor()
 
-    fireEvent.click(await screen.findByRole("checkbox", { name: MENU.name }))
+    fireEvent.click(await screen.findByRole("switch", { name: MENU.name }))
 
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
     expect(post).toHaveBeenCalledWith(`/api/v1/catalog/menus/${MENU.id}/items`, {

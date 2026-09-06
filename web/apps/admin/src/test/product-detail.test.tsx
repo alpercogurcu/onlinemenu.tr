@@ -123,8 +123,17 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace, back: vi.fn() }),
 }))
 
+// toast is called both as a plain function (the undoable "group removed"
+// toast, which needs its `action.onClick` invokable from a test) and via
+// .success/.error — vi.hoisted so the spies exist before the mock factory
+// runs (module-scope `const` below vi.mock would not be initialized yet).
+const { toastFn, toastSuccess, toastError } = vi.hoisted(() => ({
+  toastFn: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+}))
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: Object.assign(toastFn, { success: toastSuccess, error: toastError }),
 }))
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -165,6 +174,9 @@ describe("ProductEditor", () => {
     del.mockResolvedValue({ data: undefined })
     push.mockReset()
     replace.mockReset()
+    toastFn.mockReset()
+    toastSuccess.mockReset()
+    toastError.mockReset()
   })
 
   it("loads the form pre-filled in edit mode", async () => {
@@ -221,6 +233,34 @@ describe("ProductEditor", () => {
       group_id: GROUP_UNASSIGNED.id,
       sort_order: 0,
     })
+  })
+
+  it("removing a group offers an undo that re-assigns it", async () => {
+    renderEditor()
+
+    const removeButton = await screen.findByLabelText(`${GROUP_ASSIGNED.name} — Kaldır`)
+    fireEvent.click(removeButton)
+
+    await waitFor(() =>
+      expect(del).toHaveBeenCalledWith(
+        `/api/v1/catalog/products/${PRODUCT.id}/modifier-groups/${GROUP_ASSIGNED.id}`,
+      ),
+    )
+    expect(toastFn).toHaveBeenCalledWith(
+      `"${GROUP_ASSIGNED.name}" üründen kaldırıldı`,
+      expect.objectContaining({ action: expect.objectContaining({ label: "Geri al" }) }),
+    )
+
+    post.mockClear()
+    const [, options] = toastFn.mock.calls[0] as [string, { action: { onClick: () => void } }]
+    options.action.onClick()
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(`/api/v1/catalog/products/${PRODUCT.id}/modifier-groups`, {
+        group_id: GROUP_ASSIGNED.id,
+        sort_order: 0,
+      }),
+    )
   })
 
   it("creates then assigns a brand new group typed into the combobox", async () => {

@@ -56,6 +56,7 @@ export function ProductMenusCard({ productId, menus, menuIdsWithProduct }: Produ
               <Switch
                 checked={isOn}
                 aria-label={menu.name}
+                disabled={addItem.isPending || removeItem.isPending}
                 onCheckedChange={(checked) => void handleToggle(menu.id, checked)}
               />
             </div>

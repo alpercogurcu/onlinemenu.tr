@@ -29,7 +29,7 @@ import type { ModifierGroup } from "@/types"
 
 interface GroupRowProps {
   group: ModifierGroup
-  onRemove: (groupId: string) => void
+  onRemove: (groupId: string, groupName: string) => void
 }
 
 // Its own component (rather than a map callback) so useModifiers(group.id) —
@@ -73,7 +73,7 @@ function GroupRow({ group, onRemove }: GroupRowProps) {
       </div>
       <button
         type="button"
-        onClick={() => onRemove(group.id)}
+        onClick={() => onRemove(group.id, group.name)}
         aria-label={`${group.name} — ${t("remove")}`}
         className="text-muted-foreground hover:text-destructive"
       >
@@ -144,14 +144,22 @@ export function ProductModifierGroupsCard({ productId, assignedGroupIds }: Produ
     }
   }
 
-  // Removing a group from a product is deliberately silent on success — the
-  // row disappearing from the list below is the feedback. tr.json has no
-  // "unassigned from product" toast key (catalog.groups.toast.deleted talks
-  // about deleting the group itself, which is not what happened here), so
-  // this only surfaces a toast on failure via the existing generic key.
-  async function handleRemove(groupId: string) {
+  // Removing a group from a product now surfaces an undoable toast: the row
+  // disappearing from the list is still the primary feedback, but a misclick
+  // ("kaldır" instead of "düzenle") no longer means redoing the whole
+  // search-or-create flow to fix it. The re-assign on undo omits sort_order
+  // the same way the original assign flow does (see handleAssignExisting) —
+  // the API only ever tracks the row's current position, so "same
+  // sort_order" here means "assigned the same way it originally was".
+  async function handleRemove(groupId: string, groupName: string) {
     try {
       await removeGroup.mutateAsync({ productId, groupId })
+      toast(t("removed", { name: groupName }), {
+        action: {
+          label: t("undo"),
+          onClick: () => void assignGroup.mutateAsync({ productId, groupId }),
+        },
+      })
     } catch {
       toast.error(tGroups("toast.error"))
     }

@@ -21,6 +21,7 @@ excludeFiles:
   - "internal/modules/billing/service/integration_test\\.go"
   - "internal/modules/pos/ws/hub_test\\.go"
   - "internal/modules/identity/repo/role_tenant_guard_test\\.go"
+  - "internal/modules/tenant/http/branch_directory_integration_test\\.go"
 
 # Sub-layer granularity enforces cross-module boundary: modules may only import
 # the public/ interface of other modules, never domain/, repo/, or service/.

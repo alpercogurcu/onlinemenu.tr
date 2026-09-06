@@ -138,6 +138,26 @@ func (h *Handler) UpdateTenant(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, r, http.StatusOK, updated)
 }
 
+// branchDirectoryDTO is the projection of pub.Branch visible to a
+// branch-scoped principal (ADR-AUTH-001 layer 4): just enough to pick or name
+// a branch, none of its IBAN/tax/legal identity (see C1 in
+// .superpowers/sdd/2026-09-06-tema-e2e/final-review-report.md).
+type branchDirectoryDTO struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	Name     string    `json:"name"`
+	IsActive bool      `json:"is_active"`
+}
+
+// toBranchDirectory projects a full branch list down to the directory DTO.
+func toBranchDirectory(branches []pub.Branch) []branchDirectoryDTO {
+	out := make([]branchDirectoryDTO, len(branches))
+	for i, b := range branches {
+		out[i] = branchDirectoryDTO{ID: b.ID, TenantID: b.TenantID, Name: b.Name, IsActive: b.IsActive}
+	}
+	return out
+}
+
 // ListBranches handles GET /tenants/{tenantID}/branches.
 func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := pathUUID(r, "tenantID")
@@ -149,6 +169,11 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	branches, err := h.svc.ListBranches(r.Context(), tenantID)
 	if err != nil {
 		h.handleServiceErr(w, r, err, "")
+		return
+	}
+
+	if scope, ok := auth.ScopeFromContext(r.Context()); !ok || scope != "tenant" {
+		h.writeJSON(w, r, http.StatusOK, toBranchDirectory(branches))
 		return
 	}
 	h.writeJSON(w, r, http.StatusOK, branches)

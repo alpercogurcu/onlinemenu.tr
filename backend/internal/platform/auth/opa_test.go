@@ -211,6 +211,7 @@ func TestEngine_Decide_BranchFacingRoles_BranchDirectoryRead(t *testing.T) {
 		d, err := eng.Decide(context.Background(), "tenant.branch.read", p)
 		require.NoError(t, err)
 		require.Truef(t, d.Allow, "%s must be able to list branches", key)
+		require.Equal(t, "branch", d.Scope)
 
 		for _, denied := range []string{"tenant.branch.create", "tenant.branch.update", "tenant.tenant.read"} {
 			d, err := eng.Decide(context.Background(), denied, p)

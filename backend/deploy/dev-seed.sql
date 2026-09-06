@@ -10,6 +10,10 @@ DECLARE
     v_manager_role UUID := '00000001-0000-0000-0000-000000000006';
 BEGIN
     -- Tenant
+    -- Seed'in tekrar koşturulması bilinçli olarak enabled_modules'ü buradaki
+    -- sabit kümeye sıfırlar (R1): elle genişletilmiş bir dev tenant'ın
+    -- modülleri de bu satır çalıştığında tekrar daralır. Bu, "seed her zaman
+    -- aynı ortamı üretir" garantisi için kabul edilen bir davranıştır.
     INSERT INTO tenants (id, name, slug, plan, enabled_modules, is_active)
     VALUES (v_tenant_id, 'Test Restoran', 'test-restoran', 'starter', '["pos","catalog","inventory","storefront"]'::jsonb, TRUE)
     ON CONFLICT (id) DO UPDATE SET enabled_modules = EXCLUDED.enabled_modules;
@@ -31,13 +35,17 @@ BEGIN
 
     -- Rol kullanıcıları (e2e / rol bazlı ekran testleri): sabit UUID'ler,
     -- dev login e-posta ile girer (APP_ENV=dev). Şube kapsamlı roller Ana Şube'ye bağlı.
+    -- Hedef çakışma sütunu verilmeden ON CONFLICT DO NOTHING kullanılıyor:
+    -- elle düzenlenmiş bir dev DB'de aynı id farklı e-postayla ya da aynı
+    -- e-posta farklı id ile önceden var olabilir; hedefsiz DO NOTHING her iki
+    -- unique kısıtı (id, email) için de seed'i tekrar koşturulabilir kılar.
     INSERT INTO persons (id, keycloak_sub, email, full_name)
     VALUES
         ('ffffffff-0000-0000-0000-000000000001', 'dev-shift-sub',   'shift@dev.onlinemenu.tr',   'Selin Vardiya'),
         ('ffffffff-0000-0000-0000-000000000002', 'dev-kasiyer-sub', 'kasiyer@dev.onlinemenu.tr', 'Kerem Kasa'),
         ('ffffffff-0000-0000-0000-000000000003', 'dev-garson-sub',  'garson@dev.onlinemenu.tr',  'Gamze Garson'),
         ('ffffffff-0000-0000-0000-000000000004', 'dev-mutfak-sub',  'mutfak@dev.onlinemenu.tr',  'Murat Mutfak')
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT DO NOTHING;
 
     INSERT INTO memberships (person_id, tenant_id, branch_id, role_id, status)
     VALUES

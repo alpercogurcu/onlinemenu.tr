@@ -1,29 +1,19 @@
 "use client"
 
-import { Plus, ShoppingBag, Trash2 } from "lucide-react"
-import { useState } from "react"
+import { Plus, ShoppingBag } from "lucide-react"
+import { useTranslations } from "next-intl"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
+import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
+import { ProductRowActions } from "@/components/catalog/product-row-actions"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
+import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
 import {
   Table,
   TableBody,
@@ -34,233 +24,325 @@ import {
 } from "@/components/ui/table"
 import {
   useCategories,
-  useCreateProduct,
   useDeleteProduct,
+  useCreateProduct,
+  useModifierGroups,
   useProducts,
+  useProductsModifierGroupIds,
+  useUpdateProduct,
 } from "@/hooks/use-catalog"
+import { formatKurus } from "@/lib/money"
+import type { Product } from "@/types"
 
-interface ProductFormState {
-  name: string
-  description: string
-  price_tl: string
-  is_active: boolean
-}
+type StatusFilter = "all" | "active" | "inactive"
 
-const defaultForm: ProductFormState = {
-  name: "",
-  description: "",
-  price_tl: "",
-  is_active: true,
-}
-
+// Query keys the filter UI reads/writes. Kept in the URL (?q=&cat=&status=)
+// so a bookmark or a page reload lands on the same filtered view — see the
+// task brief's "filtre durumu URL query'sinde tutulur" requirement. The
+// filters themselves live in local state (source of truth for rendering);
+// the URL is a best-effort mirror written via router.replace, not read back
+// reactively, so an in-app back/forward press does not resync the filters —
+// acceptable for Faz 1, a reload or shared link still gets the right view.
 export default function ProductsPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
-  const [form, setForm] = useState<ProductFormState>(defaultForm)
+  const t = useTranslations("catalog.products")
+  const tCommon = useTranslations("catalog.common")
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
 
-  const { data, isLoading } = useProducts()
-  const { data: categoriesData } = useCategories()
-  const createProduct = useCreateProduct()
-  const deleteProduct = useDeleteProduct()
-
-  const categoryMap = new Map(
-    (categoriesData ?? []).map((c) => [c.id, c.name]),
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "")
+  const [categoryFilter, setCategoryFilter] = useState(() => searchParams.get("cat") ?? "all")
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(
+    () => (searchParams.get("status") as StatusFilter) ?? "all",
   )
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null)
 
-  const handleOpen = () => {
-    setForm(defaultForm)
-    setSheetOpen(true)
+  const productsQuery = useProducts()
+  const { data: categoriesData } = useCategories()
+  const { data: modifierGroupsData } = useModifierGroups()
+  const updateProduct = useUpdateProduct()
+  const deleteProduct = useDeleteProduct()
+  const createProduct = useCreateProduct()
+
+  const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data])
+  const categories = categoriesData ?? []
+  const modifierGroupNameById = useMemo(
+    () => new Map((modifierGroupsData ?? []).map((g) => [g.id, g.name])),
+    [modifierGroupsData],
+  )
+  const productIds = useMemo(() => products.map((p) => p.id), [products])
+  const groupIdsByProduct = useProductsModifierGroupIds(productIds)
+
+  const syncQuery = (next: { q?: string; cat?: string; status?: StatusFilter }) => {
+    const params = new URLSearchParams(searchParams.toString())
+    const merged = {
+      q: next.q ?? search,
+      cat: next.cat ?? categoryFilter,
+      status: next.status ?? statusFilter,
+    }
+    if (merged.q) params.set("q", merged.q)
+    else params.delete("q")
+    if (merged.cat && merged.cat !== "all") params.set("cat", merged.cat)
+    else params.delete("cat")
+    if (merged.status && merged.status !== "all") params.set("status", merged.status)
+    else params.delete("status")
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname)
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const priceTL = parseFloat(form.price_tl)
-    if (!form.name.trim() || isNaN(priceTL)) {
-      toast.error("Ad ve fiyat alanları zorunludur")
-      return
-    }
+  const handleSearchChange = (value: string) => {
+    setSearch(value)
+    syncQuery({ q: value })
+  }
+  const handleCategoryChange = (value: string) => {
+    setCategoryFilter(value)
+    syncQuery({ cat: value })
+  }
+  const handleStatusChange = (value: StatusFilter) => {
+    setStatusFilter(value)
+    syncQuery({ status: value })
+  }
+
+  const uncategorizedCount = products.filter((p) => !p.category_id).length
+  const activeCount = products.filter((p) => p.is_active).length
+
+  const filteredProducts = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase("tr")
+    return products.filter((p) => {
+      if (statusFilter === "active" && !p.is_active) return false
+      if (statusFilter === "inactive" && p.is_active) return false
+      if (categoryFilter === "none" && p.category_id) return false
+      if (categoryFilter !== "all" && categoryFilter !== "none" && p.category_id !== categoryFilter) return false
+      if (needle) {
+        const haystack = `${p.name} ${p.description}`.toLocaleLowerCase("tr")
+        if (!haystack.includes(needle)) return false
+      }
+      return true
+    })
+  }, [products, search, categoryFilter, statusFilter])
+
+  const goToNew = () => router.push("/catalog/products/new")
+  const goToDetail = (product: Product) => router.push(`/catalog/products/${product.id}`)
+
+  const handleToggleActive = async (product: Product, isActive: boolean) => {
     try {
-      await createProduct.mutateAsync({
-        name: form.name.trim(),
-        description: form.description.trim(),
-        price_amount: Math.round(priceTL * 100),
-        currency: "TRY",
-        is_active: form.is_active,
-      })
-      toast.success("Ürün eklendi")
-      setSheetOpen(false)
+      await updateProduct.mutateAsync({ id: product.id, is_active: isActive })
+      toast.success(isActive ? t("toast.activated") : t("toast.deactivated"))
     } catch {
-      toast.error("Ürün eklenemedi")
+      toast.error(t("toast.error"))
     }
   }
 
-  const handleDelete = async (id: string, name: string) => {
+  const handleDuplicate = async (product: Product) => {
+    const { id: _id, tenant_id: _tenantId, created_at: _createdAt, updated_at: _updatedAt, ...rest } = product
     try {
-      await deleteProduct.mutateAsync(id)
-      toast.success(`"${name}" silindi`)
+      const res = await createProduct.mutateAsync({ ...rest, name: `${product.name} (kopya)` })
+      toast.success(t("toast.created"))
+      if (res.data?.id) router.push(`/catalog/products/${res.data.id}`)
     } catch {
-      toast.error("Ürün silinemedi")
+      toast.error(t("toast.error"))
     }
   }
 
-  const products = data ?? []
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    try {
+      await deleteProduct.mutateAsync(deleteTarget.id)
+      toast.success(t("toast.deleted"))
+    } catch {
+      toast.error(t("toast.error"))
+    }
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
-          <p className="text-muted-foreground">Menünüzdeki ürünleri yönetin.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
+          <p className="text-muted-foreground">
+            {products.length > 0 ? t("count", { count: products.length, active: activeCount }) : t("subtitle")}
+          </p>
         </div>
-        <Button onClick={handleOpen}>
+        <Button onClick={goToNew}>
           <Plus className="size-4" />
-          Ürün Ekle
+          {t("add")}
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <Input
+          placeholder={t("search")}
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          className="max-w-xs"
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant={categoryFilter === "all" ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => handleCategoryChange("all")}
+          >
+            {t("filter.all")}
+          </Button>
+          {categories.map((category) => (
+            <Button
+              key={category.id}
+              type="button"
+              variant={categoryFilter === category.id ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => handleCategoryChange(category.id)}
+            >
+              {category.name}
+            </Button>
+          ))}
+          <Button
+            type="button"
+            variant={categoryFilter === "none" ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => handleCategoryChange("none")}
+          >
+            {t("filter.uncategorized")} · {uncategorizedCount}
+          </Button>
+        </div>
+        <Select
+          value={statusFilter}
+          onValueChange={(value) => handleStatusChange(value as StatusFilter)}
+          className="w-auto"
+          aria-label={t("columns.status")}
+        >
+          <SelectItem value="all">{t("filter.status.all")}</SelectItem>
+          <SelectItem value="active">{t("filter.status.active")}</SelectItem>
+          <SelectItem value="inactive">{t("filter.status.inactive")}</SelectItem>
+        </Select>
+      </div>
+
       <Card>
-        <CardHeader>
-          <CardTitle>Ürün Listesi</CardTitle>
-          <CardDescription>Tüm ürünleriniz burada listelenir.</CardDescription>
-        </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {productsQuery.isLoading ? (
             <div className="space-y-3">
               {[0, 1, 2].map((i) => (
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
-          ) : products.length === 0 ? (
+          ) : productsQuery.isError ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+              <p className="text-sm text-destructive">{tCommon("loadFailed")}</p>
+              <Button variant="outline" size="sm" onClick={() => productsQuery.refetch()}>
+                {tCommon("retry")}
+              </Button>
+            </div>
+          ) : filteredProducts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <ShoppingBag className="size-12 text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold">Henüz ürün eklenmedi</h3>
-              <p className="text-sm text-muted-foreground mt-1 mb-4">
-                İlk ürününüzü ekleyerek başlayın.
-              </p>
-              <Button onClick={handleOpen}>
+              <h3 className="text-lg font-semibold">{t("empty.title")}</h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-4">{t("empty.body")}</p>
+              <Button onClick={goToNew}>
                 <Plus className="size-4" />
-                İlk ürünü ekle
+                {t("empty.cta")}
               </Button>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Ad</TableHead>
-                  <TableHead>Kategori</TableHead>
-                  <TableHead>Fiyat</TableHead>
-                  <TableHead>Durum</TableHead>
-                  <TableHead className="w-[80px]">İşlemler</TableHead>
+                  <TableHead>{t("columns.name")}</TableHead>
+                  <TableHead>{t("columns.category")}</TableHead>
+                  <TableHead className="text-right">{t("columns.price")}</TableHead>
+                  <TableHead>{t("columns.options")}</TableHead>
+                  <TableHead>{t("columns.status")}</TableHead>
+                  <TableHead className="w-[60px]" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((product) => (
-                  <TableRow key={product.id}>
-                    <TableCell className="font-medium">{product.name}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {product.category_id
-                        ? (categoryMap.get(product.category_id) ?? "—")
-                        : "—"}
-                    </TableCell>
-                    <TableCell>
-                      {(product.price_amount / 100).toLocaleString("tr-TR", {
-                        style: "currency",
-                        currency: product.currency || "TRY",
-                      })}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          product.is_active
-                            ? "bg-green-100 text-green-700 border-green-200"
-                            : "bg-gray-100 text-gray-600 border-gray-200"
-                        }
-                      >
-                        {product.is_active ? "Aktif" : "Pasif"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(product.id, product.name)}
-                        disabled={deleteProduct.isPending}
-                        aria-label={`${product.name} sil`}
-                      >
-                        <Trash2 className="size-4 text-destructive" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filteredProducts.map((product) => {
+                  const category = categories.find((c) => c.id === product.category_id)
+                  const groupNames = (groupIdsByProduct[product.id] ?? [])
+                    .map((id) => modifierGroupNameById.get(id))
+                    .filter((name): name is string => Boolean(name))
+
+                  return (
+                    <TableRow
+                      key={product.id}
+                      className="cursor-pointer"
+                      onClick={() => goToDetail(product)}
+                    >
+                      <TableCell>
+                        <div className="font-medium">{product.name}</div>
+                        {product.description ? (
+                          <div className="text-sm text-muted-foreground">{product.description}</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        {category ? (
+                          category.name
+                        ) : (
+                          <span className="text-amber-600">{t("filter.uncategorized")}</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatKurus(product.price_amount)}
+                      </TableCell>
+                      <TableCell>
+                        {groupNames.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {groupNames.map((name) => (
+                              <Badge key={name} variant="outline">
+                                {name}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">{t("noOptions")}</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={
+                            product.is_active
+                              ? "bg-green-100 text-green-700 border-green-200"
+                              : "bg-gray-100 text-gray-600 border-gray-200"
+                          }
+                        >
+                          {product.is_active ? t("status.active") : t("status.inactive")}
+                        </Badge>
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <ProductRowActions
+                          product={product}
+                          onEdit={goToDetail}
+                          onDuplicate={handleDuplicate}
+                          onToggleActive={(p) => handleToggleActive(p, !p.is_active)}
+                          onDeleteRequest={setDeleteTarget}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Ürün</SheetTitle>
-            <SheetDescription>
-              Menünüze yeni bir ürün ekleyin.
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="product-name">Ad</Label>
-              <Input
-                id="product-name"
-                placeholder="Ürün adı"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="product-desc">Açıklama</Label>
-              <Input
-                id="product-desc"
-                placeholder="Kısa açıklama"
-                value={form.description}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, description: e.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="product-price">Fiyat (₺)</Label>
-              <Input
-                id="product-price"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={form.price_tl}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, price_tl: e.target.value }))
-                }
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch
-                id="product-active"
-                checked={form.is_active}
-                onCheckedChange={(checked) =>
-                  setForm((f) => ({ ...f, is_active: checked }))
-                }
-              />
-              <Label htmlFor="product-active">Aktif</Label>
-            </div>
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={createProduct.isPending}
-            >
-              {createProduct.isPending ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+        title={t("deleteConfirm.title", { name: deleteTarget?.name ?? "" })}
+        description={t("deleteConfirm.body")}
+        confirmLabel={t("deleteConfirm.confirm")}
+        destructive
+        onConfirm={handleDelete}
+        secondaryAction={{
+          label: t("deleteConfirm.deactivateInstead"),
+          onClick: () => {
+            if (deleteTarget) void handleToggleActive(deleteTarget, false)
+          },
+        }}
+      />
     </div>
   )
 }

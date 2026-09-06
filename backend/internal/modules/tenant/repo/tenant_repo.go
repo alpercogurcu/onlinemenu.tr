@@ -24,11 +24,15 @@ func NewTenantRepo() *TenantRepo {
 
 // GetByID fetches a single tenant by primary key.
 func (r *TenantRepo) GetByID(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (pub.Tenant, error) {
+	// Every nullable text column is COALESCEd to '' so a partially-onboarded
+	// tenant (only name/slug/plan seeded, legal/address/contact fields still
+	// NULL) doesn't blow up scanTenant's plain-string Scan targets — same
+	// approach already used for tax_no/mersis_no.
 	const q = `
-		SELECT id, name, legal_name, trade_name, slug, plan, enabled_modules,
-		       identity_type, COALESCE(tax_no, ''), tax_office, COALESCE(mersis_no, ''),
-		       address, city, district, postal_code, country,
-		       phone, contact_email, is_active
+		SELECT id, name, COALESCE(legal_name, ''), COALESCE(trade_name, ''), slug, plan, enabled_modules,
+		       identity_type, COALESCE(tax_no, ''), COALESCE(tax_office, ''), COALESCE(mersis_no, ''),
+		       COALESCE(address, ''), COALESCE(city, ''), COALESCE(district, ''), COALESCE(postal_code, ''), country,
+		       COALESCE(phone, ''), COALESCE(contact_email, ''), is_active
 		FROM tenants
 		WHERE id = $1 AND is_active = true`
 
@@ -65,10 +69,10 @@ func (r *TenantRepo) Create(ctx context.Context, tx pgx.Tx, t pub.Tenant) (pub.T
 			$12, $13, $14, $15, $16,
 			$17, $18, $19
 		)
-		RETURNING id, name, legal_name, trade_name, slug, plan, enabled_modules,
-		          identity_type, COALESCE(tax_no, ''), tax_office, COALESCE(mersis_no, ''),
-		          address, city, district, postal_code, country,
-		          phone, contact_email, is_active`
+		RETURNING id, name, COALESCE(legal_name, ''), COALESCE(trade_name, ''), slug, plan, enabled_modules,
+		          identity_type, COALESCE(tax_no, ''), COALESCE(tax_office, ''), COALESCE(mersis_no, ''),
+		          COALESCE(address, ''), COALESCE(city, ''), COALESCE(district, ''), COALESCE(postal_code, ''), country,
+		          COALESCE(phone, ''), COALESCE(contact_email, ''), is_active`
 
 	row := tx.QueryRow(ctx, q,
 		t.ID, t.Name, t.LegalName, t.TradeName, t.Slug, string(t.Plan), string(modulesJSON),
@@ -99,10 +103,10 @@ func (r *TenantRepo) Update(ctx context.Context, tx pgx.Tx, t pub.Tenant) (pub.T
 			postal_code = $14, country = $15, phone = $16, contact_email = $17,
 			is_active = $18, updated_at = NOW()
 		WHERE id = $19
-		RETURNING id, name, legal_name, trade_name, slug, plan, enabled_modules,
-		          identity_type, COALESCE(tax_no, ''), tax_office, COALESCE(mersis_no, ''),
-		          address, city, district, postal_code, country,
-		          phone, contact_email, is_active`
+		RETURNING id, name, COALESCE(legal_name, ''), COALESCE(trade_name, ''), slug, plan, enabled_modules,
+		          identity_type, COALESCE(tax_no, ''), COALESCE(tax_office, ''), COALESCE(mersis_no, ''),
+		          COALESCE(address, ''), COALESCE(city, ''), COALESCE(district, ''), COALESCE(postal_code, ''), country,
+		          COALESCE(phone, ''), COALESCE(contact_email, ''), is_active`
 
 	row := tx.QueryRow(ctx, q,
 		t.Name, t.LegalName, t.TradeName, t.Slug, string(t.Plan),

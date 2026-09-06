@@ -286,3 +286,52 @@ func TestBranchRepo_Defect_SecondBranchWithoutTaxNo_Collides(t *testing.T) {
 	require.NoError(t, mk("branch-2-"+uniqueSuffix()),
 		"a second directly-operated branch with no tax number must be able to onboard")
 }
+
+// TestTenantRepo_Defect_NullableTextColumnsCrashScan: a tenant seeded with
+// only the NOT NULL columns (id, name, slug, plan — exactly how a real
+// pre-onboarding-completion tenant looks, per migration 000002's own
+// comment: "NULL izni: mevcut tenant'ların migration sırasında verileri
+// eksik olabilir") leaves legal_name, trade_name, tax_office, address, city,
+// district, postal_code, phone and contact_email NULL. TenantRepo.GetByID's
+// SELECT only COALESCEd tax_no/mersis_no and scanTenant scanned the rest
+// into plain Go strings — confirmed empirically: GetByID returned "can't
+// scan into dest[2]: cannot scan NULL into *string", a 500 on every read of
+// such a tenant.
+func TestTenantRepo_Defect_NullableTextColumnsCrashScan(t *testing.T) {
+	// FIXED: every nullable text column feeding scanTenant is now COALESCEd
+	// to '' in GetByID/Create/Update's SELECT/RETURNING clauses
+	// (repo/tenant_repo.go), the same approach already used for
+	// tax_no/mersis_no. Live regression test — do not re-skip.
+	ctx := context.Background()
+	r := repo.NewTenantRepo()
+
+	id := mustNewID(t)
+	slug := "bare-" + uniqueSuffix()
+	err := sharedPool.WithTenantTx(ctx, id, func(tx pgx.Tx) error {
+		const insert = `INSERT INTO tenants (id, name, slug, plan) VALUES ($1, $2, $3, $4)`
+		_, err := tx.Exec(ctx, insert, id, "Bare Tenant "+slug, slug, "starter")
+		return err
+	})
+	require.NoError(t, err, "seed insert with only NOT NULL columns must succeed")
+
+	err = sharedPool.WithTenantReadTx(ctx, id, func(tx pgx.Tx) error {
+		got, err := r.GetByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		assert.Equal(t, "", got.LegalName)
+		assert.Equal(t, "", got.TradeName)
+		assert.Equal(t, "", got.TaxNo)
+		assert.Equal(t, "", got.TaxOffice)
+		assert.Equal(t, "", got.MersisNo)
+		assert.Equal(t, "", got.Address.Line1)
+		assert.Equal(t, "", got.Address.City)
+		assert.Equal(t, "", got.Address.District)
+		assert.Equal(t, "", got.Address.PostalCode)
+		assert.Equal(t, "TR", got.Address.Country, "country has a NOT NULL DEFAULT 'TR'")
+		assert.Equal(t, "", got.Phone)
+		assert.Equal(t, "", got.ContactEmail)
+		return nil
+	})
+	require.NoError(t, err, "GetByID must not fail scanning a tenant with NULL optional text columns")
+}

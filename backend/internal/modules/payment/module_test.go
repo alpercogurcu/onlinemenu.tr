@@ -15,6 +15,7 @@ import (
 	identitypub "onlinemenu.tr/internal/modules/identity/public"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
+	platformotel "onlinemenu.tr/internal/platform/otel"
 )
 
 // stubCashierPinService/stubMembershipResolver are zero-value structs that
@@ -64,6 +65,10 @@ func (stubPersonReader) GetByKeycloakSub(context.Context, string) (identitypub.P
 // identitypub.CashierPinService/MembershipResolver and *auth.ContextTokenSigner
 // were added for ADR-DATA-008 PIN akışı (CashSessionPinService): this module
 // now depends one-way on identity_public.
+//
+// *platformotel.Metrics was added when the fiscal reconciler started feeding
+// the onlinemenu_fiscal_submissions_overdue gauge (Task 7) — its Set* methods
+// are nil-receiver-safe, so a nil pointer here is enough for graph resolution.
 func supplyExternals(cfg FiscalConfig) fx.Option {
 	return fx.Supply(
 		cfg,
@@ -71,6 +76,7 @@ func supplyExternals(cfg FiscalConfig) fx.Option {
 		(*redis.Client)(nil),
 		(*auth.Engine)(nil),
 		(*auth.ContextTokenSigner)(nil),
+		(*platformotel.Metrics)(nil),
 		zap.NewNop(),
 		chi.NewMux(),
 		fx.Annotate(stubCashierPinService{}, fx.As(new(identitypub.CashierPinService))),

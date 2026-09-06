@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useBreadcrumbLabel } from "@/components/layouts/dynamic-breadcrumb"
 import {
   useCategories,
   useCreateProduct,
@@ -93,6 +94,9 @@ export function ProductEditor({ productId }: ProductEditorProps) {
 
   const isNew = !productId
   const { data: product, isLoading: productLoading } = useProduct(productId ?? "")
+  // Lets the shared breadcrumb show the product's own name ("Adana Kebap")
+  // as the last crumb instead of the raw UUID route param.
+  useBreadcrumbLabel(product?.name)
   const { data: categoriesData } = useCategories()
   const categories = categoriesData ?? []
   const { data: menusData } = useMenus()

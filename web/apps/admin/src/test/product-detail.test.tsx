@@ -121,6 +121,7 @@ const push = vi.fn()
 const replace = vi.fn()
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace, back: vi.fn() }),
+  usePathname: () => `/catalog/products/${PRODUCT.id}`,
 }))
 
 // toast is called both as a plain function (the undoable "group removed"

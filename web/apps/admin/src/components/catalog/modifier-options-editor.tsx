@@ -58,6 +58,7 @@ interface ModifierOptionsEditorProps {
 export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
   const t = useTranslations("catalog.group")
   const tGroups = useTranslations("catalog.groups")
+  const tCommon = useTranslations("catalog.common")
   const qc = useQueryClient()
   const { data } = useModifiers(groupId ?? "")
   const createModifier = useCreateModifier()
@@ -219,6 +220,7 @@ export function ModifierOptionsEditor({ groupId }: ModifierOptionsEditorProps) {
         }}
         title={t("options.deleteConfirm")}
         confirmLabel={t("options.delete")}
+        cancelLabel={tCommon("cancel")}
         destructive
         onConfirm={handleDelete}
         onError={() => toast.error(tGroups("toast.error"))}

@@ -249,7 +249,6 @@
     },
     "product": {
       "new": "Yeni ürün",
-      "edit": "Ürünü düzenle",
       "notFound": "Ürün bulunamadı.",
       "summary": "{category} · {price} · %{rate} KDV · {groups} seçenek grubu · {menus} menüde",
       "sections": {
@@ -274,7 +273,6 @@
       },
       "groups": {
         "title": "Seçenek grupları",
-        "subtitle": "Bu ürüne uygulanan seçenek gruplarını yönetin.",
         "required": "Zorunlu",
         "optional": "Opsiyonel",
         "single": "Tek seçim",
@@ -315,8 +313,7 @@
         "name": "Ad",
         "rule": "Kural",
         "options": "Seçenekler",
-        "products": "Ürünler",
-        "required": "Zorunlu"
+        "products": "Ürünler"
       },
       "rule": {
         "single": "Tek seçim",
@@ -350,9 +347,7 @@
       "summary": "{options} seçenek · {products} üründe kullanılıyor",
       "sections": {
         "rule": "Kural",
-        "options": "Seçenekler",
-        "preview": "Müşteri böyle görür",
-        "usedBy": "Bu grubu kullanan ürünler"
+        "options": "Seçenekler"
       },
       "fields": {
         "name": "Grup adı",
@@ -402,9 +397,10 @@
       }
     },
     "common": {
-      "loading": "Yükleniyor…",
       "retry": "Yeniden dene",
-      "loadFailed": "Yüklenemedi."
+      "loadFailed": "Yüklenemedi.",
+      "cancel": "Vazgeç",
+      "rowActions": "{name} için işlemler"
     }
   },
   "storefront": {

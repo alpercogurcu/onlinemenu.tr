@@ -88,4 +88,18 @@ describe("MoneyInput", () => {
 
     expect(input.value).toBe("12,")
   })
+  it("passes aria-invalid and aria-describedby through to the input", () => {
+    render(
+      <MoneyInput
+        id="price"
+        valueKurus={null}
+        onChangeKurus={() => {}}
+        aria-invalid={true}
+        aria-describedby="price-error"
+      />,
+    )
+    const input = screen.getByRole("textbox")
+    expect(input).toHaveAttribute("aria-invalid", "true")
+    expect(input).toHaveAttribute("aria-describedby", "price-error")
+  })
 })

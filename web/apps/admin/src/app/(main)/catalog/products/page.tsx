@@ -2,6 +2,7 @@
 
 import { Plus, ShoppingBag } from "lucide-react"
 import { useTranslations } from "next-intl"
+import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
@@ -275,7 +276,13 @@ export default function ProductsPage() {
                       onClick={() => goToDetail(product)}
                     >
                       <TableCell>
-                        <div className="font-medium">{product.name}</div>
+                        <Link
+                          href={`/catalog/products/${product.id}`}
+                          className="font-medium hover:underline focus-visible:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {product.name}
+                        </Link>
                         {product.description ? (
                           <div className="text-sm text-muted-foreground">{product.description}</div>
                         ) : null}
@@ -341,6 +348,7 @@ export default function ProductsPage() {
         title={t("deleteConfirm.title", { name: deleteTarget?.name ?? "" })}
         description={t("deleteConfirm.body")}
         confirmLabel={t("deleteConfirm.confirm")}
+        cancelLabel={tCommon("cancel")}
         destructive
         onConfirm={handleDelete}
         secondaryAction={{

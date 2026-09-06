@@ -205,7 +205,9 @@ describe("ProductsPage", () => {
     render(<ProductsPage />, { wrapper: Wrapper })
     await screen.findByText("Latte")
 
-    fireEvent.click(screen.getByText("Latte"))
+    // The name itself is a real <Link> (keyboard path); clicking elsewhere on
+    // the row is the mouse convenience path that goes through router.push.
+    fireEvent.click(screen.getByRole("row", { name: /Latte/ }))
 
     expect(push).toHaveBeenCalledWith("/catalog/products/p1")
   })
@@ -276,5 +278,11 @@ describe("ProductsPage", () => {
       }),
     )
     expect(del).not.toHaveBeenCalled()
+  })
+  it("exposes the product name as a keyboard-reachable link to the detail route", async () => {
+    render(<ProductsPage />, { wrapper: Wrapper })
+
+    const link = await screen.findByRole("link", { name: "Latte" })
+    expect(link).toHaveAttribute("href", expect.stringMatching(/^\/catalog\/products\/.+/))
   })
 })

@@ -21,7 +21,11 @@ interface ConfirmDialogProps {
   title: string
   description?: ReactNode
   confirmLabel: string
-  cancelLabel?: string
+  // Required — Türkçe UI yalnız next-intl üzerinden gelir (see CLAUDE.md's
+  // dil kuralı), so this can't default to a hardcoded string; every call
+  // site must pass its own translated label (catalog.common.cancel or an
+  // equivalent).
+  cancelLabel: string
   destructive?: boolean
   onConfirm: () => Promise<void> | void
   onError?: (err: unknown) => void
@@ -41,7 +45,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
-  cancelLabel = "Vazgeç",
+  cancelLabel,
   destructive = false,
   onConfirm,
   onError,

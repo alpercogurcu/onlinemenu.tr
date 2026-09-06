@@ -26,6 +26,7 @@ describe("ConfirmDialog", () => {
         onOpenChange={onOpenChange}
         title={'"Kola" silinsin mi?'}
         confirmLabel="Sil"
+        cancelLabel="Vazgeç"
         destructive
         onConfirm={onConfirm}
       />,
@@ -61,6 +62,7 @@ describe("ConfirmDialog", () => {
         onOpenChange={onOpenChange}
         title="Silinsin mi?"
         confirmLabel="Sil"
+        cancelLabel="Vazgeç"
         destructive
         onConfirm={onConfirm}
         onError={onError}
@@ -95,6 +97,7 @@ describe("ConfirmDialog", () => {
         onOpenChange={onOpenChange}
         title="Silinsin mi?"
         confirmLabel="Sil"
+        cancelLabel="Vazgeç"
         destructive
         onConfirm={onConfirm}
       />,
@@ -143,6 +146,7 @@ describe("ConfirmDialog", () => {
         onOpenChange={onOpenChange}
         title={'"Kola" silinsin mi?'}
         confirmLabel="Sil"
+        cancelLabel="Vazgeç"
         destructive
         onConfirm={onConfirm}
         secondaryAction={{ label: "Satıştan kaldır", onClick: secondaryOnClick }}
@@ -163,6 +167,7 @@ describe("ConfirmDialog", () => {
         onOpenChange={vi.fn()}
         title="Sil?"
         confirmLabel="Sil"
+        cancelLabel="Vazgeç"
         onConfirm={vi.fn()}
       />,
     )
@@ -178,6 +183,7 @@ describe("ConfirmDialog", () => {
         title={'"Kola" silinsin mi?'}
         description="Bu işlem geri alınamaz."
         confirmLabel="Sil"
+        cancelLabel="Vazgeç"
         onConfirm={vi.fn()}
       />,
     )

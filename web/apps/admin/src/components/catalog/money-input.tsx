@@ -11,6 +11,8 @@ interface MoneyInputProps {
   onChangeKurus: (value: number | null) => void
   allowNegative?: boolean
   placeholder?: string
+  "aria-invalid"?: boolean
+  "aria-describedby"?: string
 }
 
 // parseLiraToKurus (lib/money.ts) always rejects a leading "-" — a price
@@ -36,7 +38,15 @@ function display(valueKurus: number | null): string {
 // is shown as typed (so "12," is not clobbered into "12,00" mid-keystroke);
 // on blur it snaps back to the canonical formatKurusForInput rendering of
 // whatever valueKurus the parent settled on.
-export function MoneyInput({ id, valueKurus, onChangeKurus, allowNegative = false, placeholder }: MoneyInputProps) {
+export function MoneyInput({
+  id,
+  valueKurus,
+  onChangeKurus,
+  allowNegative = false,
+  placeholder,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
+}: MoneyInputProps) {
   const [text, setText] = React.useState(() => display(valueKurus))
   const isEditingRef = React.useRef(false)
 
@@ -50,6 +60,8 @@ export function MoneyInput({ id, valueKurus, onChangeKurus, allowNegative = fals
       id={id}
       inputMode="decimal"
       placeholder={placeholder}
+      aria-invalid={ariaInvalid}
+      aria-describedby={ariaDescribedBy}
       value={text}
       onChange={(e) => {
         isEditingRef.current = true

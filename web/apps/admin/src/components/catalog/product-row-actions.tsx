@@ -32,6 +32,7 @@ export function ProductRowActions({
   onDeleteRequest,
 }: ProductRowActionsProps) {
   const t = useTranslations("catalog.products.actions")
+  const tCommon = useTranslations("catalog.common")
 
   return (
     <DropdownMenu>
@@ -39,7 +40,7 @@ export function ProductRowActions({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={`${product.name} için işlemler`}
+          aria-label={tCommon("rowActions", { name: product.name })}
           onClick={(e) => e.stopPropagation()}
         >
           <MoreVertical className="size-4" />

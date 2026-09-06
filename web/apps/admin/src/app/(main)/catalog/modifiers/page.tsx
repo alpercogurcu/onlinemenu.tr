@@ -100,6 +100,7 @@ function formatRule(group: ModifierGroup, t: RuleT): string {
 export default function ModifiersPage() {
   const t = useTranslations("catalog.groups")
   const tGroup = useTranslations("catalog.group")
+  const tCommon = useTranslations("catalog.common")
   const router = useRouter()
 
   const { data, isLoading } = useModifierGroups()
@@ -186,7 +187,7 @@ export default function ModifiersPage() {
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" aria-label={`${group.name} için işlemler`}>
+                          <Button variant="ghost" size="icon" aria-label={tCommon("rowActions", { name: group.name })}>
                             <MoreVertical className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -223,6 +224,7 @@ export default function ModifiersPage() {
           count: deleteTarget ? (productCounts[deleteTarget.id] ?? 0) : 0,
         })}
         confirmLabel={t("deleteConfirm.confirm")}
+        cancelLabel={tCommon("cancel")}
         destructive
         onConfirm={handleDelete}
       />

@@ -40,6 +40,7 @@ interface ModifierGroupEditorProps {
 export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
   const t = useTranslations("catalog.group")
   const tGroups = useTranslations("catalog.groups")
+  const tCommon = useTranslations("catalog.common")
   const router = useRouter()
   const isNew = groupId === null
 
@@ -262,6 +263,7 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
         title={tGroups("deleteConfirm.title")}
         description={tGroups("deleteConfirm.body", { count: productIds.length })}
         confirmLabel={tGroups("deleteConfirm.confirm")}
+        cancelLabel={tCommon("cancel")}
         destructive
         onConfirm={handleDelete}
       />

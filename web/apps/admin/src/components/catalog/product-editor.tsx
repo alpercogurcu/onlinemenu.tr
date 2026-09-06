@@ -101,6 +101,7 @@ interface ProductEditorProps {
 export function ProductEditor({ productId }: ProductEditorProps) {
   const t = useTranslations("catalog.product")
   const tProducts = useTranslations("catalog.products")
+  const tCommon = useTranslations("catalog.common")
   const router = useRouter()
 
   const isNew = !productId
@@ -406,6 +407,7 @@ export function ProductEditor({ productId }: ProductEditorProps) {
           title={tProducts("deleteConfirm.title", { name: values.name })}
           description={tProducts("deleteConfirm.body")}
           confirmLabel={tProducts("deleteConfirm.confirm")}
+          cancelLabel={tCommon("cancel")}
           destructive
           onConfirm={handleDelete}
           onError={() => toast.error(tProducts("toast.error"))}

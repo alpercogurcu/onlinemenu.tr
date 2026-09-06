@@ -250,6 +250,7 @@
     "product": {
       "new": "Yeni ürün",
       "edit": "Ürünü düzenle",
+      "notFound": "Ürün bulunamadı.",
       "summary": "{category} · {price} · %{rate} KDV · {groups} seçenek grubu · {menus} menüde",
       "sections": {
         "basics": "Temel bilgiler",

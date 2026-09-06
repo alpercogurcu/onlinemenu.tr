@@ -36,7 +36,10 @@ const CATEGORY: Category = {
 }
 
 const PRODUCT: Product = {
-  id: "prod-1",
+  // A realistic UUID — ProductEditor now rejects a non-UUID id client-side
+  // (see the notFound test below), so the "normal edit" fixture must look
+  // like a real route param.
+  id: "bbbbbbbb-0000-0000-0000-000000000001",
   tenant_id: TENANT,
   branch_id: null,
   category_id: CATEGORY.id,
@@ -97,10 +100,17 @@ const post = vi.fn()
 const put = vi.fn()
 const del = vi.fn()
 
+// A well-formed but non-existent id — the backend answers 404, distinct
+// from MALFORMED_ID below (which never reaches the API at all).
+const NOT_FOUND_ID = "cccccccc-0000-0000-0000-000000000404"
+const MALFORMED_ID = "not-a-uuid"
+
 vi.mock("@/lib/api", () => ({
   default: {
     get: (url: string) => {
       if (url === `/api/v1/catalog/products/${PRODUCT.id}`) return Promise.resolve({ data: PRODUCT })
+      if (url === `/api/v1/catalog/products/${NOT_FOUND_ID}`)
+        return Promise.reject({ isAxiosError: true, response: { status: 404 }, message: "Not Found" })
       if (url === "/api/v1/catalog/categories") return Promise.resolve({ data: [CATEGORY] })
       if (url === "/api/v1/catalog/menus") return Promise.resolve({ data: [MENU] })
       if (url === `/api/v1/catalog/menus/${MENU.id}/items`) return Promise.resolve({ data: menuItems })
@@ -192,6 +202,24 @@ describe("ProductEditor", () => {
     expect(screen.getByLabelText("Satışta")).toBeChecked()
   })
 
+  it("shows a not-found state (no delete button, no form) when the product 404s", async () => {
+    renderEditor({ productId: NOT_FOUND_ID })
+
+    expect(await screen.findByText("Ürün bulunamadı.")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Ad *")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Sil" })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Vazgeç" }))
+    expect(push).toHaveBeenCalledWith("/catalog/products")
+  })
+
+  it("shows a not-found state for a malformed (non-UUID) id without calling the API", async () => {
+    renderEditor({ productId: MALFORMED_ID })
+
+    expect(await screen.findByText("Ürün bulunamadı.")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Ad *")).not.toBeInTheDocument()
+  })
+
   it("blocks save and shows an inline error when the name is cleared", async () => {
     renderEditor()
 
@@ -215,6 +243,23 @@ describe("ProductEditor", () => {
       "/api/v1/catalog/products",
       expect.objectContaining({ name: "Yeni Ürün", price_amount: 15000 }),
     )
+  })
+
+  it("does not prompt the unsaved-changes dialog for Vazgeç right after a successful save", async () => {
+    renderEditor()
+
+    fireEvent.change(await screen.findByLabelText("Ad *"), { target: { value: "Adana Kebap (Büyük)" } })
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    // The dirty baseline resets from the saved body immediately — it must
+    // not wait on the products/{id} refetch that mutateAsync's onSuccess
+    // kicks off, or Vazgeç would still see the form as dirty right after.
+    await waitFor(() => expect(put).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole("button", { name: "Vazgeç" }))
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+    expect(push).toHaveBeenCalledWith("/catalog/products")
   })
 
   it("shows the live base/tax hint for a 10% rate", async () => {

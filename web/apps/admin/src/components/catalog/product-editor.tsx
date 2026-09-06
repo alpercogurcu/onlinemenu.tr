@@ -1,6 +1,7 @@
 "use client"
 
 import { useQueries } from "@tanstack/react-query"
+import axios from "axios"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
@@ -31,6 +32,12 @@ import {
 import api from "@/lib/api"
 import { formatKurus } from "@/lib/money"
 import { TAX_RATE_OPTIONS, UNIT_OPTIONS, type MenuItem, type Product } from "@/types"
+
+// Route params are free-form strings — a stray/malformed /catalog/products/{id}
+// (typo'd link, stale bookmark) should render the not-found state below
+// immediately, without even firing the GET, rather than a raw 4xx from the
+// backend or an empty form pretending to be a real product.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const emptyValues: ProductFormValues = {
   name: "",
@@ -93,7 +100,19 @@ export function ProductEditor({ productId }: ProductEditorProps) {
   const router = useRouter()
 
   const isNew = !productId
-  const { data: product, isLoading: productLoading } = useProduct(productId ?? "")
+  // A malformed id skips the network call entirely (useProduct("") is
+  // disabled) — notFound below then fires on this instead of waiting for a
+  // response.
+  const invalidId = !isNew && productId !== undefined && !UUID_RE.test(productId)
+  const {
+    data: product,
+    isLoading: productLoading,
+    isError: productIsError,
+    error: productError,
+  } = useProduct(invalidId ? "" : (productId ?? ""))
+  const notFound =
+    !isNew &&
+    (invalidId || (productIsError && axios.isAxiosError(productError) && productError.response?.status === 404))
   // Lets the shared breadcrumb show the product's own name ("Adana Kebap")
   // as the last crumb instead of the raw UUID route param.
   useBreadcrumbLabel(product?.name)
@@ -213,6 +232,22 @@ export function ProductEditor({ productId }: ProductEditorProps) {
       } else {
         await updateProduct.mutateAsync({ id: productId as string, ...body })
         toast.success(tProducts("toast.updated"))
+        // Reset the dirty baseline from what was actually just saved, right
+        // away — waiting for the refetch to re-seed it would leave isDirty
+        // true (and "Vazgeç" popping the unsaved-changes dialog) for however
+        // long that request takes.
+        const saved: ProductFormValues = {
+          name: body.name,
+          categoryId: body.category_id,
+          unit: body.unit,
+          description: body.description,
+          priceKurus: body.price_amount,
+          taxRateBps: body.tax_rate_bps,
+          sortOrder: body.sort_order,
+          isActive: body.is_active,
+        }
+        setValues(saved)
+        setBaseline(saved)
       }
     } catch {
       toast.error(tProducts("toast.error"))
@@ -249,6 +284,17 @@ export function ProductEditor({ productId }: ProductEditorProps) {
       <div className="space-y-4">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-64 w-full" />
+      </div>
+    )
+  }
+
+  if (notFound) {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-destructive">{t("notFound")}</p>
+        <Button type="button" variant="outline" onClick={() => router.push("/catalog/products")}>
+          {t("cancel")}
+        </Button>
       </div>
     )
   }

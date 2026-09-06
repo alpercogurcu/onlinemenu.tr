@@ -90,12 +90,30 @@ const SALE_DETAILS: SaleDetails = {
   ],
 }
 
-function mockRoutes() {
+// axiosError builds a minimal object shaped like an AxiosError — enough for
+// `axios.isAxiosError` (which only checks the `isAxiosError` marker at
+// runtime) and for `err.response?.status` to resolve, without pulling in
+// axios's own error constructor.
+function axiosError(status: number): unknown {
+  return {
+    isAxiosError: true,
+    message: `Request failed with status code ${status}`,
+    response: { status, data: { error: "failed", code: "x" } },
+  }
+}
+
+// `reportError`, when set, makes the sale-details route reject instead of
+// resolve — used by the I1 error-state tests below. Every other route keeps
+// resolving normally.
+function mockRoutes(reportError?: { status: number }) {
   get.mockImplementation((url: string) => {
     if (url === `/tenants/${TENANT_ID}/branches/`) {
       return Promise.resolve({ data: [{ id: BRANCH_ID, name: "Merkez Şube" }] })
     }
     if (url === "/api/v1/pos/reports/sale-details") {
+      if (reportError) {
+        return Promise.reject(axiosError(reportError.status))
+      }
       return Promise.resolve({ data: SALE_DETAILS })
     }
     if (url === "/api/v1/pos/checks") {
@@ -164,6 +182,40 @@ describe("DashboardClient", () => {
       const [, lastConfig] = reportCallsAfter[reportCallsAfter.length - 1] as [string, { params: { from: string; to: string } }]
       expect(lastConfig.params.from).not.toBe(firstConfig.params.from)
     })
+  })
+
+  // I1: a 5xx-shaped rejection must render an explicit error + retry, never
+  // fall through to the success layout with `data === undefined` (which
+  // would otherwise read as "0 adisyon" — a quiet, wrong day-end number).
+  it("shows an error message and retry button when the report request fails", async () => {
+    get.mockReset()
+    mockRoutes({ status: 500 })
+    loginAs([SHIFT_MANAGER_ID])
+    render(<DashboardClient />, { wrapper: Wrapper })
+
+    expect(await screen.findByText("Satış özeti yüklenemedi.")).toBeInTheDocument()
+    expect(screen.queryByText("₺280,00")).not.toBeInTheDocument()
+    expect(screen.queryByText("Nakit")).not.toBeInTheDocument()
+
+    const callsBefore = get.mock.calls.filter(([url]) => url === "/api/v1/pos/reports/sale-details").length
+    fireEvent.click(screen.getByRole("button", { name: "Yeniden dene" }))
+
+    await waitFor(() => {
+      const callsAfter = get.mock.calls.filter(([url]) => url === "/api/v1/pos/reports/sale-details").length
+      expect(callsAfter).toBeGreaterThan(callsBefore)
+    })
+  })
+
+  // I1: a 403 on the report call gets the existing permission message, not
+  // the generic failure message — the operator sees why, not just that.
+  it("shows the permission message when the report request 403s", async () => {
+    get.mockReset()
+    mockRoutes({ status: 403 })
+    loginAs([SHIFT_MANAGER_ID])
+    render(<DashboardClient />, { wrapper: Wrapper })
+
+    expect(await screen.findByText("Bu rapor için Shift Müdürü yetkisi gerekir.")).toBeInTheDocument()
+    expect(screen.queryByText("Satış özeti yüklenemedi.")).not.toBeInTheDocument()
   })
 
   // Regression for the stale-past-midnight bug: a dashboard left open on

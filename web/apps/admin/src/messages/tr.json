@@ -235,6 +235,10 @@
     "averageCheckHint": "Kapanan adisyon başına ortalama",
     "cancellations": "İptal",
     "cancellationsHint": "{count} adisyon",
+    "report": {
+      "loadFailed": "Satış özeti yüklenemedi.",
+      "retry": "Yeniden dene"
+    },
     "period": {
       "label": "Dönem",
       "today": "Bugün",
@@ -252,6 +256,7 @@
       "count": "Adet",
       "total": "Tutar",
       "voidedTitle": "İptal edilen ödemeler",
+      "windowNote": "Ödemeler ödeme zamanına, satışlar adisyonun kapanış zamanına göre gruplanır; gün sınırında iki panel farklı olabilir.",
       "method": {
         "label": "Yöntem",
         "cash": "Nakit",

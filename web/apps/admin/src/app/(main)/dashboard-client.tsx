@@ -1,5 +1,6 @@
 "use client"
 
+import axios from "axios"
 import { useTranslations } from "next-intl"
 import { useEffect, useMemo, useState } from "react"
 import {
@@ -17,6 +18,7 @@ import { PaymentsTable } from "@/components/dashboard/payments-table"
 import { PeriodPicker } from "@/components/dashboard/period-picker"
 import { SalesCards } from "@/components/dashboard/sales-cards"
 import { TaxTable } from "@/components/dashboard/tax-table"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -141,6 +143,17 @@ export default function DashboardClient() {
         <p className="text-sm text-muted-foreground">{t("noPermission")}</p>
       ) : branchId === "" ? (
         <p className="text-sm text-muted-foreground">{t("noBranch")}</p>
+      ) : report.isError ? (
+        axios.isAxiosError(report.error) && report.error.response?.status === 403 ? (
+          <p className="text-sm text-muted-foreground">{t("noPermission")}</p>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-destructive">{t("report.loadFailed")}</p>
+            <Button variant="outline" size="sm" onClick={() => report.refetch()}>
+              {t("report.retry")}
+            </Button>
+          </div>
+        )
       ) : (
         <>
           <SalesCards data={report.data} isLoading={report.isLoading} />
@@ -183,8 +196,9 @@ export default function DashboardClient() {
               <CardHeader>
                 <CardTitle>{t("payments.title")}</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <PaymentsTable payments={report.data?.payments ?? []} />
+                <p className="text-xs text-muted-foreground">{t("payments.windowNote")}</p>
               </CardContent>
             </Card>
 

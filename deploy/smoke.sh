@@ -15,7 +15,7 @@ status=0
 
 check() {
   local name="$1" url="$2"
-  if curl -fsS -o /dev/null "$url"; then
+  if curl -fsS --max-time 10 --connect-timeout 5 -o /dev/null "$url"; then
     echo "OK   ${name} (${url})"
   else
     echo "FAIL ${name} (${url})"

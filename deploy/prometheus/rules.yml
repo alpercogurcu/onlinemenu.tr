@@ -41,3 +41,19 @@ groups:
             beklenen sonucu almadan 5 dakikadır beklemede (şu an {{ $value }}
             adet). Cihazın satış ekranını ve webhook ulaşılabilirliğini kontrol
             edin — ADR-FISCAL-002 uzlaştırma penceresi.
+
+      - alert: OutboxMetricMissing
+        expr: absent(onlinemenu_outbox_pending)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox metriği 15 dakikadır yok"
+          description: >-
+            onlinemenu_outbox_pending serisi 15 dakikadır hiç gelmiyor —
+            OutboxBacklogHigh kuralı bu durumda asla tetiklenemez (var
+            olmayan bir seri `>` karşılaştırmasını hiç geçmez). Genelde
+            OUTBOX_MIGRATOR_DSN boş bırakıldığında oluşur (dispatcher devre
+            dışı kalır, bkz. backend/internal/platform/outbox/dispatcher.go)
+            — desteklenen prod compose'da bu DSN zorunlu olduğundan
+            gerçekleşmez, ama compose dışı bir dağıtımda kontrol edin.

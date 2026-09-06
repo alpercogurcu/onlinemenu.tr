@@ -1,0 +1,1 @@
+ALTER TABLE order_items DROP CONSTRAINT order_items_tax_rate_bps_check;

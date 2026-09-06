@@ -364,6 +364,28 @@ export interface Employee {
 }
 
 // Identity
+// Mirrors membershipResponse in
+// backend/internal/modules/identity/http/membership_handler.go —
+// person_name/person_email/role_name are joined server-side so the user
+// list never fans out one request per row.
+export interface Membership {
+  id: string
+  person_id: string
+  person_name: string
+  person_email: string
+  tenant_id: string
+  branch_id?: string
+  role_id: string
+  role_name: string
+  status: MembershipStatus
+}
+
+export type MembershipStatus = "active" | "suspended" | "terminated"
+
+export interface MembershipListResponse {
+  memberships: Membership[]
+}
+
 export interface Me {
   id: string
   keycloak_sub: string

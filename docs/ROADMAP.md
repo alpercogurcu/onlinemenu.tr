@@ -36,38 +36,38 @@ Türkiye pazarı için modüler, çok-kiracılı (multi-tenant) bir POS & işlet
 
 ## Faz 0 — Proje İskeleti (Hafta 1–2)
 
-- [ ] Repo yapısı, `go-arch-lint`, `golangci-lint`, CI pipeline
-- [ ] `deploy/docker-compose.dev.yml` — tüm bağımlılıklar ayağa
-- [ ] SOPS + age bootstrap secret şifrelemesi (`.env.sops`)
-- [ ] `uber-go/fx` ile modül wiring iskeleti (`cmd/api/main.go`)
-- [ ] Graceful shutdown: `signal.NotifyContext` + `errgroup` (`cmd/api`, `cmd/edge`)
-- [ ] `internal/platform/{db, eventbus, auth, otel, vault}` cross-cutting katmanlar
-- [ ] Postgres RLS altyapısı + sızıntı testi
-- [ ] `goleak` test suite entegrasyonu (`TestMain`)
-- [ ] `identity` + `tenant` modülleri (CRUD + Keycloak sync)
-- [ ] İlk event sözleşmeleri (`tenant.created.v1`, `branch.created.v1`)
-- [ ] `ko` ile CI container build pipeline
-- [ ] `docs/` — bu dört dosya
+- [x] Repo yapısı, `go-arch-lint`, `golangci-lint`, CI pipeline
+- [x] `deploy/docker-compose.dev.yml` — tüm bağımlılıklar ayağa (prod compose: `docker-compose.prod.yml`, 2026-08)
+- [ ] SOPS + age bootstrap secret şifrelemesi (`.env.sops`) — şablon var (`deploy/.env.prod.example`), şifreli dosya ilk prod kurulumunda üretilecek
+- [x] `uber-go/fx` ile modül wiring iskeleti (`cmd/api/main.go`)
+- [x] Graceful shutdown: `signal.NotifyContext` + `errgroup` (`cmd/api`, `cmd/edge`)
+- [x] `internal/platform/{db, eventbus, auth, otel, vault}` cross-cutting katmanlar
+- [x] Postgres RLS altyapısı + sızıntı testi (`task backend:test:rls-leak`)
+- [x] `goleak` test suite entegrasyonu (`TestMain`)
+- [x] `identity` + `tenant` modülleri (CRUD + Keycloak sync, personel daveti ADR-AUTH-003)
+- [x] İlk event sözleşmeleri (`backend/contracts/events/`)
+- [x] `ko` ile CI container build pipeline
+- [x] `docs/` — bu dört dosya
 
 ---
 
 ## Faz 1 — Satılabilir MVP (Hafta 3–10)
 
-- [ ] `party` — tedarikçi & müşteri (cari)
-- [ ] `catalog` — menü, ürün, varyant/modifier, fiyat listesi, şube görünürlüğü
-- [ ] `hr-core` — personel özlüğü, şube ataması
-- [ ] `pos` — masa planı, adisyon, sipariş, mutfak ekranı (WebSocket), kasa kapatma
-- [ ] `payment` — nakit + POS terminali (Ingenico/Verifone)
-- [ ] `inventory` — depo, stok seviyeleri, sevkiyat, şube→depo yönlendirme
-- [ ] `billing` — EDM provider (mevcut Go kodu), Paraşüt/Mikro/Logo stub'lar
-- [ ] `edge-sync` — local server binary, outbox/inbox, sync protokolü
-- [ ] Admin paneli (Next.js 16) — temel yönetim ekranları
-- [ ] POS istemcisi (Wails v2 + React) — masa, sipariş, kasa akışı
+- [x] `party` — tedarikçi & müşteri (cari) — temel CRUD; derinleşme Faz 2
+- [x] `catalog` — menü, ürün, varyant/modifier, fiyat listesi, şube görünürlüğü
+- [x] `hr-core` — personel özlüğü, şube ataması
+- [x] `pos` — masa planı, adisyon, sipariş, mutfak ekranı (WebSocket), kasa oturumu (ADR-DATA-008), gün sonu satış özeti (`/reports/sale-details`, 2026-09)
+- [x] `payment` — nakit + ÖKC (Token/Beko X30TR, ADR-FISCAL-001); Ingenico/Verifone doğrudan terminal entegrasyonu yok (ÖKC üzerinden)
+- [ ] `inventory` — depo, stok seviyeleri, sevkiyat, şube→depo yönlendirme (modül ve 8 migration var; pilot kapsamı dışında, derinlik doğrulanmadı)
+- [ ] `billing` — EDM adapter + mock var; Paraşüt/Mikro/Logo stub'ları yok (Faz 2)
+- [ ] `edge-sync` — iskelet var; **2026-07-31 kararıyla Faz 2'ye ertelendi** (pilot online-only)
+- [x] Admin paneli (Next.js 16) — yönetim ekranları, KDS, dashboard gerçek rapor
+- [x] POS istemcisi (Wails v2 + React) — masa, sipariş, kasa akışı, PIN geçişi, hareket defteri
 - [x] `storefront` — QR dine-in online sipariş: public menü, misafir oturumu,
       sipariş → KDS akışı, admin QR yönetimi, müşteri web uygulaması
       (`web/apps/menu`) — ADR-ARCH-006 (2026-08-05'te kapsama alındı; ödeme
       kasada, PayTR web ödemesi Faz 2'de bu modülün üstüne gelir)
-- [ ] k6 yük testi — 500 aktif POS simülasyonu
+- [ ] k6 yük testi — 500 aktif POS simülasyonu (senaryolar `backend/loadtest/` altında hazır; tam profil henüz yeterli donanımda koşulmadı)
 
 ---
 

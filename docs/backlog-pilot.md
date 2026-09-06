@@ -1,8 +1,9 @@
 # Pilot Takip Listesi — İlk Satışa Kadar
 
-> Oluşturma: 2026-07-31 · Kapsam: **online-only pilot** (tek şube, sabit internet, edge-sync yok)
+> Oluşturma: 2026-07-31 · Son büyük güncelleme: 2026-09-06 · Kapsam: **online-only pilot** (tek şube, tek kasa, sabit internet, edge-sync yok)
 > Repo'da Jira yok; kalıcı kayıt burada tutulur. Bir madde tamamlanınca bu dosyadan silinir.
 > Kardeş listeler: [backlog-fiscal.md](backlog-fiscal.md) · Referans: [lessons-from-odoo.md](lessons-from-odoo.md)
+> 2026-09-05/06 sprint planı ve kararları: [superpowers/plans/2026-09-05-pilot-mvp.md](superpowers/plans/2026-09-05-pilot-mvp.md)
 
 **Ürün kararı (2026-07-31):** offline-first ilk satışa girmiyor. Pilot müşteri sabit internetli,
 tek şubeli bir işletme olacak. `edge-sync` Faz 2'ye kalır; ROADMAP Faz 1'in "satılabilir MVP"
@@ -14,308 +15,95 @@ tanımı bu pilottan sonra tamamlanır.
 |---|---|
 | Sabit, güvenilir internet | `edge-sync` yok; bağlantı koparsa satış durur |
 | Tek şube | Zincir-geneli senaryolar test edilmedi |
-| **Tek kasa (tek para çekmecesi)** | ADR-DATA-008: kasa oturumu şube başına. İki çekmece tek sayıma inerse mutabakat anlamsızlaşır — birindeki fazla diğerindeki açığı gizler |
-| Marş kullanmayan segment tercih edilir | Üst segment oturarak servis marşı gerektirir (bkz. aşağıda); fast-food/kafe/paket servis gerektirmez |
-
-**Halihazırda çalışan:** satış omurgası uçtan uca test edilmiş
-(`internal/e2e/spine_test.go`: adisyon aç → sipariş → ödeme → ÖKC mali kayıt → settle → kapat),
-Token/Beko X30TR entegrasyonu gerçek, admin panelinde 29 sayfa, Wails POS istemcisi.
+| **Tek kasa (tek para çekmecesi)** | ADR-DATA-008: kasa oturumu şube başına. İki çekmece tek sayıma inerse mutabakat anlamsızlaşır |
+| Marş kullanmayan segment tercih edilir | Üst segment oturarak servis marşı gerektirir; fast-food/kafe/paket servis gerektirmez |
 
 ---
 
-## Sıra ve bağımlılıklar
+## Halihazırda çalışan (2026-09-06 itibarıyla)
 
-```
-1 WIP yeşil ──► 2 onboarding ──► 3 kasa oturumu ──► 4 gün sonu raporu
-                                        │
-                                        └──► (izin sözlüğü: madde 7'nin testi önce)
-5 deploy hedefi  ·  6 tenant test açığı  ·  7 izin wiring testi   → paralel, bağımsız
-8 Token sertifikasyon → dış bağımlılık, takvimi bizde değil
-```
-
-Madde 4 madde 3'e **bağımlı**: gün sonu raporunun nakit satırı kasa oturumunun açılış bakiyesini
-kullanır (`final_count = total + açılış + nakit_hareketi`). Paralel planlanamaz.
+- Satış omurgası uçtan uca test edilmiş (`internal/e2e/spine_test.go`): adisyon aç → sipariş → ödeme → ÖKC mali kayıt → settle → kapat. Token/Beko X30TR entegrasyonu gerçek.
+- Personel onboarding: admin panelden davet (ADR-AUTH-003), Keycloak Admin API, `settings/users` ekranı.
+- Kasa oturumu + kasiyer PIN (ADR-DATA-008): açılış/sayım/kapanış, nakit hareket kaydı **ve defteri** (`GET /cash-sessions/{id}/movements`), kasa açılmadan nakit satış reddi, eski oturum uyarı izleyicisi (15 dk / 20 sa, yalnız Warn log).
+- QR dine-in online sipariş (ARCH-006): public menü, misafir oturumu, müşteri uygulaması (`web/apps/menu`), admin QR yönetimi.
+- KDS: canlı WebSocket kanban, snapshot N+1 giderildi, istemci tarafı toplu sipariş detayı (`GET /pos/orders?ids=`).
+- **Gün sonu satış özeti**: `GET /api/v1/pos/reports/sale-details` (satış/iptal ayrı, KDV kırılımı, gün ve kaynak kırılımı, ödeme yöntemi × durum, kasa oturumları). Admin dashboard bu uçtan besleniyor; `pos.report.read` yalnız shift_manager + manager.
+- Prod: `deploy/docker-compose.prod.yml` (tam stack), Postgres bootstrap ve compose-içi yedekleme (ADR-OPS-001), Keycloak SMTP şablonu (`${SMTP_*}` realm import), `/healthz` + `/readyz`, outbox/fiscal-overdue gauge'ları + Prometheus alarm kuralları, `deploy/smoke.sh` (`task deploy:smoke`).
+- CI: lint (`GOTOOLCHAIN=go1.25.5` pinli), race'li testler, gosec/trivy, migration dry-run, admin/menu/pos-desktop test ve typecheck.
 
 ---
 
-## 1. WIP'i yeşile çek ve commit'le
+## Açık maddeler
 
-Çalışan ağaçta commit edilmemiş iş var ve derlenmiyor.
+### 1. Prod kurulumu — gerçek sunucuya ilk deploy
 
-- [ ] `role_tenant_guard_test.go` eksik import'ları (`path/filepath`, `golang-migrate/migrate/v4`)
-- [ ] `fiscalStatus.test.ts` bayat beklentisi — kod doğru (`fiscalStatus.ts:462-463` bilinçli yorum),
-      test "başka istasyonda" bekliyor, kod "başka işlemde" üretiyor
-- [x] ADR-SEC-005'e "000013 eki" bölümü yazıldı
-- [ ] `task backend:lint` yeşil — arch-lint refactor'ünün bittiğini bu doğrular
-- [ ] Alanlara göre gruplu commit (`main`, Jira kodsuz — kullanıcı onayı 2026-07-31)
+Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
 
-Bittiğinde `backlog-fiscal.md`'den şu iki madde silinir: *"memberships.tenant_id ↔ roles.tenant_id"*
-ve *"Custom rol API'sinde branch_scoped taşınmıyor"*.
+- [ ] Sunucu + ters proxy (TLS) kurulumu; `/readyz` ve `/healthz` dışarıya açılıyorsa rate-limit'e alınması (bkz. Task 7 review notu)
+- [ ] `.env.prod.sops` üretimi (SOPS/age), SMTP bilgileri dahil — şablon: `deploy/.env.prod.example`
+- [ ] `task deploy:smoke` ile canlı doğrulama
+- [ ] Vault: bugün yalnız Keycloak admin-client secret'ı Vault'tan okunuyor; DB/NATS/TokenX sırları `.env.sops` üzerinden düz env. Pilot için kabul; Faz 2'de dynamic secrets (CLAUDE.md düzeltildi)
+- [ ] Alertmanager / bildirim kanalı **yok** — `deploy/prometheus/rules.yml` kuralları tetiklense de kimseye ulaşmıyor (plan R6, ürün kararı bekliyor). Ek kural önerisi: `absent(onlinemenu_outbox_pending)` (dispatcher kapalıyken seri doğmuyor)
+- [ ] `deploy/prometheus/prometheus.yml` `external_labels` dev/prod paylaşımlı (`environment=development`) — prod için ayrıştırılmalı
+- [ ] SEC-005 deploy-öncesi/sonrası sorguları prod'da koşulmalı (bkz. backlog-fiscal.md)
 
-## 2. Personel onboarding zinciri — kopuk
+### 2. Personel onboarding — kapatılmamış açıklar
 
-**Bu satışa çıkmayı tek başına engelliyor: bugün sisteme yeni kasiyer eklenemiyor.**
+- [ ] **`persons.email` Keycloak ile senkron değil.** Realm yöneticisi e-postayı değiştirirse sonraki davet ikinci kullanıcı yaratıp `persons_email_idx` çakışmasıyla 500'e düşer
+- [ ] **Şube varlığı doğrulanmıyor.** `memberships.branch_id → branches` FK'sı modül izolasyonu için kaldırıldı; davet var olmayan şubeye membership yazabilir
+- [ ] SMTP prod'da fiilen zorunlu (şablonda var, gerçek değerler kurulumda girilecek)
 
-Doğrulanan durum:
-- `persons` tablosuna INSERT eden tek yol `PersonService.Create`; yalnızca **devre dışı**
-  `POST /persons`'tan çağrılıyor (`routes.go:64-67`, yorum satırı)
-- İlk Keycloak girişinde otomatik provizyon **yok** — `ListContexts` → `GetByKeycloakSub` →
-  `ErrNotFound` → hata. Yeni kullanıcı boş bağlam listesi değil, hata alıyor
-- `hr-core.CreateEmployee` `person_id` şart koşuyor: *"The person must already exist in the
-  identity module"*; membership de öyle
+### 3. Kasa oturumu — kalanlar
 
-> **Not — önceki değerlendirme düzeltmesi:** bu maddeyi başta "kısıtsız cross-tenant yüzey"
-> diye güvenlik açığı olarak işaretlemiştim. Yanlıştı; uçlar mount edilmiyor, açık delik yok.
-> Sorun güvenlik değil, **eksik yol**.
-
-- [x] **Davranış hatası düzeltildi** (`cf5066f`): kaydı olmayan özne artık 404 değil, boş liste + 200
-      alıyor. `ErrNotFound`'u yutmak burada güvenli — `GetByKeycloakSub` `WithAllTenantsReadTx`
-      altında koşuyor ve `persons_select`'in `all_tenants` dalı var, yani ErrNotFound gerçekten
-      "böyle kişi yok" demek, RLS'in gizlemesi değil.
-
-### 🔴 Otomatik provizyon bloklu — karar bekliyor
-
-Onaylanan çözüm (`/me/contexts` doğrulanmış claim'lerden person upsert'i) **uygulanabilir değil**:
-
-**Keycloak token'ı yalnızca `sub` taşıyor.** `platform/auth/keycloak_verifier.go` `Verify`'ın son
-satırı `return &KeycloakClaims{Sub: sub}, nil`; `KeycloakClaims` ve `Principal`'da Email/Name alanı
-yok. Bu unutulmuş değil, ADR-AUTH-001'de böyle yazılı, ve `deploy/keycloak/README.md` realm'in
-`profile`/`email` scope'larını bilinçli olarak tanımlamadığını söylüyor.
-Buna karşılık `persons.email` **NOT NULL** ve düz **UNIQUE** (`identity/000001`). Hiç görülmemiş bir
-özne için oraya yazılacak meşru bir değer yok; placeholder üretmek ikinci kayıtta unique çakışması
-verir ve ileride bildirim kodunun ulaşacağı sahte adresler doğurur.
-
-> **Elenen bir yol:** `persons_update` RLS'inde `all_tenants` dalı yok (`000008`, bilinçli).
-> Ama bu **engel değil**: `INSERT ... ON CONFLICT (keycloak_sub) DO NOTHING` + `SELECT` kullanılırsa
-> UPDATE hiç devreye girmez. `persons_insert` zaten `WITH CHECK (true)`, `persons_select`'in de
-> `all_tenants` dalı var. Yani **RLS'e dokunmaya gerek yok** — tek gerçek engel e-posta claim'i.
-
-**Karar (2026-08-01): admin panelden davet.** Elenen yollar:
-
-| | Yol | Neden elendi |
-|---|---|---|
-| ~~A~~ | ~~Realm'e `email`/`profile` scope'u; `Principal` claim'leri taşısın~~ | Personel önce bir kez girip boş ekran görmek, sonra tekrar girmek zorunda kalırdı. Ayrıca ADR-AUTH-001'in token şeklini değiştirmek gerekirdi |
-| ~~C~~ | ~~`persons.email` nullable + `persons_update` RLS'e all_tenants dalı~~ | RLS invaryantını (SEC-002) gereksiz yere zayıflatıyor; `DO NOTHING` yolu zaten çözüyordu |
-
-> **Önemli:** seçilen yol e-posta claim'ine **ihtiyaç duymuyor.** E-postayı davet formunda yönetici
-> giriyor; Keycloak kullanıcısını Admin API yaratıp `sub`'ı geri döndürüyor ve bağ davet anında
-> kuruluyor. Yani **token şekli değişmiyor, ADR-AUTH-001 dokunulmadan kalıyor.** A'nın işi B'nin ön
-> koşulu değildi — B onu tamamen atlıyor.
-
-**Akış:** yönetici ad + e-posta + şube + rol girer → backend Keycloak kullanıcısını yaratır (veya
-e-postayla mevcut olanı bulur) → dönen kullanıcı id'si `persons.keycloak_sub` olur → `persons` +
-`memberships` yazılır → Keycloak parola belirleme e-postasını gönderir → personel ilk girişinde
-doğrudan çalışır.
-
-**Kapsam:**
-- [x] **ADR-AUTH-003** — backend'in Keycloak'a yazma yetkisi, servis hesabı, sır yönetimi
-- [x] `platform/keycloak` (`8bd4138`) — client_credentials, token önbellekli/singleflight,
-      `AdminAPI` arayüzü üzerinden tüketiliyor (testler canlı Keycloak istemiyor).
-      **Silme metodu yok** — "DB hatasında Keycloak kullanıcısı asla silinmez" kuralı yapısal
-      olarak imkânsız kılındı, uygulanmamış değil
-- [x] `POST /v1/identity/{tenantID}/staff` — davet ucu
-- [x] Kısmi başarısızlık: `ON CONFLICT DO NOTHING` + aynı transaction'da yeniden SELECT.
-      Unique ihlalini yakalayıp yeniden okumak transaction'ı abort ederdi (25P02)
-- [x] İzin kararı: **yeni izin eklenmedi.** Seed'de hiç `identity` kaynağı yok; `identity.*`
-      rotaları zaten yalnız manager wildcard'ıyla erişilebiliyor. Doğrulandı, varsayılmadı
-- [x] Servis hesabı kurulumu, Vault yolu ve env değişkenleri belgelendi (`1d50fca`,
-      `deploy/keycloak/README.md`)
-- [ ] `deploy/keycloak/realm-onlinemenu.json`'a confidential client'ın **eklenmesi**
-      (README anlatıyor, realm dosyası henüz taşımıyor — dev ortamı elle kurulum gerektiriyor)
-- [ ] Admin panelinde "personel ekle → rol ata" ekranı — uç hazır, arayüz yok
-- [x] `POST /persons` ve `GET /persons/{id}` devre dışı kalmaya devam ediyor
-
-### Bu iş sırasında ortaya çıkan, kapatılmamış açıklar
-
-- [ ] **`persons.email` Keycloak ile senkron değil.** Realm yöneticisi bir kullanıcının e-postasını
-      doğrudan değiştirirse `persons.email` sessizce kayar. Sonraki davet o adresle Keycloak'ta
-      kullanıcı bulamaz → ikinci kullanıcı yaratır → person yazımında `persons_email_idx`
-      çakışır ve 500'e düşer. Gün-2 Keycloak operasyonlarında gerçekçi
-- [ ] **Şube varlığı doğrulanmıyor.** `identity/000011` modül izolasyonu için
-      `memberships.branch_id → branches` FK'sını kaldırmış; davet, var olmayan bir şubeye
-      membership yazabilir ve DB seviyesinde hiçbir şey yakalamaz. Servis de doğrulayamıyor
-      (`tenant/public`'e geçmeden). Önceden var olan boşluk, ama bu uç ona yeni bir yol açıyor
-- [ ] **SMTP olmadan davet yarım kalıyor.** Parola e-postası düşerse davet başarılı sayılıyor
-      (doğru — geri alınacak bir şey yok) ve `notification_sent: false` dönüyor, ama personel
-      giriş yapamıyor. Üretimde SMTP fiilen zorunlu
-
-## 3. Kasa oturumu + kasiyer kimlik doğrulama (tek ADR)
-
-Karar verildi: **[ADR-DATA-008](adr/DATA-008-cash-session-cashier-identity.md)** — oturum **şube**
-başına (POS istasyon kimliği yok; ADR-SEC-004 hâlâ Taslak, `devices` tablosu yok, `fiscal_terminals`
-uygun değil çünkü `basket_mode: list` ile bir ÖKC şubedeki her kasaya hizmet ediyor). Kabul edilen
-kısıt: **çok kasalı şube desteklenmiyor**. SEC-004 gelince nullable `station_id` + backfill ile
-yükseltilir — düşük pişmanlıklı.
-
-Tasarım referansı ve tam gerekçe: [lessons-from-odoo.md § Tier 1 madde 1 ve 4](lessons-from-odoo.md).
-
-- [x] **ADR:** oturum sahipliği + PIN doğrulama modeli → ADR-DATA-008
-- [x] `cash_sessions` + `cash_movements` + 4 durumlu makine (`3778a53`). Girdiler saklanır, beklenen
-      ve fark **hiçbir yerde saklanmaz** — her okumada hesaplanır. Şubede tek açık oturum kısmi
-      unique index'le (uygulama mantığıyla değil)
-- [x] Vardiya içi nakit giriş/çıkış kaydı — `Idempotency-Key` zorunlu (yeniden denenen bir çıkış,
-      fiilen bir kez alınmış parayı iki kez kaydederdi)
-- [x] Kapatılamama guard'ı tek fonksiyonda: şubede bekleyen mali kayıt varken kapanmaz
-- [x] `shifts:*` sözlüğü kullanıldı; kasiyere `create`+`update` verildi (`22e54ad`, identity/000014)
-      çünkü kasiyer kendi çekmecesini sayar — her açılış/kapanış için müdür beklemek özelliği
-      tek kasalı restoranda kullanılamaz kılıyordu
-- [x] Kupür dökümlü sayım ekranı + açılış/durum/kapanış POS ekranları (`da2341d`)
-- [x] Doğrulama hataları 500 değil 422 (`d451cb2`) — POS ekranı görevinden çıkan gerçek backend açığı
-- [ ] Kuruş yuvarlama — yalnız nakitte, fark kayıt altında
-- [ ] Eski oturum **uyarı** job'ı (otomatik kapatma değil — sayımı imkânsız kılar)
+- [ ] Kuruş yuvarlama — yalnız nakitte, fark kayıt altında (plan R4: ertelendi, tutarlar tam kuruş)
 - [ ] Kurtarma oturumu (`rescue`) — stranded submission runbook'uyla birleştir
-- [ ] Kasa hareketleri geçmiş listesi — şu an yalnız net toplam görünüyor, defter satırları değil
-- [x] **PIN akışı backend'i** (`6ca7656`) — katılım, PIN'le geçiş, yönetici sıfırlaması.
-      Kullanıcı sayımına karşı tek sentinel + her durumda argon2id hesabı; kilit (session, person)
-      başına Redis'te, açılışı yalnız yeniden katılım
-- [x] **PIN akışının POS arayüzü + katılımcı listesi ucu** (`4cd02cd`). PIN input'tan çıkmıyor,
-      her gönderimden sonra koşulsuz temizleniyor, istemcide karşılaştırılmıyor
-- [ ] **`Join` sırasında iki farklı durum aynı 403'ü dönüyor.** Hâlihazırda PIN'le geçmiş bir
-      kasiyer "vardiyaya katıl" derse backend `ErrSessionScopedPrincipal` dönüyor, ama bu
-      `ErrBranchForbidden` ile aynı gövdeye düşüyor; ekran "yetkiniz yok" diyor, oysa doğru mesaj
-      "önce Keycloak ile yeniden giriş yapın". Ayırt edilebilir bir sentinel gerekiyor
-- [ ] **Vardiyaya katılım otomatik değil.** Kasiyer Keycloak ile giriş yaptıktan sonra ayrıca
-      "Vardiyaya Katıl" demek zorunda. Bilinçli seçim (otomatik katılım için spec yoktu) ama
-      ürün tarafında bakılmalı — kasiyer katılmayı unutursa PIN'le seçilemez hale geliyor
+- [ ] **Vardiyaya katılım otomatik değil** — ürün kararı bekliyor (plan R5)
+- [ ] Eski oturum izleyicisi metrik yaymıyor (yalnız log, oturum başına bir kez); alarm istenirse `open_cash_sessions_past_max_age` gauge'ı
+- [ ] POS defter görünümü: yükleme hatasında "hareket yok" metni bastırılmalı, önceki oturumun satırları temizlenmeli
+- [ ] `RequireOpenSession` her istekte tam transaction açıyor — 500 POS hedefinde ölçülmeli (`task backend:loadtest:smoke`)
 
-**⚠️ Ölçülmesi gereken:** `RequireOpenSession`, oturum-kapsamlı token taşıyan **her istekte**
-`IsOpen` çağırıyor ve bu düz bir SELECT değil — `WithTenantReadTx` tam bir transaction açıyor
-(pool checkout + `SET LOCAL app.tenant_id` + sorgu + commit). Yani PIN'le geçmiş her kasiyerin her
-isteği POS sıcak yolunda bir DB transaction'ı daha ekliyor.
+### 4. Gün sonu raporu — takipler
 
-Önbelleklememek bilinçli ve doğru: kapanmış bir oturumun birkaç saniye daha istek kabul etmesi,
-az önce kapattığımız görünmez-para hatasının aynısını geri getirirdi. Ama maliyet ROADMAP'in
-500 aktif POS hedefinde ölçülmeli (`task backend:loadtest:smoke`/`full` mevcut). Gerekirse doğru
-çözüm kısa TTL'li önbellek **değil**, kapanışta açık invalidasyon (kapanış tek bir nokta).
+- [ ] Business-day ofseti (ADR-DATA-003 taslak; `branch_settings.business_day_offset` okunmuyor). İstemci takvim günü sınırlarını gönderiyor; 04:00 kesimi isteyen müşteri gelirse sunucuda `from/to` kaydırılır (plan R3)
+- [ ] `checks` için `(tenant_id, branch_id, status, closed_at)` indeksi — veri büyüyünce
+- [ ] Rapor 422/403 gövdeleri düz metin (kod alanı yok); admin istemcisi metin eşleştirmemeli
+- [ ] `domain.NewTaxLine` negatif/absürt bps için guard'sız (DB verisinden erişilemez)
+- [ ] Dashboard yetkisiz rolde de istek atıyor (403 alıyor) — kozmetik kapı var, istek de kapatılabilir
 
-**Bilinen davranış (hata değil):** sayım gönderildikten sonra bekleyen bir mali kayıt çözülürse
-beklenen kapanış kayar ve sayım bayatlar. Backend doğru davranıyor, POS ekranı da bunu açıkça
-gösterip yeniden saymaya zorluyor (dondurulmuş snapshot + `stale` bayrağı). Sessizce değişen bir
-fark rakamı kasiyeri kendisine ait olmayan bir açıktan sorumlu tutardı.
+### 5. Test kapsamı borçları (bu sprintte kayda geçen minörler)
 
-## 4. Gün sonu satış özeti
+- [ ] Join 403 testleri gerçek chi router + `permit` üzerinden koşmuyor; `listCashMovements` handler testi yok
+- [ ] `report_repo` testinde `rejected` sipariş statüsü seed'lenmiyor
+- [ ] Admin lint tabanı ~470 uyarı (`react-hooks/set-state-in-effect` deseni yaygın) — ayrı temizlik
+- [ ] `useOrderDetails`: kalıcı olarak başarısız bir sipariş id'si her liste değişiminde yeniden istenir — backoff
+- [ ] `tenant` modülü test oranı hâlâ düşük; invariant testleri (952ab1c) var, RLS sızıntı/cross-tenant yazma matrisi `lessons-from-b2b` listesine göre tamamlanmalı
 
-Spec: Odoo `report_sale_details.py`. Admin dashboard bugün `mockSalesData` ile çalışıyor,
-iki kart "Yakında" yazıyor.
+### 6. İzin sözlüğü sapmaları
 
-- [ ] `GET /api/v1/pos/reports/sale-details` — tarih aralığı + şube + oturum filtresi
-- [ ] Satış ve iade **ayrı akümülatörlerde**; birleştirmek iade oranını görünmez yapar
-- [ ] Vergi kırılımı taban + oran ayrı (`TaxRateBPS` bunu üretmeye yeterli)
-- [ ] Ödeme yöntemi başına toplam; nakitte kasa oturumu bakiyesiyle birleşik
-- [ ] Admin dashboard bu uçtan beslensin
+- [ ] Yönetici onayı akışı (`checks:approve`) — ikram/iskonto/iptal, sunucuda zorlanan (fark onayı ertelendi, 2026-08-03 kararı)
+- [ ] ⏸️ `driver` rolü: seed izin veriyor, OPA'da allow yok (şoför/teslimat kapsam dışı)
+- [ ] `kitchen`/`bar` `inventory:read` seed'i ADR-DATA-005 ile çelişiyor — seed satırlarını kaldırma kararı
 
-## 5. Prod deploy hedefi
+### 7. Token gerçek cihaz / sertifikasyon testi
 
-`deploy/` altında yalnız `docker-compose.dev.yml` var. K8s ADR'de Faz 2'ye ertelenmiş.
+Dış bağımlılık — takvimi bizde değil. Açık teknik sorular `backlog-fiscal.md`'de.
 
-- [ ] Prod compose veya K8s kararı
-- [ ] Vault prod yapılandırması (bootstrap ≠ runtime)
-- [ ] Yedekleme/DR'ın fiilen kurulması (ADR-OPS-001 yazılı, uygulanmamış)
-- [ ] Ölçüm/alarm: reconciler overdue, outbox birikmesi
+### 8. Faz 2'ye devredilenler (pilot sonrası)
 
-## 6. `tenant` modülü test açığı
-
-2963 satır kaynak / 323 satır test — repodaki en düşük oran, üstelik kiracı izolasyonunu tutan
-modülde. Karşılaştırma: payment 6082/7570, pos 3914/4077.
-
-- [ ] RLS sızıntı ve cross-tenant yazma testleri, `lessons-from-b2b` invariant listesine göre
-
-## 7. İzin wiring testi — seed'li ama bağlanmamış izinler
-
-`000006_seed_system_roles.up.sql` şunları veriyor ama kodda karşılığı **yok**:
-- `shift_manager` → `checks:approve`, `orders:approve` — `approve` yalnız `inventory`'de bağlı,
-  `pos`'ta 0 çağrı yeri
-- `shifts` read/create/update — `backend/internal/` altında hiç geçmiyor
-
-`docs/lessons-from-b2b.md`'nin tam olarak önlemek için yazıldığı hata: *"Casbin RBAC init
-ediliyordu → middleware 0 route'a bağlıydı."*
-
-- [x] **CI testi yazıldı** (`fced7bc`, `platform/auth/permission_wiring_test.go`). Doğrulama grep
-      değil, gerçek OPA motoru + derlenmiş rego bundle'ı. Üç yönde kırılıyor: sınıflandırılmamış yeni
-      seed izni, kapandığı hâlde baseline'da kalan boşluk, ve zorlandığı iddia edilip OPA'da
-      reddedilen izin. 13 çift "zorlanıyor", 10 çift gerekçeli baseline'da
-- [ ] Yönetici onayı akışı (`checks:approve`) — ikram/iskonto/iptal, sunucuda zorlanan
-
-### Testin ilk gününde bulduğu iki gerçek sapma
-
-Kasa oturumu ve yönetici onayı gibi "henüz yapılmadı" boşluklarından **farklı** bir sınıf: burada
-kod ve policy var, ama seed'in verdiği rolle OPA'nın izin verdiği rol **uyuşmuyor**. İkisi de
-doğrulandı, ikisi de pilotu bloklamıyor.
-
-- [ ] ⏸️ **Ertelendi (2026-08-01 ürün kararı: şoför/teslimat kapsam dışı).**
-      **`driver` rolü hiçbir şey yapamıyor.** Seed `orders:read` + `orders:update` veriyor
-      (`000006`, satır 72-73) ama `authz.rego`'da **hiçbir `allow` kuralı** `driver` içermiyor —
-      `pos_counter_actions` `{cashier, shift_manager}`, `pos_kitchen_actions` `{kitchen, bar}`.
-      Rego'da `driver` yalnız **scope** kuralında (satır 277) geçiyor, o da ancak bir allow
-      tetiklendikten sonra devreye giriyor; yani şoför için ölü kod.
-      Karar: teslimat akışı geldiğinde allow yazılacak mı, yoksa seed satırları mı düşecek?
-- [ ] **`kitchen`/`bar` `inventory:read` alıyor ama kullanamıyor.** Seed veriyor (`000006`,
-      satır 81 ve 89); `inventory.level.read` ise `inventory_management_actions` içinde ve
-      ADR-DATA-005 İlke 4 gereği manager/warehouse'a kapalı. Burada **seed yanlış görünüyor** —
-      ADR bilinçli olarak dar tutuyor. Muhtemel çözüm: seed satırlarını kaldırmak.
-
-Bu madde 3'ten **önce** yapılmalı: kasa oturumu `shifts:*` izinlerini kullanacak, test önce
-konursa yanlış izin adı uydurulması engellenir.
-
-## 8. Token gerçek cihaz / sertifikasyon testi
-
-Dış bağımlılık — takvimi bizde değil, şimdiden temas kurulmalı.
-Açık teknik sorular `backlog-fiscal.md`'de (tokenx 401 re-auth akışı, `operationDate` timezone).
+- `/readyz` yalnız `cmd/api`'de; split binary'ler (`api-core/pos/finance`, `edge`) yalnız `/healthz` taşıyor
+- Vault dynamic secrets (DB/NATS/TokenX)
+- `edge-sync` offline mod
+- Marş sistemi, şoför/teslimat, imalat (2026-08-01 kapsam kararı)
 
 ---
 
-## Kararlar (2026-08-03)
+## Kararlar (özet)
 
-Üç açık ürün sorusu karara bağlandı. Gerekçeler burada; katılmıyorsanız tartışılacak yer burası.
-
-**1. Keycloak davet entegrasyonu → başlıyor.** Pilotun önündeki tek yapısal engel; personel
-eklenemeden diğer hiçbir işin anlamı yok. POS/mutfak odağı özellik kapsamına dairdi, altyapı ön
-koşulunu düşürmeye değil. ADR-AUTH-003 uygulanıyor.
-
-**2. Kasa açılmadan satış → engelleniyor (yalnız nakit, backend'de).** ✅ Uygulandı (`b1c5691`).
-Bu bir tercih değil **doğruluk sorunu**: beklenen kapanış
-`opening + SumCompletedCashPayments(branch, session.OpenedAt, session.ClosedAt) + movements`
-ile hesaplanıyor. Oturum yokken alınan nakit hiçbir oturum penceresine düşmüyor, yani mutabakata
-**hiç girmiyor** — çekmece yapısal olarak tutmuyor.
-
-Kapsam dar tutuldu: kart/ÖKC, yemek kartı, ikram, ödemesiz ve açık hesap çekmeceye dokunmadığı için
-engellenmiyor; adisyon açma, sipariş girme, adisyon kapatma da engellenmiyor. Zorlama backend'de
-çünkü istemcide bloklamak, sunucuda olmayan bir kuralı uydurmak olur ve ikisi zamanla ayrışır.
-
-Guard, ödeme yazımıyla aynı transaction'da ve idempotency okumasından **sonra** duruyor: öncesinde
-olsaydı, oturum açıkken başarılı olmuş bir ödemenin ağ hatası sonrası yeniden denenmesi yanlışlıkla
-reddedilirdi. Oturum okuması `FOR SHARE` — düz `SELECT` ile eşzamanlı bir kapanış, guard'ın okuması
-ile ödemenin yazımı arasına girip parayı yine görünmez yapabiliyordu. Bu yarış ampirik olarak
-üretildi (25 iterasyonun 3-4'ünde) ve düzeltmeden sonra kayboldu; regresyon testi mevcut.
-
-**3. Fark onayı (açık/fazla) → ertelendi, denetim izi yeterli.** Tek kasalı pilotta kasiyer çoğu
-zaman işletmecinin kendisi. Dört-göz kuralı kapanışta ikinci bir kişinin hazır bulunmasını şart
-koşar; küçük restoranda bu kişi yok ve kural fiilen kasayı kapatılamaz hale getirir. Bugünkü
-kontrol: kim açtı, kim saydı, kim kapattı, her hareket aktör ve zaman damgasıyla.
-Çok kişili vardiyası olan bir müşteri geldiğinde yeniden bakılır; aday sözlük seed'li ama hâlâ
-bağlanmamış `checks:approve`.
-
----
-
-## Kapsam dışı (2026-08-01 ürün kararı)
-
-Odak **POS + mutfak ekranı**. Aşağıdakiler bilinçli olarak ertelendi; hiçbiri unutulmuş değil.
-
-**Marş sistemi** ([lessons-from-odoo.md § Tier 2 madde 7](lessons-from-odoo.md)) — marşla çalışan
-bir restoranla anlaşıldığında yapılacak. Üst segment oturarak servis dışında hiç gerekmiyor ve şube
-düzeyinde flag'lenebilir, dolayısıyla o müşteri gelene kadar bekletmenin maliyeti yok.
-
-> Yapılacağı zaman kaçırılmaması gereken para riski: **tetiklenmemiş marş** adisyon toplamına,
-> ÖKC sepetine ve stok düşümüne girmemeli. `TestPOSSpine_ClosePaysOnlyForActiveOrders`'ın koruduğu
-> hatanın kardeşi — müşteri yemediği tatlıyı ödemek zorunda kalır.
-
-**Şoför / teslimat** — `driver` rolünün OPA sapması dahil (yukarıda madde 7 altında).
-
-**İmalat (`manufacturing`)** — modül 32 satırlık iskelet, ROADMAP'te Faz 3. Parti/SKT takibi
-(madde 11'deki `product_expiry` boşluğu) de bu kapsamda bekliyor.
+- **2026-08-03:** Keycloak davet entegrasyonu → yapıldı. Kasa açılmadan nakit satış → engellendi (`b1c5691`). Fark onayı → ertelendi, denetim izi yeterli.
+- **2026-09-05 (plan R1-R8):** rapor ucu `pos` modülünde, ödeme kırılımı `payment/public.SalesSummaryReader` üzerinden; satış = pencerede kapanan adisyonlar, iptal ayrı akümülatör; business-day ofseti uygulanmadı; kuruş yuvarlama ve otomatik vardiya katılımı ertelendi; Alertmanager kurulmadı; Keycloak SMTP realm import `${VAR}` yer tutucuyla; iş `feat/pilot-mvp` dalında, `main`'e merge kullanıcı kararı.
+- **2026-09-05:** `/readyz` ham DB hatasını istemciye döndürmez (kimliksiz uç); hata yalnız log'da.
 
 ### Mutfak ekranı — mevcut durum
 
-KDS **çalışıyor**, eksik değil: `admin/(main)/pos/kitchen` 4 sütunlu kanban
-(`pending → accepted → preparing → ready`), `pos/ws` hub'ı üzerinden canlı WebSocket akışı,
-bağlantı durumu rozeti, accept/advance aksiyonları. Marş dışında bilinen bir işlevsel boşluğu yok.
+KDS **çalışıyor**: `admin/(main)/pos/kitchen` 4 sütunlu kanban, `pos/ws` hub'ı üzerinden canlı akış,
+bağlantı durumu rozeti, accept/advance aksiyonları, toplu detay yükleme. Marş dışında bilinen işlevsel boşluğu yok.

@@ -80,7 +80,9 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 - Vault client `platform/vault` paketinde; modüller doğrudan Vault API çağırmaz.
 
 ### Secrets (Vault + SOPS)
-- Runtime sırlar (DB credentials, NATS token, Keycloak secret) → Vault dynamic secrets.
+- Hedef: runtime sırlar (DB credentials, NATS token, Keycloak secret) → Vault dynamic secrets.
+  **Mevcut durum (2026-09):** yalnız Keycloak admin-client secret'ı Vault KV'den okunuyor
+  (`platform/vault`); DB/NATS/TokenX sırları `.env.prod.sops` üzerinden düz env var. Dynamic secrets Faz 2.
 - Bootstrap değerler (Vault root token, docker-compose admin şifreleri) → `.env.sops` (git'e şifreli commit).
 - `.env` düz metin dosyası repo'ya **asla** commit edilmez.
 

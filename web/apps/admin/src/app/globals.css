@@ -215,6 +215,26 @@
   display: none;
 }
 
+/* İnce, sessiz kaydırma çubuğu: sidebar gibi uzun listelerde kaydırılabildiği
+   belli olsun diye. Hover'da belirginleşir, aksi hâlde neredeyse görünmez. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--sidebar-foreground) 20%, transparent) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background-color: color-mix(in oklch, var(--sidebar-foreground) 20%, transparent);
+}
+
+.scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--sidebar-foreground) 40%, transparent);
+}
+
 /* QR yazdırma alanı (components/storefront/qr-code-dialog.tsx).
    Yazdırırken sayfanın geri kalanı (sidebar, dialog overlay, butonlar)
    gizlenir; yalnızca QR kartı basılır. `visibility` kullanılıyor çünkü

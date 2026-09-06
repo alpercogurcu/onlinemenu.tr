@@ -24,6 +24,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   destructive?: boolean
   onConfirm: () => Promise<void> | void
+  onError?: (err: unknown) => void
   secondaryAction?: { label: string; onClick: () => void }
 }
 
@@ -43,6 +44,7 @@ export function ConfirmDialog({
   cancelLabel = "Vazgeç",
   destructive = false,
   onConfirm,
+  onError,
   secondaryAction,
 }: ConfirmDialogProps) {
   const [isPending, setIsPending] = React.useState(false)
@@ -53,6 +55,10 @@ export function ConfirmDialog({
     try {
       await onConfirm()
       onOpenChange(false)
+    } catch (err) {
+      // Keep the dialog open on rejection — the caller's mutation already
+      // toasts the failure; onError just lets a caller observe it too.
+      onError?.(err)
     } finally {
       setIsPending(false)
     }
@@ -63,8 +69,19 @@ export function ConfirmDialog({
     onOpenChange(false)
   }
 
+  // Radix closes the AlertDialog root on Escape (and would on outside
+  // interaction) regardless of the confirm button's disabled state, so a
+  // pending confirm must veto close requests here too, not just via the
+  // button's disabled attribute.
+  const handleOpenChange = (next: boolean) => {
+    if (isPending && !next) {
+      return
+    }
+    onOpenChange(next)
+  }
+
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
+    <AlertDialog open={open} onOpenChange={handleOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>

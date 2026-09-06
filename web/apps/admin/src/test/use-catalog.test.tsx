@@ -69,9 +69,25 @@ describe("useProductsModifierGroupIds", () => {
   // GET /modifier-groups/{id}/products, GET /modifier-groups/{gid}/modifiers)
   // serialize an empty result as JSON null, not []. Every list hook must
   // fold that into [] rather than handing a table row `.map` over `null`.
+  //
+  // useProductsModifierGroupIds folds straight to a plain map, so
+  // result.current.p1 reads [] BOTH before the query has resolved (see the
+  // "not resolved yet" test above) and after a folded-null success — {p1: []}
+  // alone can't tell those apart. Hold the response open with a manual
+  // promise (same technique as confirm-dialog.test.tsx's resolveConfirm) and
+  // assert the query is still pending beforehand, then — mirroring how the
+  // useGroupProductIds test below waits on the query settling rather than on
+  // the hook's default — wait on the underlying query state reaching
+  // "success" before asserting the fold.
   it("folds a null response body into an empty array, not null", async () => {
     get.mockReset()
-    get.mockResolvedValue({ data: null })
+    let resolveGet!: (value: { data: null }) => void
+    get.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGet = resolve
+        }),
+    )
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
     const { result } = renderHook(() => useProductsModifierGroupIds(["p1"]), {
@@ -79,7 +95,14 @@ describe("useProductsModifierGroupIds", () => {
     })
 
     await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(result.current).toEqual({ p1: [] }))
+    expect(client.getQueryState(["product-modifier-groups", "p1"])?.status).toBe("pending")
+
+    resolveGet({ data: null })
+
+    await waitFor(() =>
+      expect(client.getQueryState(["product-modifier-groups", "p1"])?.status).toBe("success"),
+    )
+    expect(result.current).toEqual({ p1: [] })
   })
 })
 

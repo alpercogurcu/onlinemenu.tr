@@ -18,6 +18,8 @@ function Switch({ className, onCheckedChange, onChange, checked, defaultChecked,
     <label className="inline-flex cursor-pointer items-center">
       <input
         type="checkbox"
+        // A toggle, not a checkbox, to assistive tech (and to tests).
+        role="switch"
         className="sr-only peer"
         checked={checked}
         defaultChecked={defaultChecked}

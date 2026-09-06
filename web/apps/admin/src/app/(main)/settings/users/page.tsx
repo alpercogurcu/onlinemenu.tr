@@ -190,7 +190,7 @@ function extractServerError(err: unknown): string | null {
 export default function UsersPage() {
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
 
-  const { data: members = [], isLoading } = useMemberships(tenantId)
+  const { data: members = [], isLoading, isError, refetch } = useMemberships(tenantId)
 
   const { data: roleData } = useRoles(tenantId)
   const roles = roleData?.roles ?? []
@@ -340,6 +340,17 @@ export default function UsersPage() {
           {isLoading ? (
             <div className="space-y-3 p-6">
               {[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <Users className="size-12 text-muted-foreground mb-4" />
+              <h3 className="text-lg font-semibold">Üyeler yüklenemedi</h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-4">
+                Bu listeyi görmek için yönetici yetkisi gerekir ya da bağlantı kesildi.
+              </p>
+              <Button variant="outline" onClick={() => void refetch()}>
+                Yeniden dene
+              </Button>
             </div>
           ) : members.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">

@@ -84,3 +84,19 @@ describe("can (pos.report.read)", () => {
     expect(can("pos.report.read")).toBe(true)
   })
 })
+
+describe("can (pos.order.accept)", () => {
+  afterEach(() => {
+    clearAccessToken()
+  })
+
+  it("denies accepting a ticket for the kitchen role", () => {
+    setAccessToken(ctxToken(["00000001-0000-0000-0000-000000000004"]))
+    expect(can("pos.order.accept")).toBe(false)
+  })
+
+  it("allows accepting a ticket for a cashier", () => {
+    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.cashier]))
+    expect(can("pos.order.accept")).toBe(true)
+  })
+})

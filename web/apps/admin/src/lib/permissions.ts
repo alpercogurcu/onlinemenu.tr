@@ -38,6 +38,24 @@ const SYSTEM_ROLE_NAMES_BY_ID: Record<string, string> = {
 
 interface CtxTokenClaims {
   rids?: string[]
+  // Branch the membership is scoped to; the nil UUID means chain-wide.
+  bid?: string
+}
+
+const NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+/**
+ * Branch id the current CTX token is scoped to, or null for a chain-wide
+ * principal (manager) or when no session is present. Branch-keyed screens
+ * (table plan, kitchen display) use it to default to the operator's own
+ * branch instead of whichever branch happens to be listed first.
+ */
+export function currentBranchId(): string | null {
+  const token = getAccessToken()
+  if (!token) return null
+  const bid = decodeJwtPayload<CtxTokenClaims>(token)?.bid
+  if (!bid || bid === NIL_UUID) return null
+  return bid
 }
 
 // Decodes (without verifying — see module header) the role ids the CTX token
@@ -90,6 +108,12 @@ const ACTION_ROLES: Record<string, ReadonlySet<string>> = {
   // 403s a cashier regardless; this only hides the report section instead of
   // rendering a raw error after a fetch that was always going to fail.
   "pos.report.read": new Set(["shift_manager"]),
+  // authz.rego pos_counter_actions: accepting a new ticket is a counter
+  // decision (cashier/shift_manager + manager wildcard). Kitchen/bar only
+  // hold pos.order.advance, so the kitchen display must not offer "Kabul
+  // Et" to them — the backend 403s it and the ticket would sit there with a
+  // button that never works.
+  "pos.order.accept": new Set(["cashier", "shift_manager"]),
 }
 
 /**

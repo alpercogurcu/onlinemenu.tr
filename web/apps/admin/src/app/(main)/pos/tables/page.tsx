@@ -15,6 +15,7 @@ import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCan } from "@/hooks/use-can"
+import { currentBranchId } from "@/lib/permissions"
 import { useSetTableStatus, useTables, useZones, type ManualTableStatus } from "@/hooks/use-pos"
 import { useBranches } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
@@ -69,7 +70,8 @@ export default function TablesPage() {
 
   useEffect(() => {
     if (!branchId && branches && branches.length > 0) {
-      setBranchId(branches[0].id)
+      const own = currentBranchId()
+      setBranchId(own && branches.some((b) => b.id === own) ? own : branches[0].id)
     }
   }, [branches, branchId])
 

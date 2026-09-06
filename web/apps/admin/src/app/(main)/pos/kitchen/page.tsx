@@ -23,7 +23,9 @@ import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { useAcceptOrder, useAdvanceOrder, useOrderDetails } from "@/hooks/use-pos"
+import { useCan } from "@/hooks/use-can"
 import { useBranches } from "@/hooks/use-tenant"
+import { currentBranchId } from "@/lib/permissions"
 import { type KitchenConnectionStatus, useKitchenStream } from "@/hooks/use-kitchen-stream"
 import { ELAPSED_TONE_CLASS, elapsedTone, formatElapsed } from "@/lib/kds-format"
 import { kitchenOrdersByStatus, type KitchenOrder } from "@/lib/kitchen-events"
@@ -146,6 +148,7 @@ function KitchenOrderCard({
   isNew,
   onAdvance,
   isMutating,
+  canAccept,
 }: {
   order: KitchenOrder
   detail?: Order
@@ -153,7 +156,9 @@ function KitchenOrderCard({
   isNew: boolean
   onAdvance: (order: KitchenOrder) => void
   isMutating: boolean
+  canAccept: boolean
 }) {
+  const awaitingCounter = order.status === "pending" && !canAccept
   return (
     <Card
       className={cn(
@@ -201,14 +206,22 @@ function KitchenOrderCard({
         ) : (
           <Skeleton className="h-10 w-full" />
         )}
-        <Button
-          size="lg"
-          className="h-14 w-full text-base font-semibold"
-          onClick={() => onAdvance(order)}
-          disabled={isMutating}
-        >
-          {ACTION_LABEL[order.status as (typeof COLUMN_ORDER)[number]]}
-        </Button>
+        {awaitingCounter ? (
+          // Accepting is a counter decision (pos.order.accept); a kitchen
+          // device only advances tickets the counter has already taken.
+          <p className="flex h-14 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+            Kasa onayı bekleniyor
+          </p>
+        ) : (
+          <Button
+            size="lg"
+            className="h-14 w-full text-base font-semibold"
+            onClick={() => onAdvance(order)}
+            disabled={isMutating}
+          >
+            {ACTION_LABEL[order.status as (typeof COLUMN_ORDER)[number]]}
+          </Button>
+        )}
       </CardContent>
     </Card>
   )
@@ -226,6 +239,7 @@ export default function KitchenPage() {
 
   const acceptOrder = useAcceptOrder()
   const advanceOrder = useAdvanceOrder()
+  const canAccept = useCan("pos.order.accept")
 
   useEffect(() => {
     setSoundEnabled(typeof window !== "undefined" && localStorage.getItem(SOUND_STORAGE_KEY) === "true")
@@ -234,7 +248,11 @@ export default function KitchenPage() {
   useEffect(() => {
     if (!branches || branches.length === 0) return
     const stored = typeof window !== "undefined" ? localStorage.getItem(BRANCH_STORAGE_KEY) : null
-    const initial = stored && branches.some((b) => b.id === stored) ? stored : branches[0].id
+    const own = currentBranchId()
+    const pick = (id: string | null) => (id && branches.some((b) => b.id === id) ? id : null)
+    // A branch-scoped operator always lands on their own branch; the stored
+    // choice only matters for chain-wide users who can actually switch.
+    const initial = pick(own) ?? pick(stored) ?? branches[0].id
     setBranchId((current) => current ?? initial)
   }, [branches])
 
@@ -403,6 +421,7 @@ export default function KitchenPage() {
                     now={now}
                     isNew={newOrderIds.has(order.orderId)}
                     onAdvance={handleAdvance}
+                    canAccept={canAccept}
                     isMutating={isMutating}
                   />
                 ))}

@@ -25,9 +25,12 @@ vi.mock("@/hooks/use-identity", () => ({
   useMe: () => ({ data: { full_name: "Test Admin", email: "admin@test" }, isLoading: false }),
 }))
 
-const tenantModules = vi.hoisted(() => ({ value: undefined as string[] | undefined }))
+const tenantModules = vi.hoisted(() => ({ value: undefined as string[] | undefined, isError: false }))
 vi.mock("@/hooks/use-tenant", () => ({
-  useTenant: () => ({ data: tenantModules.value ? { enabled_modules: tenantModules.value } : undefined }),
+  useTenantModules: () => ({
+    data: tenantModules.value ? { enabled_modules: tenantModules.value } : undefined,
+    isError: tenantModules.isError,
+  }),
 }))
 
 // shadcn's SidebarProvider reads window.matchMedia through useIsMobile; jsdom
@@ -74,6 +77,7 @@ describe("AdminSidebar", () => {
   beforeEach(() => {
     useAuthStore.setState({ tenantId: "tenant-1" })
     tenantModules.value = undefined
+    tenantModules.isError = false
   })
 
   it("never renders the sections whose module the API does not mount", () => {
@@ -102,6 +106,13 @@ describe("AdminSidebar", () => {
   })
 
   it("shows all mounted sections while the tenant is still loading", () => {
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(groupLabels()).toEqual(["Genel", "POS", "Katalog", "Stok", "Ödeme", "İşletme"])
+  })
+
+  it("shows all mounted sections when the modules endpoint errors (e.g. 403)", () => {
+    tenantModules.isError = true
     render(<AdminSidebar />, { wrapper: Wrapper })
 
     expect(groupLabels()).toEqual(["Genel", "POS", "Katalog", "Stok", "Ödeme", "İşletme"])

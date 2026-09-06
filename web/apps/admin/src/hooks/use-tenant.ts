@@ -24,3 +24,18 @@ export function useTenant(tenantId: string) {
     enabled: tenantId !== "",
   })
 }
+
+// Projected endpoint (GET /tenants/{id}/modules), readable by every staff
+// role — unlike useTenant's GET /tenants/{id}/, which is manager-only
+// (tenant.tenant.read) and 403s for cashier/waiter/kitchen/etc. The sidebar
+// needs the tenant's enabled_modules for every role, not just managers.
+export function useTenantModules(tenantId: string) {
+  return useQuery({
+    queryKey: ["tenants", tenantId, "modules"],
+    queryFn: async () => {
+      const { data } = await api.get<{ enabled_modules: string[] }>(`/tenants/${tenantId}/modules`)
+      return data
+    },
+    enabled: tenantId !== "",
+  })
+}

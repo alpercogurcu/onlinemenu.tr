@@ -26,7 +26,18 @@ export async function loginAs(page: Page, email: string) {
 
 // The CTX token lives in memory only, so a hard navigation drops the
 // session — always move between screens through the SPA router.
+//
+// window.next.router is undocumented ("Exists for debugging purposes. Don't
+// use in application code", next/dist/client/components/app-router-instance.js)
+// and could disappear on a Next upgrade; assert it exists first so that
+// failure names itself instead of surfacing as an opaque TypeError deep in
+// page.evaluate.
 export async function gotoSpa(page: Page, path: string) {
+  const hasRouter = await page.evaluate(
+    () => Boolean((window as unknown as { next?: { router?: unknown } }).next?.router),
+  )
+  expect(hasRouter, "window.next.router is unavailable — Next.js internals may have changed").toBeTruthy()
+
   await page.evaluate((p) => {
     ;(window as unknown as { next: { router: { push: (p: string) => void } } }).next.router.push(p)
   }, path)

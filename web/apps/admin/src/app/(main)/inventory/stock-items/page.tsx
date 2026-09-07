@@ -4,6 +4,7 @@ import { Boxes, Lock, Plus } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,13 +17,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectItem } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -85,7 +79,7 @@ const defaultForm: StockItemFormState = {
 }
 
 export default function StockItemsPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<StockItemFormState>(defaultForm)
 
   const { data, isLoading } = useStockItems()
@@ -93,7 +87,7 @@ export default function StockItemsPage() {
 
   const handleOpen = () => {
     setForm(defaultForm)
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -112,7 +106,7 @@ export default function StockItemsPage() {
         is_active: true,
       })
       toast.success("Stok kalemi eklendi")
-      setSheetOpen(false)
+      setDialogOpen(false)
     } catch {
       toast.error("Stok kalemi eklenemedi")
     }
@@ -240,15 +234,25 @@ export default function StockItemsPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Stok Kalemi</SheetTitle>
-            <SheetDescription>
-              Hammadde, yarı mamül, ambalaj veya mamül stok kalemi ekleyin.
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Stok Kalemi"
+        description="Hammadde, yarı mamül, ambalaj veya mamül stok kalemi ekleyin."
+        busy={createStockItem.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="stock-item-form" disabled={createStockItem.isPending}>
+              {createStockItem.isPending ? "Kaydediliyor..." : "Kaydet"}
+            </Button>
+          </>
+        }
+      >
+        <form id="stock-item-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="stock-item-sku">SKU</Label>
               <Input
@@ -267,6 +271,8 @@ export default function StockItemsPage() {
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               />
             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="stock-item-kind">Tip</Label>
               <Select
@@ -294,21 +300,18 @@ export default function StockItemsPage() {
                 ))}
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="stock-item-category">Kategori (opsiyonel)</Label>
-              <Input
-                id="stock-item-category"
-                placeholder="örn: Kuru Gıda"
-                value={form.category}
-                onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-              />
-            </div>
-            <Button type="submit" className="w-full" disabled={createStockItem.isPending}>
-              {createStockItem.isPending ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="stock-item-category">Kategori (opsiyonel)</Label>
+            <Input
+              id="stock-item-category"
+              placeholder="örn: Kuru Gıda"
+              value={form.category}
+              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+            />
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

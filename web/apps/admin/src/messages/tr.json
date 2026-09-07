@@ -160,6 +160,7 @@
     "description": "Açıklama",
     "descriptionPlaceholder": "Kısa açıklama",
     "active": "Aktif",
+    "cancel": "Vazgeç",
     "save": "Kaydet",
     "saving": "Kaydediliyor...",
     "nameRequired": "Menü adı zorunludur",
@@ -191,7 +192,8 @@
       "added": "Ürün menüye eklendi",
       "addFailed": "Ürün menüye eklenemedi",
       "removed": "Ürün menüden çıkarıldı",
-      "removeFailed": "Ürün menüden çıkarılamadı"
+      "removeFailed": "Ürün menüden çıkarılamadı",
+      "close": "Kapat"
     }
   },
   "catalog": {

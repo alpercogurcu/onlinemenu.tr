@@ -4,19 +4,13 @@ import { Building2, Plus } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -56,7 +50,7 @@ function useCreateBranch(tenantId: string) {
 }
 
 export default function BranchesPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<FormState>(defaultForm)
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
 
@@ -77,7 +71,7 @@ export default function BranchesPage() {
         is_active: true,
       })
       toast.success("Şube eklendi")
-      setSheetOpen(false)
+      setDialogOpen(false)
       setForm(defaultForm)
     } catch {
       toast.error("Şube eklenemedi")
@@ -91,7 +85,7 @@ export default function BranchesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Şubeler</h1>
           <p className="text-muted-foreground">İşletme şubelerini yönetin.</p>
         </div>
-        <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+        <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
           <Plus className="size-4" />
           Şube Ekle
         </Button>
@@ -114,7 +108,7 @@ export default function BranchesPage() {
               <p className="text-sm text-muted-foreground mt-1 mb-4">
                 İşletmenizin şubelerini ekleyin.
               </p>
-              <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+              <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
                 <Plus className="size-4" />
                 İlk şubeyi ekle
               </Button>
@@ -155,22 +149,34 @@ export default function BranchesPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Şube</SheetTitle>
-            <SheetDescription>İşletmenize yeni bir şube ekleyin.</SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="branch-name">Ad</Label>
-              <Input
-                id="branch-name"
-                placeholder="örn: Merkez Şube"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Şube"
+        description="İşletmenize yeni bir şube ekleyin."
+        busy={createBranch.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="branch-form" disabled={createBranch.isPending}>
+              {createBranch.isPending ? "Kaydediliyor..." : "Kaydet"}
+            </Button>
+          </>
+        }
+      >
+        <form id="branch-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="branch-name">Ad</Label>
+            <Input
+              id="branch-name"
+              placeholder="örn: Merkez Şube"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="operation-type">Operasyon Tipi</Label>
               <Select
@@ -196,12 +202,9 @@ export default function BranchesPage() {
                 <option value="lisansli">Lisanslı</option>
               </Select>
             </div>
-            <Button type="submit" className="w-full" disabled={createBranch.isPending}>
-              {createBranch.isPending ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

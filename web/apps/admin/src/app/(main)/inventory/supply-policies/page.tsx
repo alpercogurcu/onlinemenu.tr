@@ -5,6 +5,7 @@ import { Lock, Plus, ShieldCheck } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,13 +25,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectItem } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -95,7 +89,7 @@ function policyTarget(
 }
 
 export default function SupplyPoliciesPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<SupplyPolicyFormState>(defaultForm)
 
   const { data: policies, isLoading } = useSupplyPolicies()
@@ -108,7 +102,7 @@ export default function SupplyPoliciesPage() {
 
   const handleOpen = () => {
     setForm(defaultForm)
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -138,7 +132,7 @@ export default function SupplyPoliciesPage() {
           : undefined,
       })
       toast.success("Tedarik politikası oluşturuldu")
-      setSheetOpen(false)
+      setDialogOpen(false)
     } catch (err) {
       const message =
         axios.isAxiosError(err) && err.response?.status === 422 && typeof err.response.data === "string"
@@ -237,136 +231,140 @@ export default function SupplyPoliciesPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Tedarik Politikası</SheetTitle>
-            <SheetDescription>
-              Politikalar immutable&apos;dır: bu form yalnızca yeni bir kayıt oluşturur, mevcut bir
-              kaydı düzenlemez. Yeni kayıt, aynı kapsam için önceki politikayı geçersiz kılar.
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="policy-scope">Kapsam</Label>
-              <Select
-                id="policy-scope"
-                value={form.scope}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    scope: e.target.value as SupplyScope,
-                    stock_item_id: "",
-                    category: "",
-                  }))
-                }
-              >
-                <SelectItem value="stock_item">Stok Kalemi</SelectItem>
-                <SelectItem value="category">Kategori</SelectItem>
-                <SelectItem value="tenant_default">Tenant Geneli (varsayılan)</SelectItem>
-              </Select>
-            </div>
-
-            {form.scope === "stock_item" && (
-              <div className="space-y-2">
-                <Label htmlFor="policy-stock-item">Stok Kalemi</Label>
-                <Select
-                  id="policy-stock-item"
-                  value={form.stock_item_id}
-                  onChange={(e) => setForm((f) => ({ ...f, stock_item_id: e.target.value }))}
-                >
-                  <SelectItem value="">Stok kalemi seçin</SelectItem>
-                  {(stockItems ?? []).map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.name} ({item.sku})
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-            )}
-
-            {form.scope === "category" && (
-              <div className="space-y-2">
-                <Label htmlFor="policy-category">Kategori</Label>
-                <Input
-                  id="policy-category"
-                  placeholder="örn: Kuru Gıda"
-                  value={form.category}
-                  onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                />
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="policy-mode">Mod</Label>
-              <Select
-                id="policy-mode"
-                value={form.mode}
-                onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value as SupplyMode }))}
-              >
-                <SelectItem value="exclusive_hq">Yalnızca merkezden</SelectItem>
-                <SelectItem value="approved_suppliers">Onaylı tedarikçiler</SelectItem>
-                <SelectItem value="free">Serbest</SelectItem>
-              </Select>
-            </div>
-
-            {form.mode === "approved_suppliers" && (
-              <div className="space-y-2">
-                <Label>Onaylı Tedarikçiler</Label>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="outline" className="w-full justify-start">
-                      {form.approved_supplier_ids.length > 0
-                        ? `${form.approved_supplier_ids.length} tedarikçi seçildi`
-                        : "Tedarikçi seçin"}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-(--radix-dropdown-menu-trigger-width)">
-                    {(suppliers ?? []).length === 0 ? (
-                      <DropdownMenuLabel>Kayıtlı tedarikçi bulunamadı</DropdownMenuLabel>
-                    ) : (
-                      (suppliers ?? []).map((party) => (
-                        <DropdownMenuCheckboxItem
-                          key={party.id}
-                          checked={form.approved_supplier_ids.includes(party.id)}
-                          onSelect={(e) => e.preventDefault()}
-                          onCheckedChange={(checked) =>
-                            setForm((f) => ({
-                              ...f,
-                              approved_supplier_ids: checked
-                                ? [...f.approved_supplier_ids, party.id]
-                                : f.approved_supplier_ids.filter((id) => id !== party.id),
-                            }))
-                          }
-                        >
-                          {party.name}
-                        </DropdownMenuCheckboxItem>
-                      ))
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="policy-effective-from">Geçerlilik Başlangıcı (opsiyonel)</Label>
-              <Input
-                id="policy-effective-from"
-                type="date"
-                value={form.effective_from}
-                onChange={(e) => setForm((f) => ({ ...f, effective_from: e.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">
-                Boş bırakılırsa politika şu andan itibaren geçerli olur.
-              </p>
-            </div>
-
-            <Button type="submit" className="w-full" disabled={createPolicy.isPending}>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Tedarik Politikası"
+        description="Politikalar immutable'dır: bu form yalnızca yeni bir kayıt oluşturur, mevcut bir kaydı düzenlemez. Yeni kayıt, aynı kapsam için önceki politikayı geçersiz kılar."
+        size="lg"
+        busy={createPolicy.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="supply-policy-form" disabled={createPolicy.isPending}>
               {createPolicy.isPending ? "Kaydediliyor..." : "Kaydet"}
             </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </>
+        }
+      >
+        <form id="supply-policy-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="policy-scope">Kapsam</Label>
+            <Select
+              id="policy-scope"
+              value={form.scope}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  scope: e.target.value as SupplyScope,
+                  stock_item_id: "",
+                  category: "",
+                }))
+              }
+            >
+              <SelectItem value="stock_item">Stok Kalemi</SelectItem>
+              <SelectItem value="category">Kategori</SelectItem>
+              <SelectItem value="tenant_default">Tenant Geneli (varsayılan)</SelectItem>
+            </Select>
+          </div>
+
+          {form.scope === "stock_item" && (
+            <div className="space-y-2">
+              <Label htmlFor="policy-stock-item">Stok Kalemi</Label>
+              <Select
+                id="policy-stock-item"
+                value={form.stock_item_id}
+                onChange={(e) => setForm((f) => ({ ...f, stock_item_id: e.target.value }))}
+              >
+                <SelectItem value="">Stok kalemi seçin</SelectItem>
+                {(stockItems ?? []).map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name} ({item.sku})
+                  </SelectItem>
+                ))}
+              </Select>
+            </div>
+          )}
+
+          {form.scope === "category" && (
+            <div className="space-y-2">
+              <Label htmlFor="policy-category">Kategori</Label>
+              <Input
+                id="policy-category"
+                placeholder="örn: Kuru Gıda"
+                value={form.category}
+                onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+              />
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="policy-mode">Mod</Label>
+            <Select
+              id="policy-mode"
+              value={form.mode}
+              onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value as SupplyMode }))}
+            >
+              <SelectItem value="exclusive_hq">Yalnızca merkezden</SelectItem>
+              <SelectItem value="approved_suppliers">Onaylı tedarikçiler</SelectItem>
+              <SelectItem value="free">Serbest</SelectItem>
+            </Select>
+          </div>
+
+          {form.mode === "approved_suppliers" && (
+            <div className="space-y-2">
+              <Label>Onaylı Tedarikçiler</Label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" className="w-full justify-start">
+                    {form.approved_supplier_ids.length > 0
+                      ? `${form.approved_supplier_ids.length} tedarikçi seçildi`
+                      : "Tedarikçi seçin"}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-(--radix-dropdown-menu-trigger-width)">
+                  {(suppliers ?? []).length === 0 ? (
+                    <DropdownMenuLabel>Kayıtlı tedarikçi bulunamadı</DropdownMenuLabel>
+                  ) : (
+                    (suppliers ?? []).map((party) => (
+                      <DropdownMenuCheckboxItem
+                        key={party.id}
+                        checked={form.approved_supplier_ids.includes(party.id)}
+                        onSelect={(e) => e.preventDefault()}
+                        onCheckedChange={(checked) =>
+                          setForm((f) => ({
+                            ...f,
+                            approved_supplier_ids: checked
+                              ? [...f.approved_supplier_ids, party.id]
+                              : f.approved_supplier_ids.filter((id) => id !== party.id),
+                          }))
+                        }
+                      >
+                        {party.name}
+                      </DropdownMenuCheckboxItem>
+                    ))
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="policy-effective-from">Geçerlilik Başlangıcı (opsiyonel)</Label>
+            <Input
+              id="policy-effective-from"
+              type="date"
+              value={form.effective_from}
+              onChange={(e) => setForm((f) => ({ ...f, effective_from: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">
+              Boş bırakılırsa politika şu andan itibaren geçerli olur.
+            </p>
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

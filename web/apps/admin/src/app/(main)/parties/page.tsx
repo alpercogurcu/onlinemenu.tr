@@ -4,6 +4,7 @@ import { Plus } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,13 +17,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectItem } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -54,7 +48,7 @@ const defaultForm: PartyFormState = {
 }
 
 export default function PartiesPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<PartyFormState>(defaultForm)
 
   const { data, isLoading } = useParties()
@@ -64,7 +58,7 @@ export default function PartiesPage() {
 
   const handleOpen = () => {
     setForm(defaultForm)
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -80,7 +74,7 @@ export default function PartiesPage() {
         tax_number: form.tax_number.trim(),
       })
       toast.success("Kayıt eklendi")
-      setSheetOpen(false)
+      setDialogOpen(false)
     } catch {
       toast.error("Kayıt eklenemedi")
     }
@@ -150,24 +144,34 @@ export default function PartiesPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Kayıt</SheetTitle>
-            <SheetDescription>
-              Yeni bir müşteri veya tedarikçi ekleyin.
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="party-name">Ad</Label>
-              <Input
-                id="party-name"
-                placeholder="Ad Soyad / Firma adı"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Kayıt"
+        description="Yeni bir müşteri veya tedarikçi ekleyin."
+        busy={createParty.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="party-form" disabled={createParty.isPending}>
+              {createParty.isPending ? "Kaydediliyor..." : "Kaydet"}
+            </Button>
+          </>
+        }
+      >
+        <form id="party-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="party-name">Ad</Label>
+            <Input
+              id="party-name"
+              placeholder="Ad Soyad / Firma adı"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="party-type">Tip</Label>
               <Select
@@ -191,16 +195,9 @@ export default function PartiesPage() {
                 }
               />
             </div>
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={createParty.isPending}
-            >
-              {createParty.isPending ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

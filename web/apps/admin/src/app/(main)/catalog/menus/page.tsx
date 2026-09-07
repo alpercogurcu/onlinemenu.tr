@@ -5,19 +5,13 @@ import { useTranslations } from "next-intl"
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { MenuItemsSheet } from "@/components/catalog/menu-items-sheet"
+import { MenuItemsDialog } from "@/components/catalog/menu-items-dialog"
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import {
@@ -53,7 +47,7 @@ function useCreateMenu() {
 
 export default function MenusPage() {
   const t = useTranslations("catalogMenus")
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<FormState>(defaultForm)
   // The menu whose items are being edited. Holding the whole menu (not just an
   // id) keeps the sheet's title correct even while the list is refetching.
@@ -77,7 +71,7 @@ export default function MenusPage() {
         is_active: form.is_active,
       })
       toast.success(t("created"))
-      setSheetOpen(false)
+      setDialogOpen(false)
       setForm(defaultForm)
     } catch {
       toast.error(t("createFailed"))
@@ -91,7 +85,7 @@ export default function MenusPage() {
           <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
           <p className="text-muted-foreground">{t("subtitle")}</p>
         </div>
-        <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+        <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
           <Plus className="size-4" />
           {t("add")}
         </Button>
@@ -112,7 +106,7 @@ export default function MenusPage() {
               <FileText className="size-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold">{t("emptyTitle")}</h3>
               <p className="text-sm text-muted-foreground mt-1 mb-4">{t("emptyDescription")}</p>
-              <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+              <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
                 <Plus className="size-4" />
                 {t("addFirst")}
               </Button>
@@ -162,50 +156,57 @@ export default function MenusPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{t("formTitle")}</SheetTitle>
-            <SheetDescription>{t("formDescription")}</SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4 px-4">
-            <div className="space-y-2">
-              <Label htmlFor="menu-name">{t("name")}</Label>
-              <Input
-                id="menu-name"
-                placeholder={t("namePlaceholder")}
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="menu-desc">{t("description")}</Label>
-              <Input
-                id="menu-desc"
-                placeholder={t("descriptionPlaceholder")}
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch
-                id="menu-active"
-                checked={form.is_active}
-                onCheckedChange={(checked) => setForm((f) => ({ ...f, is_active: checked }))}
-              />
-              <Label htmlFor="menu-active">{t("active")}</Label>
-            </div>
-            <Button type="submit" className="w-full" disabled={createMenu.isPending}>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title={t("formTitle")}
+        description={t("formDescription")}
+        busy={createMenu.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              {t("cancel")}
+            </Button>
+            <Button type="submit" form="menu-form" disabled={createMenu.isPending}>
               {createMenu.isPending ? t("saving") : t("save")}
             </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </>
+        }
+      >
+        <form id="menu-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="menu-name">{t("name")}</Label>
+            <Input
+              id="menu-name"
+              placeholder={t("namePlaceholder")}
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="menu-desc">{t("description")}</Label>
+            <Input
+              id="menu-desc"
+              placeholder={t("descriptionPlaceholder")}
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="menu-active"
+              checked={form.is_active}
+              onCheckedChange={(checked) => setForm((f) => ({ ...f, is_active: checked }))}
+            />
+            <Label htmlFor="menu-active">{t("active")}</Label>
+          </div>
+        </form>
+      </FormDialog>
 
       {itemsMenu && (
         // Keyed per menu so the add form's local state does not leak from one
         // menu into the next.
-        <MenuItemsSheet
+        <MenuItemsDialog
           key={itemsMenu.id}
           open
           onOpenChange={(next) => {

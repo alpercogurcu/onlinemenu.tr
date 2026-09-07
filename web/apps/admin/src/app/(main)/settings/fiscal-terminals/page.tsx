@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,13 +31,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectItem } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -129,7 +123,7 @@ export default function FiscalTerminalsPage() {
   // it intentionally does not survive a reload.
   const [lastSyncMap, setLastSyncMap] = useState<Record<string, string>>({})
 
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [mode, setMode] = useState<"create" | "edit">("create")
   const [editingTerminal, setEditingTerminal] = useState<FiscalTerminal | null>(null)
   const [form, setForm] = useState<TerminalFormState>(defaultForm)
@@ -144,7 +138,7 @@ export default function FiscalTerminalsPage() {
     setEditingTerminal(null)
     setForm(defaultForm)
     setFieldErrors({})
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const handleOpenEdit = (terminal: FiscalTerminal) => {
@@ -152,7 +146,7 @@ export default function FiscalTerminalsPage() {
     setEditingTerminal(terminal)
     setForm({ qr: "", label: terminal.label, basket_mode: terminal.basket_mode })
     setFieldErrors({})
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const isSubmitting = mode === "create" ? createTerminal.isPending : updateTerminal.isPending
@@ -188,7 +182,7 @@ export default function FiscalTerminalsPage() {
         })
         toast.success("Terminal güncellendi")
       }
-      setSheetOpen(false)
+      setDialogOpen(false)
     } catch (err) {
       const serverMessage =
         axios.isAxiosError(err) && typeof err.response?.data === "string" ? err.response.data : null
@@ -374,106 +368,114 @@ export default function FiscalTerminalsPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{mode === "create" ? "Yeni Terminal" : "Terminali Düzenle"}</SheetTitle>
-            <SheetDescription>
-              {mode === "create"
-                ? "Cihazın QR kodunu okutup terminali seçili şubeye bağlayın."
-                : `"${editingTerminal?.label || editingTerminal?.terminal_serial}" terminalinin bilgilerini güncelleyin.`}
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            {mode === "create" && (
-              <div className="space-y-2">
-                <Label htmlFor="terminal-qr">QR Kodu</Label>
-                <Input
-                  id="terminal-qr"
-                  placeholder="merchantRef_branchRef_terminalSerial"
-                  value={form.qr}
-                  onChange={(e) => {
-                    setForm((f) => ({ ...f, qr: e.target.value }))
-                    setFieldErrors((fe) => ({ ...fe, qr: undefined }))
-                  }}
-                  aria-invalid={Boolean(fieldErrors.qr)}
-                />
-                {fieldErrors.qr ? (
-                  <p className="text-sm text-destructive">{fieldErrors.qr}</p>
-                ) : qrPreview ? (
-                  <div className="space-y-1 rounded-md border bg-muted/50 p-3 text-xs text-muted-foreground">
-                    <p>
-                      Üye İşyeri Ref:{" "}
-                      <span className="font-mono text-foreground">{qrPreview.merchantRef}</span>
-                    </p>
-                    <p>
-                      Şube Ref: <span className="font-mono text-foreground">{qrPreview.branchRef}</span>
-                    </p>
-                    <p>
-                      Terminal Seri No:{" "}
-                      <span className="font-mono text-foreground">{qrPreview.serial}</span>
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Format: merchantRef_branchRef_terminalSerial
-                  </p>
-                )}
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="terminal-label">Etiket</Label>
-              <Input
-                id="terminal-label"
-                placeholder="örn: Kasa 1"
-                value={form.label}
-                onChange={(e) => {
-                  setForm((f) => ({ ...f, label: e.target.value }))
-                  setFieldErrors((fe) => ({ ...fe, label: undefined }))
-                }}
-                aria-invalid={Boolean(fieldErrors.label)}
-              />
-              {fieldErrors.label && <p className="text-sm text-destructive">{fieldErrors.label}</p>}
-            </div>
-            <div className="space-y-2">
-              <Label>Sepet Modu</Label>
-              <RadioGroup
-                name="basket_mode"
-                value={form.basket_mode}
-                onValueChange={(v) => setForm((f) => ({ ...f, basket_mode: v as BasketMode }))}
-              >
-                <label
-                  htmlFor="basket-mode-instant"
-                  className="flex items-start gap-3 rounded-md border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-accent/50"
-                >
-                  <RadioGroupItem value="instant" id="basket-mode-instant" className="mt-0.5" />
-                  <span>
-                    <span className="block text-sm font-medium">Hemen öde (önerilen)</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Her ödeme anında tekil olarak cihaza gönderilir.
-                    </span>
-                  </span>
-                </label>
-                <label
-                  htmlFor="basket-mode-list"
-                  className="flex items-start gap-3 rounded-md border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-accent/50"
-                >
-                  <RadioGroupItem value="list" id="basket-mode-list" className="mt-0.5" />
-                  <span>
-                    <span className="block text-sm font-medium">Cihazda listele</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Adisyon kapanışında sepet toplu olarak cihaza gönderilir.
-                    </span>
-                  </span>
-                </label>
-              </RadioGroup>
-            </div>
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title={mode === "create" ? "Yeni Terminal" : "Terminali Düzenle"}
+        description={
+          mode === "create"
+            ? "Cihazın QR kodunu okutup terminali seçili şubeye bağlayın."
+            : `"${editingTerminal?.label || editingTerminal?.terminal_serial}" terminalinin bilgilerini güncelleyin.`
+        }
+        size="lg"
+        busy={isSubmitting}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="terminal-form" disabled={isSubmitting}>
               {isSubmitting ? "Kaydediliyor..." : "Kaydet"}
             </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </>
+        }
+      >
+        <form id="terminal-form" onSubmit={handleSubmit} className="space-y-4">
+          {mode === "create" && (
+            <div className="space-y-2">
+              <Label htmlFor="terminal-qr">QR Kodu</Label>
+              <Input
+                id="terminal-qr"
+                placeholder="merchantRef_branchRef_terminalSerial"
+                value={form.qr}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, qr: e.target.value }))
+                  setFieldErrors((fe) => ({ ...fe, qr: undefined }))
+                }}
+                aria-invalid={Boolean(fieldErrors.qr)}
+              />
+              {fieldErrors.qr ? (
+                <p className="text-sm text-destructive">{fieldErrors.qr}</p>
+              ) : qrPreview ? (
+                <div className="space-y-1 rounded-md border bg-muted/50 p-3 text-xs text-muted-foreground">
+                  <p>
+                    Üye İşyeri Ref:{" "}
+                    <span className="font-mono text-foreground">{qrPreview.merchantRef}</span>
+                  </p>
+                  <p>
+                    Şube Ref: <span className="font-mono text-foreground">{qrPreview.branchRef}</span>
+                  </p>
+                  <p>
+                    Terminal Seri No:{" "}
+                    <span className="font-mono text-foreground">{qrPreview.serial}</span>
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Format: merchantRef_branchRef_terminalSerial
+                </p>
+              )}
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="terminal-label">Etiket</Label>
+            <Input
+              id="terminal-label"
+              placeholder="örn: Kasa 1"
+              value={form.label}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, label: e.target.value }))
+                setFieldErrors((fe) => ({ ...fe, label: undefined }))
+              }}
+              aria-invalid={Boolean(fieldErrors.label)}
+            />
+            {fieldErrors.label && <p className="text-sm text-destructive">{fieldErrors.label}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Sepet Modu</Label>
+            <RadioGroup
+              name="basket_mode"
+              value={form.basket_mode}
+              onValueChange={(v) => setForm((f) => ({ ...f, basket_mode: v as BasketMode }))}
+            >
+              <label
+                htmlFor="basket-mode-instant"
+                className="flex items-start gap-3 rounded-md border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-accent/50"
+              >
+                <RadioGroupItem value="instant" id="basket-mode-instant" className="mt-0.5" />
+                <span>
+                  <span className="block text-sm font-medium">Hemen öde (önerilen)</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Her ödeme anında tekil olarak cihaza gönderilir.
+                  </span>
+                </span>
+              </label>
+              <label
+                htmlFor="basket-mode-list"
+                className="flex items-start gap-3 rounded-md border p-3 cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-accent/50"
+              >
+                <RadioGroupItem value="list" id="basket-mode-list" className="mt-0.5" />
+                <span>
+                  <span className="block text-sm font-medium">Cihazda listele</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Adisyon kapanışında sepet toplu olarak cihaza gönderilir.
+                  </span>
+                </span>
+              </label>
+            </RadioGroup>
+          </div>
+        </form>
+      </FormDialog>
 
       <Dialog open={confirmTarget !== null} onOpenChange={(open) => !open && setConfirmTarget(null)}>
         <DialogContent>

@@ -8,7 +8,7 @@ import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { MenuItemsSheet } from "@/components/catalog/menu-items-sheet"
+import { MenuItemsDialog } from "@/components/catalog/menu-items-dialog"
 import messages from "@/messages/tr.json"
 import type { Menu, MenuItem, Product } from "@/types"
 
@@ -86,7 +86,7 @@ function Wrapper({ children }: { children: ReactNode }) {
 }
 
 function renderSheet() {
-  return render(<MenuItemsSheet open onOpenChange={() => {}} menu={MENU} />, { wrapper: Wrapper })
+  return render(<MenuItemsDialog open onOpenChange={() => {}} menu={MENU} />, { wrapper: Wrapper })
 }
 
 // The <select> element exists before its options do (the product query is still
@@ -97,7 +97,7 @@ async function pickProduct(name: string, id: string) {
   fireEvent.change(screen.getByLabelText("Ürün"), { target: { value: id } })
 }
 
-describe("MenuItemsSheet", () => {
+describe("MenuItemsDialog", () => {
   beforeEach(() => {
     menuItems = []
     post.mockReset()

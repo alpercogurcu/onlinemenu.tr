@@ -5,6 +5,7 @@ import { Plus, Receipt, Trash2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -17,13 +18,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectItem } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -129,7 +123,7 @@ export default function PurchaseReceiptsPage() {
   const { data: suppliers } = useParties({ type: "supplier" })
   const createReceipt = useCreatePurchaseReceipt()
 
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<ReceiptFormState>(defaultForm(""))
   const [lineErrors, setLineErrors] = useState<Record<number, string>>({})
 
@@ -145,7 +139,7 @@ export default function PurchaseReceiptsPage() {
   const handleOpen = () => {
     setForm(defaultForm(warehouseId))
     setLineErrors({})
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const updateRow = (index: number, patch: Partial<ReceiptItemRow>) => {
@@ -216,7 +210,7 @@ export default function PurchaseReceiptsPage() {
         })),
       })
       toast.success("Fiş kaydedildi")
-      setSheetOpen(false)
+      setDialogOpen(false)
     } catch (err) {
       if (
         axios.isAxiosError(err) &&
@@ -359,185 +353,189 @@ export default function PurchaseReceiptsPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent className="sm:max-w-lg">
-          <SheetHeader>
-            <SheetTitle>Yeni Fiş</SheetTitle>
-            <SheetDescription>
-              Faturasız alım (pazar/market) için depo, tedarikçi ve satırları girin. Bir satır
-              tedarik politikasına aykırıysa fiş bütün olarak reddedilir.
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="receipt-warehouse">Depo</Label>
-              <Select
-                id="receipt-warehouse"
-                value={form.warehouse_id}
-                onChange={(e) => setForm((f) => ({ ...f, warehouse_id: e.target.value }))}
-              >
-                <SelectItem value="">Depo seçin</SelectItem>
-                {(warehouses ?? []).map((wh) => (
-                  <SelectItem key={wh.id} value={wh.id}>
-                    {wh.name}
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="receipt-supplier">Tedarikçi</Label>
-              <Select
-                id="receipt-supplier"
-                value={form.supplierSelection}
-                onChange={(e) => setForm((f) => ({ ...f, supplierSelection: e.target.value }))}
-              >
-                <SelectItem value="">Tedarikçi seçin</SelectItem>
-                <SelectItem value={FREE_SUPPLIER_VALUE}>Serbest / Pazar (metin gir)</SelectItem>
-                {(suppliers ?? []).map((party) => (
-                  <SelectItem key={party.id} value={party.id}>
-                    {party.name}
-                  </SelectItem>
-                ))}
-              </Select>
-              {form.supplierSelection === FREE_SUPPLIER_VALUE && (
-                <Input
-                  placeholder="örn: Salı Pazarı"
-                  value={form.supplier_name}
-                  onChange={(e) => setForm((f) => ({ ...f, supplier_name: e.target.value }))}
-                />
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-2">
-                <Label htmlFor="receipt-date">Tarih</Label>
-                <Input
-                  id="receipt-date"
-                  type="date"
-                  value={form.receipt_date}
-                  onChange={(e) => setForm((f) => ({ ...f, receipt_date: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="receipt-no">Fiş No (opsiyonel)</Label>
-                <Input
-                  id="receipt-no"
-                  value={form.receipt_no}
-                  onChange={(e) => setForm((f) => ({ ...f, receipt_no: e.target.value }))}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="receipt-note">Not (opsiyonel)</Label>
-              <Input
-                id="receipt-note"
-                value={form.note}
-                onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>Satırlar</Label>
-                <Badge variant="outline">{form.items.length} satır</Badge>
-              </div>
-              {form.items.map((row, idx) => (
-                <div key={idx} className="space-y-2 rounded-md border p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Satır {idx + 1}</span>
-                    {form.items.length > 1 && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => removeRow(idx)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor={`receipt-item-stock-${idx}`}>Stok Kalemi</Label>
-                    <Select
-                      id={`receipt-item-stock-${idx}`}
-                      value={row.stock_item_id}
-                      onChange={(e) => {
-                        const stockItemId = e.target.value
-                        const selected = selectableStockItems.find((i) => i.id === stockItemId)
-                        updateRow(idx, {
-                          stock_item_id: stockItemId,
-                          unit: row.unit || selected?.canonical_unit || "",
-                        })
-                      }}
-                    >
-                      <SelectItem value="">Stok kalemi seçin</SelectItem>
-                      {selectableStockItems.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name} ({item.sku})
-                        </SelectItem>
-                      ))}
-                    </Select>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="space-y-2">
-                      <Label htmlFor={`receipt-item-qty-${idx}`}>Miktar</Label>
-                      <Input
-                        id={`receipt-item-qty-${idx}`}
-                        type="number"
-                        step="0.001"
-                        min="0"
-                        value={row.quantity}
-                        onChange={(e) => updateRow(idx, { quantity: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor={`receipt-item-unit-${idx}`}>Birim</Label>
-                      <Input
-                        id={`receipt-item-unit-${idx}`}
-                        value={row.unit}
-                        onChange={(e) => updateRow(idx, { unit: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor={`receipt-item-price-${idx}`}>Birim Fiyat</Label>
-                      <Input
-                        id={`receipt-item-price-${idx}`}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={row.unit_price}
-                        onChange={(e) => updateRow(idx, { unit_price: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor={`receipt-item-brand-${idx}`}>Marka (opsiyonel)</Label>
-                    <Input
-                      id={`receipt-item-brand-${idx}`}
-                      placeholder="örn: Heinz"
-                      value={row.brand}
-                      onChange={(e) => updateRow(idx, { brand: e.target.value })}
-                    />
-                  </div>
-                  {lineErrors[idx] && (
-                    <p className="text-xs text-destructive">{lineErrors[idx]}</p>
-                  )}
-                </div>
-              ))}
-              <Button type="button" variant="outline" size="sm" onClick={addRow}>
-                <Plus className="size-4" />
-                Satır ekle
-              </Button>
-            </div>
-
-            <Button type="submit" className="w-full" disabled={createReceipt.isPending}>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Fiş"
+        description="Faturasız alım (pazar/market) için depo, tedarikçi ve satırları girin. Bir satır tedarik politikasına aykırıysa fiş bütün olarak reddedilir."
+        size="xl"
+        busy={createReceipt.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="receipt-form" disabled={createReceipt.isPending}>
               {createReceipt.isPending ? "Kaydediliyor..." : "Kaydet"}
             </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </>
+        }
+      >
+        <form id="receipt-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="receipt-warehouse">Depo</Label>
+            <Select
+              id="receipt-warehouse"
+              value={form.warehouse_id}
+              onChange={(e) => setForm((f) => ({ ...f, warehouse_id: e.target.value }))}
+            >
+              <SelectItem value="">Depo seçin</SelectItem>
+              {(warehouses ?? []).map((wh) => (
+                <SelectItem key={wh.id} value={wh.id}>
+                  {wh.name}
+                </SelectItem>
+              ))}
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="receipt-supplier">Tedarikçi</Label>
+            <Select
+              id="receipt-supplier"
+              value={form.supplierSelection}
+              onChange={(e) => setForm((f) => ({ ...f, supplierSelection: e.target.value }))}
+            >
+              <SelectItem value="">Tedarikçi seçin</SelectItem>
+              <SelectItem value={FREE_SUPPLIER_VALUE}>Serbest / Pazar (metin gir)</SelectItem>
+              {(suppliers ?? []).map((party) => (
+                <SelectItem key={party.id} value={party.id}>
+                  {party.name}
+                </SelectItem>
+              ))}
+            </Select>
+            {form.supplierSelection === FREE_SUPPLIER_VALUE && (
+              <Input
+                placeholder="örn: Salı Pazarı"
+                value={form.supplier_name}
+                onChange={(e) => setForm((f) => ({ ...f, supplier_name: e.target.value }))}
+              />
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="receipt-date">Tarih</Label>
+              <Input
+                id="receipt-date"
+                type="date"
+                value={form.receipt_date}
+                onChange={(e) => setForm((f) => ({ ...f, receipt_date: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="receipt-no">Fiş No (opsiyonel)</Label>
+              <Input
+                id="receipt-no"
+                value={form.receipt_no}
+                onChange={(e) => setForm((f) => ({ ...f, receipt_no: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="receipt-note">Not (opsiyonel)</Label>
+            <Input
+              id="receipt-note"
+              value={form.note}
+              onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>Satırlar</Label>
+              <Badge variant="outline">{form.items.length} satır</Badge>
+            </div>
+            {form.items.map((row, idx) => (
+              <div key={idx} className="space-y-2 rounded-md border p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Satır {idx + 1}</span>
+                  {form.items.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => removeRow(idx)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor={`receipt-item-stock-${idx}`}>Stok Kalemi</Label>
+                  <Select
+                    id={`receipt-item-stock-${idx}`}
+                    value={row.stock_item_id}
+                    onChange={(e) => {
+                      const stockItemId = e.target.value
+                      const selected = selectableStockItems.find((i) => i.id === stockItemId)
+                      updateRow(idx, {
+                        stock_item_id: stockItemId,
+                        unit: row.unit || selected?.canonical_unit || "",
+                      })
+                    }}
+                  >
+                    <SelectItem value="">Stok kalemi seçin</SelectItem>
+                    {selectableStockItems.map((item) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.name} ({item.sku})
+                      </SelectItem>
+                    ))}
+                  </Select>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-2">
+                    <Label htmlFor={`receipt-item-qty-${idx}`}>Miktar</Label>
+                    <Input
+                      id={`receipt-item-qty-${idx}`}
+                      type="number"
+                      step="0.001"
+                      min="0"
+                      value={row.quantity}
+                      onChange={(e) => updateRow(idx, { quantity: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`receipt-item-unit-${idx}`}>Birim</Label>
+                    <Input
+                      id={`receipt-item-unit-${idx}`}
+                      value={row.unit}
+                      onChange={(e) => updateRow(idx, { unit: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`receipt-item-price-${idx}`}>Birim Fiyat</Label>
+                    <Input
+                      id={`receipt-item-price-${idx}`}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={row.unit_price}
+                      onChange={(e) => updateRow(idx, { unit_price: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor={`receipt-item-brand-${idx}`}>Marka (opsiyonel)</Label>
+                  <Input
+                    id={`receipt-item-brand-${idx}`}
+                    placeholder="örn: Heinz"
+                    value={row.brand}
+                    onChange={(e) => updateRow(idx, { brand: e.target.value })}
+                  />
+                </div>
+                {lineErrors[idx] && (
+                  <p className="text-xs text-destructive">{lineErrors[idx]}</p>
+                )}
+              </div>
+            ))}
+            <Button type="button" variant="outline" size="sm" onClick={addRow}>
+              <Plus className="size-4" />
+              Satır ekle
+            </Button>
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

@@ -4,19 +4,13 @@ import { Plus, Users } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -58,7 +52,7 @@ interface FormState {
 const defaultForm: FormState = { name: "", type: "customer", tax_number: "" }
 
 export default function CustomersPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<FormState>(defaultForm)
 
   const { data, isLoading } = useParties({ limit: 100 })
@@ -79,7 +73,7 @@ export default function CustomersPage() {
         tax_number: form.tax_number.trim(),
       })
       toast.success("Kayıt eklendi")
-      setSheetOpen(false)
+      setDialogOpen(false)
       setForm(defaultForm)
     } catch {
       toast.error("Kayıt eklenemedi")
@@ -93,7 +87,7 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold tracking-tight">Müşteri & Tedarikçi</h1>
           <p className="text-muted-foreground">Müşteri ve tedarikçi kayıtlarını yönetin.</p>
         </div>
-        <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+        <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
           <Plus className="size-4" />
           Yeni Ekle
         </Button>
@@ -116,7 +110,7 @@ export default function CustomersPage() {
               <p className="text-sm text-muted-foreground mt-1 mb-4">
                 İlk müşteri veya tedarikçi kaydını ekleyin.
               </p>
-              <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+              <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
                 <Plus className="size-4" />
                 İlk kaydı ekle
               </Button>
@@ -160,22 +154,34 @@ export default function CustomersPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Kayıt</SheetTitle>
-            <SheetDescription>Müşteri veya tedarikçi ekleyin.</SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="party-name">Ad / Unvan</Label>
-              <Input
-                id="party-name"
-                placeholder="Firma veya kişi adı"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Kayıt"
+        description="Müşteri veya tedarikçi ekleyin."
+        busy={createParty.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="customer-form" disabled={createParty.isPending}>
+              {createParty.isPending ? "Kaydediliyor..." : "Kaydet"}
+            </Button>
+          </>
+        }
+      >
+        <form id="customer-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="party-name">Ad / Unvan</Label>
+            <Input
+              id="party-name"
+              placeholder="Firma veya kişi adı"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="party-type">Tip</Label>
               <Select
@@ -197,12 +203,9 @@ export default function CustomersPage() {
                 onChange={(e) => setForm((f) => ({ ...f, tax_number: e.target.value }))}
               />
             </div>
-            <Button type="submit" className="w-full" disabled={createParty.isPending}>
-              {createParty.isPending ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

@@ -4,18 +4,12 @@ import { Plus, Tag, Trash2 } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -36,7 +30,7 @@ interface FormState {
 const defaultForm: FormState = { name: "", description: "", sort_order: "0" }
 
 export default function CategoriesPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<FormState>(defaultForm)
 
   const { data, isLoading } = useCategories()
@@ -58,7 +52,7 @@ export default function CategoriesPage() {
         is_active: true,
       })
       toast.success("Kategori eklendi")
-      setSheetOpen(false)
+      setDialogOpen(false)
       setForm(defaultForm)
     } catch {
       toast.error("Kategori eklenemedi")
@@ -72,7 +66,7 @@ export default function CategoriesPage() {
           <h1 className="text-2xl font-bold tracking-tight">Kategoriler</h1>
           <p className="text-muted-foreground">Menü kategorilerini yönetin.</p>
         </div>
-        <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+        <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
           <Plus className="size-4" />
           Kategori Ekle
         </Button>
@@ -95,7 +89,7 @@ export default function CategoriesPage() {
               <p className="text-sm text-muted-foreground mt-1 mb-4">
                 Ürünlerinizi gruplandırmak için kategori ekleyin.
               </p>
-              <Button onClick={() => { setForm(defaultForm); setSheetOpen(true) }}>
+              <Button onClick={() => { setForm(defaultForm); setDialogOpen(true) }}>
                 <Plus className="size-4" />
                 İlk kategoriyi ekle
               </Button>
@@ -136,48 +130,55 @@ export default function CategoriesPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Kategori</SheetTitle>
-            <SheetDescription>Menünüze yeni bir kategori ekleyin.</SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="cat-name">Ad</Label>
-              <Input
-                id="cat-name"
-                placeholder="Kategori adı"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cat-desc">Açıklama</Label>
-              <Input
-                id="cat-desc"
-                placeholder="Kısa açıklama"
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cat-order">Sıralama</Label>
-              <Input
-                id="cat-order"
-                type="number"
-                min="0"
-                placeholder="0"
-                value={form.sort_order}
-                onChange={(e) => setForm((f) => ({ ...f, sort_order: e.target.value }))}
-              />
-            </div>
-            <Button type="submit" className="w-full" disabled={createCategory.isPending}>
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Kategori"
+        description="Menünüze yeni bir kategori ekleyin."
+        busy={createCategory.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="category-form" disabled={createCategory.isPending}>
               {createCategory.isPending ? "Kaydediliyor..." : "Kaydet"}
             </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </>
+        }
+      >
+        <form id="category-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="cat-name">Ad</Label>
+            <Input
+              id="cat-name"
+              placeholder="Kategori adı"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="cat-desc">Açıklama</Label>
+            <Input
+              id="cat-desc"
+              placeholder="Kısa açıklama"
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="cat-order">Sıralama</Label>
+            <Input
+              id="cat-order"
+              type="number"
+              min="0"
+              placeholder="0"
+              value={form.sort_order}
+              onChange={(e) => setForm((f) => ({ ...f, sort_order: e.target.value }))}
+            />
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

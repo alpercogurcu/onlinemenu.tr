@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle2, Plus, Search, Users } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { UserRowActions } from "@/components/settings/user-row-actions"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -13,13 +14,6 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -217,7 +211,7 @@ export default function UsersPage() {
 
   const inviteStaff = useInviteStaff(tenantId)
 
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<InviteFormState>(defaultInviteForm)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof InviteFormState, string>>>({})
   const [inviteResult, setInviteResult] = useState<StaffInviteResult | null>(null)
@@ -225,15 +219,15 @@ export default function UsersPage() {
   const selectedRole = roleById.get(form.role_id)
   const branchRequired = roleRequiresBranch(selectedRole)
 
-  const openSheet = () => {
+  const openDialog = () => {
     setForm(defaultInviteForm)
     setFieldErrors({})
     setInviteResult(null)
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
-  const handleSheetOpenChange = (open: boolean) => {
-    setSheetOpen(open)
+  const handleDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open)
     if (!open) {
       setForm(defaultInviteForm)
       setFieldErrors({})
@@ -289,7 +283,7 @@ export default function UsersPage() {
                 (suspendedCount > 0 ? ` · ${suspendedCount} pasif` : "")}
           </p>
         </div>
-        <Button onClick={openSheet}>
+        <Button onClick={openDialog}>
           <Plus className="size-4" />
           Personel davet et
         </Button>
@@ -359,7 +353,7 @@ export default function UsersPage() {
               <p className="text-sm text-muted-foreground mt-1 mb-4">
                 İşletmenize personel davet edin.
               </p>
-              <Button onClick={openSheet}>
+              <Button onClick={openDialog}>
                 <Plus className="size-4" />
                 İlk personeli ekle
               </Button>
@@ -470,85 +464,97 @@ export default function UsersPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={handleSheetOpenChange}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Personel davet et</SheetTitle>
-            <SheetDescription>
-              Yeni bir personeli işletmenize davet edin. Şifre belirleme e-postası otomatik gönderilir.
-            </SheetDescription>
-          </SheetHeader>
-
-          {inviteResult ? (
-            <div className="mt-6 space-y-4">
-              <div
-                className={cn(
-                  "space-y-2 rounded-md border p-4 text-sm",
-                  inviteNeedsAction(inviteResult)
-                    ? "border-status-warning-border bg-status-warning-bg text-status-warning-fg"
-                    : "border-status-success-border bg-status-success-bg text-status-success-fg",
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={handleDialogOpenChange}
+        title="Personel davet et"
+        description="Yeni bir personeli işletmenize davet edin. Şifre belirleme e-postası otomatik gönderilir."
+        size="lg"
+        busy={inviteStaff.isPending}
+        footer={
+          inviteResult ? undefined : (
+            <>
+              <Button type="button" variant="outline" onClick={() => handleDialogOpenChange(false)}>
+                Vazgeç
+              </Button>
+              <Button type="submit" form="staff-invite-form" disabled={inviteStaff.isPending}>
+                {inviteStaff.isPending ? "Davet gönderiliyor..." : "Davet Gönder"}
+              </Button>
+            </>
+          )
+        }
+      >
+        {inviteResult ? (
+          <div className="space-y-4">
+            <div
+              className={cn(
+                "space-y-2 rounded-md border p-4 text-sm",
+                inviteNeedsAction(inviteResult)
+                  ? "border-status-warning-border bg-status-warning-bg text-status-warning-fg"
+                  : "border-status-success-border bg-status-success-bg text-status-success-fg",
+              )}
+            >
+              <div className="flex items-center gap-2 font-medium">
+                {inviteNeedsAction(inviteResult) ? (
+                  <AlertTriangle className="size-4 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="size-4 shrink-0" />
                 )}
-              >
-                <div className="flex items-center gap-2 font-medium">
-                  {inviteNeedsAction(inviteResult) ? (
-                    <AlertTriangle className="size-4 shrink-0" />
-                  ) : (
-                    <CheckCircle2 className="size-4 shrink-0" />
-                  )}
-                  {inviteNeedsAction(inviteResult)
-                    ? "Personel eklendi ama davet e-postası gönderilemedi"
-                    : inviteResult.notification_sent
-                      ? "Personel eklendi, davet e-postası gönderildi"
-                      : "Personel eklendi, mevcut hesap bağlandı"}
-                </div>
+                {inviteNeedsAction(inviteResult)
+                  ? "Personel eklendi ama davet e-postası gönderilemedi"
+                  : inviteResult.notification_sent
+                    ? "Personel eklendi, davet e-postası gönderildi"
+                    : "Personel eklendi, mevcut hesap bağlandı"}
+              </div>
 
-                <p>
-                  <span className="font-medium">{inviteResult.person.full_name}</span>{" "}
-                  ({inviteResult.person.email}) hesabı ve işletme üyeliği oluşturuldu.
+              <p>
+                <span className="font-medium">{inviteResult.person.full_name}</span>{" "}
+                ({inviteResult.person.email}) hesabı ve işletme üyeliği oluşturuldu.
+              </p>
+
+              {!inviteResult.keycloak_user_created && (
+                <p
+                  className={
+                    inviteNeedsAction(inviteResult) ? "text-status-warning-fg" : "text-status-success-fg"
+                  }
+                >
+                  Bu e-posta ile sistemde zaten bir Keycloak hesabı vardı (başka bir işletmede
+                  çalışıyor veya daha önce davet edilmiş olabilir) — yeni hesap açılmadı, mevcut
+                  hesap bu işletmeye bağlandı.
                 </p>
+              )}
 
-                {!inviteResult.keycloak_user_created && (
-                  <p
-                    className={
-                      inviteNeedsAction(inviteResult) ? "text-status-warning-fg" : "text-status-success-fg"
-                    }
-                  >
-                    Bu e-posta ile sistemde zaten bir Keycloak hesabı vardı (başka bir işletmede
-                    çalışıyor veya daha önce davet edilmiş olabilir) — yeni hesap açılmadı, mevcut
-                    hesap bu işletmeye bağlandı.
+              {inviteNeedsAction(inviteResult) && (
+                <div className="space-y-1 pt-1">
+                  <p>
+                    Personel şifresini belirleyemeyecek ve <strong>giriş yapamayacak</strong> —
+                    e-posta gönderimi başarısız oldu (örn. realm&apos;de SMTP yapılandırılmamış
+                    olabilir).
                   </p>
-                )}
-
-                {inviteNeedsAction(inviteResult) && (
-                  <div className="space-y-1 pt-1">
-                    <p>
-                      Personel şifresini belirleyemeyecek ve <strong>giriş yapamayacak</strong> —
-                      e-posta gönderimi başarısız oldu (örn. realm&apos;de SMTP yapılandırılmamış
-                      olabilir).
+                  {inviteResult.notification_error && (
+                    <p className="rounded bg-status-warning-bg p-2 font-mono text-xs break-all text-status-warning-fg">
+                      {inviteResult.notification_error}
                     </p>
-                    {inviteResult.notification_error && (
-                      <p className="rounded bg-status-warning-bg p-2 font-mono text-xs break-all text-status-warning-fg">
-                        {inviteResult.notification_error}
-                      </p>
-                    )}
-                    <p className="font-medium">
-                      Bu personelin şifresini Keycloak yönetim panelinden elle belirlemeniz gerekiyor.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={openSheet}>
-                  Başka personel ekle
-                </Button>
-                <Button className="flex-1" onClick={() => handleSheetOpenChange(false)}>
-                  Kapat
-                </Button>
-              </div>
+                  )}
+                  <p className="font-medium">
+                    Bu personelin şifresini Keycloak yönetim panelinden elle belirlemeniz gerekiyor.
+                  </p>
+                </div>
+              )}
             </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={openDialog}>
+                Başka personel ekle
+              </Button>
+              <Button className="flex-1" onClick={() => handleDialogOpenChange(false)}>
+                Kapat
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <form id="staff-invite-form" onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="staff-full-name">Ad Soyad</Label>
                 <Input
@@ -581,72 +587,68 @@ export default function UsersPage() {
                 />
                 {fieldErrors.email && <p className="text-sm text-destructive">{fieldErrors.email}</p>}
               </div>
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="staff-role">Rol</Label>
-                <Select
-                  id="staff-role"
-                  value={form.role_id}
-                  onChange={(e) => {
-                    const roleId = e.target.value
-                    // A previously chosen branch is always kept: it is only
-                    // ever *required* for a branch-scoped role, never
-                    // *forbidden* for a chain-wide one (a chain-wide role
-                    // pinned to one branch is a legal membership).
-                    setForm((f) => ({ ...f, role_id: roleId }))
-                    setFieldErrors((fe) => ({ ...fe, role_id: undefined, branch_id: undefined }))
-                  }}
-                  aria-invalid={Boolean(fieldErrors.role_id)}
-                >
-                  <option value="">Rol seçin</option>
-                  {roles.map((role) => (
-                    <option key={role.id} value={role.id}>
-                      {role.name}
-                      {roleRequiresBranch(role) ? " (şubeye bağlı)" : ""}
-                    </option>
-                  ))}
-                </Select>
-                {fieldErrors.role_id && <p className="text-sm text-destructive">{fieldErrors.role_id}</p>}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="staff-branch">
-                  Şube{branchRequired ? " (zorunlu)" : " (opsiyonel — boş bırakılırsa tüm şubeler)"}
-                </Label>
-                <Select
-                  id="staff-branch"
-                  value={form.branch_id}
-                  onChange={(e) => {
-                    setForm((f) => ({ ...f, branch_id: e.target.value }))
-                    setFieldErrors((fe) => ({ ...fe, branch_id: undefined }))
-                  }}
-                  aria-invalid={Boolean(fieldErrors.branch_id)}
-                >
-                  <option value="">
-                    {branchRequired ? "Şube seçin" : "Tüm şubeler (zincir geneli)"}
+            <div className="space-y-2">
+              <Label htmlFor="staff-role">Rol</Label>
+              <Select
+                id="staff-role"
+                value={form.role_id}
+                onChange={(e) => {
+                  const roleId = e.target.value
+                  // A previously chosen branch is always kept: it is only
+                  // ever *required* for a branch-scoped role, never
+                  // *forbidden* for a chain-wide one (a chain-wide role
+                  // pinned to one branch is a legal membership).
+                  setForm((f) => ({ ...f, role_id: roleId }))
+                  setFieldErrors((fe) => ({ ...fe, role_id: undefined, branch_id: undefined }))
+                }}
+                aria-invalid={Boolean(fieldErrors.role_id)}
+              >
+                <option value="">Rol seçin</option>
+                {roles.map((role) => (
+                  <option key={role.id} value={role.id}>
+                    {role.name}
+                    {roleRequiresBranch(role) ? " (şubeye bağlı)" : ""}
                   </option>
-                  {branches.map((branch) => (
-                    <option key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </option>
-                  ))}
-                </Select>
-                {fieldErrors.branch_id ? (
-                  <p className="text-sm text-destructive">{fieldErrors.branch_id}</p>
-                ) : branchRequired ? (
-                  <p className="text-sm text-muted-foreground">
-                    Seçilen rol şubeye bağlı (ADR-SEC-005) — zincir geneli atanamaz.
-                  </p>
-                ) : null}
-              </div>
+                ))}
+              </Select>
+              {fieldErrors.role_id && <p className="text-sm text-destructive">{fieldErrors.role_id}</p>}
+            </div>
 
-              <Button type="submit" className="w-full" disabled={inviteStaff.isPending}>
-                {inviteStaff.isPending ? "Davet gönderiliyor..." : "Davet Gönder"}
-              </Button>
-            </form>
-          )}
-        </SheetContent>
-      </Sheet>
+            <div className="space-y-2">
+              <Label htmlFor="staff-branch">
+                Şube{branchRequired ? " (zorunlu)" : " (opsiyonel — boş bırakılırsa tüm şubeler)"}
+              </Label>
+              <Select
+                id="staff-branch"
+                value={form.branch_id}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, branch_id: e.target.value }))
+                  setFieldErrors((fe) => ({ ...fe, branch_id: undefined }))
+                }}
+                aria-invalid={Boolean(fieldErrors.branch_id)}
+              >
+                <option value="">
+                  {branchRequired ? "Şube seçin" : "Tüm şubeler (zincir geneli)"}
+                </option>
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </option>
+                ))}
+              </Select>
+              {fieldErrors.branch_id ? (
+                <p className="text-sm text-destructive">{fieldErrors.branch_id}</p>
+              ) : branchRequired ? (
+                <p className="text-sm text-muted-foreground">
+                  Seçilen rol şubeye bağlı (ADR-SEC-005) — zincir geneli atanamaz.
+                </p>
+              ) : null}
+            </div>
+          </form>
+        )}
+      </FormDialog>
     </div>
   )
 }

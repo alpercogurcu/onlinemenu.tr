@@ -4,6 +4,7 @@ import { Plus, Warehouse as WarehouseIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
+import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,13 +17,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectItem } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -50,7 +44,7 @@ const defaultForm: WarehouseFormState = {
 }
 
 export default function WarehousesPage() {
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<WarehouseFormState>(defaultForm)
 
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
@@ -62,7 +56,7 @@ export default function WarehousesPage() {
 
   const handleOpen = () => {
     setForm({ ...defaultForm, branch_id: branches?.[0]?.id ?? "" })
-    setSheetOpen(true)
+    setDialogOpen(true)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -79,7 +73,7 @@ export default function WarehousesPage() {
         is_active: true,
       })
       toast.success("Depo eklendi")
-      setSheetOpen(false)
+      setDialogOpen(false)
     } catch {
       toast.error("Depo eklenemedi")
     }
@@ -162,13 +156,34 @@ export default function WarehousesPage() {
         </CardContent>
       </Card>
 
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Yeni Depo</SheetTitle>
-            <SheetDescription>İşletmenize yeni bir depo veya imalat noktası ekleyin.</SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+      <FormDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Yeni Depo"
+        description="İşletmenize yeni bir depo veya imalat noktası ekleyin."
+        busy={createWarehouse.isPending}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button type="submit" form="warehouse-form" disabled={createWarehouse.isPending}>
+              {createWarehouse.isPending ? "Kaydediliyor..." : "Kaydet"}
+            </Button>
+          </>
+        }
+      >
+        <form id="warehouse-form" onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="warehouse-name">Ad</Label>
+            <Input
+              id="warehouse-name"
+              placeholder="örn: Merkez Depo"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="warehouse-branch">Şube</Label>
               <Select
@@ -185,15 +200,6 @@ export default function WarehousesPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="warehouse-name">Ad</Label>
-              <Input
-                id="warehouse-name"
-                placeholder="örn: Merkez Depo"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="warehouse-type">Tip</Label>
               <Select
                 id="warehouse-type"
@@ -206,12 +212,9 @@ export default function WarehousesPage() {
                 <SelectItem value="imalat">İmalat</SelectItem>
               </Select>
             </div>
-            <Button type="submit" className="w-full" disabled={createWarehouse.isPending}>
-              {createWarehouse.isPending ? "Kaydediliyor..." : "Kaydet"}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
+          </div>
+        </form>
+      </FormDialog>
     </div>
   )
 }

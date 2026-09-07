@@ -29,9 +29,6 @@ function Command({
   )
 }
 
-// showCloseButton is not exposed here: this project's own DialogContent
-// (components/ui/dialog.tsx) always renders its close button unconditionally
-// and has no such prop to forward to.
 function CommandDialog({
   title = "Command Palette",
   description = "Search for a command to run...",

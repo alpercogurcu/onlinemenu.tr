@@ -425,3 +425,52 @@ func TestStaffInvite_KeycloakEmailChangedSincePriorInvite_ReusesUserAndSyncsEmai
 	require.NoError(t, err)
 	assert.Equal(t, newEmail, person.Email, "the sync must be committed, not just reflected in the response")
 }
+
+// TestStaffInvite_KeycloakAccountDeleted_ReturnsConflict pins H-1: a persons
+// row exists for this email, but its keycloak_sub no longer resolves to any
+// account (deleted directly in Keycloak, outside this module's knowledge).
+// Falling through to CreateUser here used to provision a second Keycloak
+// user whose FindOrCreateByKeycloakSub insert then hit persons_email_idx and
+// aborted the transaction as an unmapped 500 — repeating on every retry and
+// permanently blocking that email from being invited again. The correct
+// behaviour is to fail closed with pub.ErrConflict before any Keycloak
+// write is attempted, and to never touch the existing person/membership rows.
+func TestStaffInvite_KeycloakAccountDeleted_ReturnsConflict(t *testing.T) {
+	ctx := context.Background()
+	admin := newFakeAdminAPI()
+	svc := newStaffInviteService(admin)
+	cashierRoleID := systemRoleID(t, "cashier")
+
+	email := "deleted-account+" + uuid.NewString() + "@example.com"
+	deadSub := "kc-deleted-" + uuid.NewString()
+
+	// Seed a persons row whose keycloak_sub was never registered with the
+	// fake admin API — simulating an account that existed once but was
+	// deleted directly in Keycloak, outside this module's knowledge.
+	var seededPerson domain.Person
+	err := sharedPool.WithAllTenantsTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		seededPerson, err = repo.NewPersonRepo().FindOrCreateByKeycloakSub(ctx, tx, domain.Person{
+			KeycloakSub: deadSub, Email: email, FullName: "Deleted Account",
+		})
+		return err
+	})
+	require.NoError(t, err)
+
+	_, err = svc.Invite(ctx, tenantA, service.StaffInviteRequest{
+		FullName: "Deleted Account", Email: email, BranchID: &branchA, RoleID: cashierRoleID,
+	})
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, pub.ErrConflict), "got %v", err)
+	assert.Equal(t, 0, admin.createCalls, "no second keycloak user may be provisioned for an orphaned email")
+	assert.Equal(t, 1, admin.getByIDCalls, "the dead account must have been probed exactly once")
+
+	memberships, err := membershipSvc.ListDetails(ctx, tenantA, &seededPerson.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, memberships, "the rejected invite must not have written a membership")
+
+	person, err := personSvc.GetByID(ctx, seededPerson.ID)
+	require.NoError(t, err)
+	assert.Equal(t, email, person.Email, "the existing person row must be untouched")
+}

@@ -383,3 +383,33 @@ func TestMembershipService_Create_UnknownBranch_ReturnsErrInvalidInput(t *testin
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, pub.ErrInvalidInput), "got %v", err)
 }
+
+// TestMembershipService_Create_NilTenantReader_FailsClosed pins M-1: a
+// service misconstructed without a TenantReader (fx wires it as a required
+// param in production, so this can only happen via a struct literal that
+// forgot the field, e.g. in a test) must refuse a branch-scoped Create with
+// an explicit error, not silently skip R2's validation and let an
+// unvalidated branch_id straight into a membership write.
+func TestMembershipService_Create_NilTenantReader_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	cashierRoleID := systemRoleID(t, "cashier")
+
+	person, err := personSvc.Create(ctx, domain.Person{
+		KeycloakSub: "kc-sub-" + uuid.NewString(),
+		Email:       "nil-reader+" + uuid.NewString() + "@example.com",
+		FullName:    "Nil Reader",
+	})
+	require.NoError(t, err)
+
+	svc := service.NewMembershipService(service.MembershipParams{
+		DB: sharedPool, MembershipRepo: repo.NewMembershipRepo(), RoleRepo: repo.NewRoleRepo(),
+		TenantReader: nil, Logger: zap.NewNop(),
+	})
+
+	_, err = svc.Create(ctx, tenantA, person.ID, &branchA, cashierRoleID)
+	require.Error(t, err, "a nil tenant reader must fail closed, not be treated as validation-skipped")
+
+	memberships, err := membershipSvc.ListDetails(ctx, tenantA, &person.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, memberships, "the rejected call must not have written a membership")
+}

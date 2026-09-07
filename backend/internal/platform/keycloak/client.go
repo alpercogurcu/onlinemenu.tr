@@ -35,6 +35,10 @@ type AdminAPI interface {
 	// FindUserByEmail looks up a user by exact email match. found is false
 	// (with a nil error) when no such user exists.
 	FindUserByEmail(ctx context.Context, email string) (user User, found bool, err error)
+	// GetUserByID looks up a user by Keycloak id. found is false (with a nil
+	// error) on a 404 — the id is a persons.keycloak_sub value that may no
+	// longer resolve to a live account (e.g. deleted directly in Keycloak).
+	GetUserByID(ctx context.Context, userID string) (user User, found bool, err error)
 	// CreateUser creates a new realm user. Returns ErrUserAlreadyExists on a
 	// 409 — the caller must recover by calling FindUserByEmail again.
 	CreateUser(ctx context.Context, req CreateUserRequest) (User, error)
@@ -286,6 +290,24 @@ func (c *Client) FindUserByEmail(ctx context.Context, email string) (User, bool,
 		return User{}, false, nil
 	}
 	return toUser(out[0]), true, nil
+}
+
+// GetUserByID implements AdminAPI.
+func (c *Client) GetUserByID(ctx context.Context, userID string) (User, bool, error) {
+	if !c.cfg.enabled() {
+		return User{}, false, ErrNotConfigured
+	}
+
+	endpoint := c.adminUsersURL + "/" + url.PathEscape(userID)
+	var out keycloakUserRepresentation
+	if _, err := c.do(ctx, http.MethodGet, endpoint, nil, &out); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return User{}, false, nil
+		}
+		return User{}, false, fmt.Errorf("keycloak: get user by id: %w", err)
+	}
+	return toUser(out), true, nil
 }
 
 // CreateUser implements AdminAPI.

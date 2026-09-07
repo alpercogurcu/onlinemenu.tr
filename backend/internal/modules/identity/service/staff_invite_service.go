@@ -183,7 +183,30 @@ func (s *StaffInviteService) Invite(ctx context.Context, tenantID uuid.UUID, req
 			RoleID:   req.RoleID,
 			Status:   domain.MembershipActive,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+
+		// R1: pull persons.email to Keycloak's current value when it has
+		// drifted (a realm admin edited the account's email directly in
+		// Keycloak after this person was provisioned — see
+		// findOrCreateKeycloakUser's stale-email reuse branch). This must run
+		// AFTER FindOrCreate above, not before: persons_update (identity
+		// migration 000008) only allows a write when the target person
+		// already holds a membership in the CURRENT tenant, and for a
+		// brand-new invite to this tenant that only becomes true once the
+		// membership just written above exists — which, inside this same
+		// transaction, it now does.
+		if kcUser.Email != "" && person.Email != kcUser.Email {
+			updated := person
+			updated.Email = kcUser.Email
+			updated, err = s.personRepo.Update(ctx, tx, updated)
+			if err != nil {
+				return err
+			}
+			person = updated
+		}
+		return nil
 	}); err != nil {
 		return StaffInviteResult{}, fmt.Errorf("identity/service/staff_invite: find or create membership: %w", err)
 	}
@@ -226,8 +249,18 @@ func (s *StaffInviteService) Invite(ctx context.Context, tenantID uuid.UUID, req
 }
 
 // findOrCreateKeycloakUser implements the ADR's find-then-create-then-recover
-// sequence. The returned bool is true only when a new user was created by
-// THIS call.
+// sequence, extended per R1: before ever creating a second Keycloak user for
+// an email nothing currently matches, check whether persons already holds a
+// row for this identity under a stale email — a realm admin changed that
+// account's Keycloak email sometime after it was provisioned, so FindUserByEmail
+// above no longer finds it under the email this invite was sent to. If the
+// account behind that row's keycloak_sub still exists, it is reused instead
+// of provisioning a second one, which is what used to 500 on
+// persons_email_idx once the second account's row tried to insert with the
+// same (still-stale) email.
+//
+// The returned bool is true only when a brand new Keycloak user was created
+// by THIS call.
 func (s *StaffInviteService) findOrCreateKeycloakUser(ctx context.Context, email, fullName string) (keycloak.User, bool, error) {
 	kcUser, found, err := s.admin.FindUserByEmail(ctx, email)
 	if err != nil {
@@ -235,6 +268,14 @@ func (s *StaffInviteService) findOrCreateKeycloakUser(ctx context.Context, email
 	}
 	if found {
 		return kcUser, false, nil
+	}
+
+	reused, ok, err := s.reuseKeycloakUserByStaleEmail(ctx, email)
+	if err != nil {
+		return keycloak.User{}, false, err
+	}
+	if ok {
+		return reused, false, nil
 	}
 
 	kcUser, err = s.admin.CreateUser(ctx, keycloak.CreateUserRequest{Email: email, FullName: fullName})
@@ -258,4 +299,35 @@ func (s *StaffInviteService) findOrCreateKeycloakUser(ctx context.Context, email
 			"identity/service/staff_invite: keycloak reported a conflict for %q but no matching user can be found", email)
 	}
 	return kcUser, false, nil
+}
+
+// reuseKeycloakUserByStaleEmail implements R1's lookup: email did not resolve
+// to any live Keycloak user, but a persons row might still exist for that
+// same identity under this now-stale address. found is false (with a nil
+// error) whenever no such reuse applies — either no persons row carries this
+// email, or one does but its keycloak_sub no longer resolves to a live
+// account (e.g. deleted directly in Keycloak) — and the caller falls through
+// to its normal CreateUser path.
+func (s *StaffInviteService) reuseKeycloakUserByStaleEmail(ctx context.Context, email string) (keycloak.User, bool, error) {
+	var person domain.Person
+	err := s.db.WithAllTenantsTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		person, err = s.personRepo.GetByEmail(ctx, tx, email)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, pub.ErrNotFound) {
+			return keycloak.User{}, false, nil
+		}
+		return keycloak.User{}, false, fmt.Errorf("identity/service/staff_invite: look up person by email: %w", err)
+	}
+
+	kcUser, found, err := s.admin.GetUserByID(ctx, person.KeycloakSub)
+	if err != nil {
+		return keycloak.User{}, false, fmt.Errorf("identity/service/staff_invite: get keycloak user by id: %w", err)
+	}
+	if !found {
+		return keycloak.User{}, false, nil
+	}
+	return kcUser, true, nil
 }

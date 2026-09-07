@@ -36,6 +36,7 @@ type fakeAdminAPI struct {
 	createCalls  int
 	findCalls    int
 	notifyCalls  int
+	getByIDCalls int
 	failNotify   bool
 }
 
@@ -71,6 +72,37 @@ func (f *fakeAdminAPI) TriggerPasswordSetup(_ context.Context, _ string) error {
 		return errors.New("fake keycloak: SMTP not configured on this realm")
 	}
 	return nil
+}
+
+// GetUserByID implements keycloak.AdminAPI, resolving by scanning
+// usersByEmail's values so it stays consistent with tests that seed a user
+// directly into that map (bypassing CreateUser).
+func (f *fakeAdminAPI) GetUserByID(_ context.Context, id string) (keycloak.User, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getByIDCalls++
+	for _, u := range f.usersByEmail {
+		if u.ID == id {
+			return u, true, nil
+		}
+	}
+	return keycloak.User{}, false, nil
+}
+
+// changeEmail simulates a realm admin editing a user's email directly in
+// Keycloak — independent of anything persons knows about — which is the
+// drift scenario R1 fixes.
+func (f *fakeAdminAPI) changeEmail(oldEmail, newEmail string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.usersByEmail[oldEmail]
+	if !ok {
+		panic("fakeAdminAPI.changeEmail: no such user: " + oldEmail)
+	}
+	delete(f.usersByEmail, oldEmail)
+	u.Email = newEmail
+	u.Username = newEmail
+	f.usersByEmail[newEmail] = u
 }
 
 func newStaffInviteService(admin keycloak.AdminAPI) *service.StaffInviteService {
@@ -331,4 +363,42 @@ func TestStaffInvite_UnknownRole_ReturnsNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, pub.ErrNotFound), "got %v", err)
 	assert.Equal(t, 0, admin.findCalls, "keycloak must not be contacted before the role is validated")
+}
+
+// TestStaffInvite_KeycloakEmailChangedSincePriorInvite_ReusesUserAndSyncsEmail
+// pins R1: a realm admin edits a user's email directly in Keycloak sometime
+// after that person was onboarded. Inviting them again under the STALE email
+// their persons row still carries must not create a second Keycloak user —
+// which used to 500 on persons_email_idx — it must reuse the existing
+// account and pull persons.email to Keycloak's current value.
+func TestStaffInvite_KeycloakEmailChangedSincePriorInvite_ReusesUserAndSyncsEmail(t *testing.T) {
+	ctx := context.Background()
+	admin := newFakeAdminAPI()
+	svc := newStaffInviteService(admin)
+	cashierRoleID := systemRoleID(t, "cashier")
+
+	oldEmail := "drift-old+" + uuid.NewString() + "@example.com"
+	newEmail := "drift-new+" + uuid.NewString() + "@example.com"
+
+	first, err := svc.Invite(ctx, tenantA, service.StaffInviteRequest{
+		FullName: "Drift Person", Email: oldEmail, BranchID: &branchA, RoleID: cashierRoleID,
+	})
+	require.NoError(t, err)
+	require.True(t, first.KeycloakUserCreated)
+
+	admin.changeEmail(oldEmail, newEmail)
+
+	second, err := svc.Invite(ctx, tenantA, service.StaffInviteRequest{
+		FullName: "Drift Person", Email: oldEmail, BranchID: &branchA, RoleID: cashierRoleID,
+	})
+	require.NoError(t, err, "must reuse the existing keycloak account, not fail on persons_email_idx")
+
+	assert.False(t, second.KeycloakUserCreated, "the drifted account must be reused, not recreated")
+	assert.Equal(t, 1, admin.createCalls, "only the first invite may create a keycloak user")
+	assert.Equal(t, first.Person.ID, second.Person.ID)
+	assert.Equal(t, newEmail, second.Person.Email, "persons.email must be pulled to keycloak's current value")
+
+	person, err := personSvc.GetByID(ctx, second.Person.ID)
+	require.NoError(t, err)
+	assert.Equal(t, newEmail, person.Email, "the sync must be committed, not just reflected in the response")
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,6 +82,24 @@ func newFakeKeycloakServer() *fakeKeycloakServer {
 	})
 
 	mux.HandleFunc("/admin/realms/onlinemenu/users/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// GET .../users/{id}: GetUserByID. Distinguished from the
+			// execute-actions-email PUT below by method, not path, since both
+			// share the "/users/" prefix.
+			id := strings.TrimPrefix(r.URL.Path, "/admin/realms/onlinemenu/users/")
+			for _, u := range f.users {
+				if u.ID == id {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"id": u.ID, "username": u.Username, "email": u.Email, "enabled": u.Enabled,
+					})
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
 		if f.failNotify {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte("SMTP not configured"))
@@ -175,6 +194,38 @@ func TestClient_TriggerPasswordSetup_Failure_IsSurfaced(t *testing.T) {
 	assert.Contains(t, err.Error(), "trigger password setup")
 }
 
+// TestClient_GetUserByID_Found proves R1's reuse path can resolve a
+// persons.keycloak_sub back to its live Keycloak account.
+func TestClient_GetUserByID_Found(t *testing.T) {
+	f := newFakeKeycloakServer()
+	defer f.srv.Close()
+	c := f.client()
+	ctx := context.Background()
+
+	created, err := c.CreateUser(ctx, keycloak.CreateUserRequest{Email: "lookup@example.com", FullName: "Lookup Me"})
+	require.NoError(t, err)
+
+	found, ok, err := c.GetUserByID(ctx, created.ID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, created.ID, found.ID)
+	assert.Equal(t, "lookup@example.com", found.Email)
+}
+
+// TestClient_GetUserByID_NotFound proves a 404 (e.g. the account was deleted
+// directly in Keycloak) reports found=false with no error, matching
+// FindUserByEmail's contract.
+func TestClient_GetUserByID_NotFound(t *testing.T) {
+	f := newFakeKeycloakServer()
+	defer f.srv.Close()
+	c := f.client()
+	ctx := context.Background()
+
+	_, found, err := c.GetUserByID(ctx, "no-such-user-id")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
 // TestClient_TokenIsCachedAcrossCalls proves the client_credentials grant is
 // not re-fetched on every Admin API call.
 func TestClient_TokenIsCachedAcrossCalls(t *testing.T) {
@@ -219,6 +270,9 @@ func TestClient_NotConfigured_ReturnsErrNotConfigured(t *testing.T) {
 	ctx := context.Background()
 
 	_, _, err := c.FindUserByEmail(ctx, "x@example.com")
+	assert.ErrorIs(t, err, keycloak.ErrNotConfigured)
+
+	_, _, err = c.GetUserByID(ctx, "some-id")
 	assert.ErrorIs(t, err, keycloak.ErrNotConfigured)
 
 	_, err = c.CreateUser(ctx, keycloak.CreateUserRequest{Email: "x@example.com"})

@@ -59,6 +59,27 @@ func (r *PersonRepo) GetByKeycloakSub(ctx context.Context, tx pgx.Tx, sub string
 	return p, nil
 }
 
+// GetByEmail resolves a person by email. Platform-scope (WithAllTenantsTx):
+// the same email may belong to a person visible under a different tenant
+// than the caller's current one (AUTH-002's single realm), so this must not
+// be run under a tenant-scoped tx.
+func (r *PersonRepo) GetByEmail(ctx context.Context, tx pgx.Tx, email string) (domain.Person, error) {
+	const q = `
+		SELECT id, keycloak_sub, email, full_name, COALESCE(phone, ''), created_at, updated_at
+		FROM persons
+		WHERE email = $1`
+
+	row := tx.QueryRow(ctx, q, email)
+	p, err := scanPerson(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Person{}, pub.ErrNotFound
+		}
+		return domain.Person{}, fmt.Errorf("identity/repo/person: get by email: %w", err)
+	}
+	return p, nil
+}
+
 // Create inserts a new person row and returns the persisted record.
 func (r *PersonRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Person) (domain.Person, error) {
 	const q = `

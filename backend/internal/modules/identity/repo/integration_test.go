@@ -363,6 +363,43 @@ func TestPersonRepo_Update(t *testing.T) {
 	})
 }
 
+// TestPersonRepo_GetByEmail proves the R1 lookup GetByEmail (staff_invite's
+// stale-email reuse path) resolves platform-scope, matching GetByKeycloakSub.
+func TestPersonRepo_GetByEmail(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewPersonRepo()
+
+	email := "dana+" + uuid.NewString() + "@example.com"
+	var created domain.Person
+
+	withPlatformTx(ctx, t, func(tx pgx.Tx) {
+		var err error
+		created, err = r.Create(ctx, tx, domain.Person{
+			KeycloakSub: "kc-sub-" + uuid.NewString(),
+			Email:       email,
+			FullName:    "Dana Test",
+		})
+		require.NoError(t, err)
+	})
+
+	withPlatformReadTx(ctx, t, func(tx pgx.Tx) {
+		got, err := r.GetByEmail(ctx, tx, email)
+		require.NoError(t, err)
+		assert.Equal(t, created.ID, got.ID)
+		assert.Equal(t, created.KeycloakSub, got.KeycloakSub)
+	})
+}
+
+func TestPersonRepo_GetByEmail_NotFound(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewPersonRepo()
+
+	withPlatformReadTx(ctx, t, func(tx pgx.Tx) {
+		_, err := r.GetByEmail(ctx, tx, "nobody-"+uuid.NewString()+"@example.com")
+		assert.ErrorIs(t, err, pub.ErrNotFound)
+	})
+}
+
 func TestPersonRepo_GetByID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	r := repo.NewPersonRepo()

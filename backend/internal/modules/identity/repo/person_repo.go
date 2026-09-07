@@ -59,10 +59,11 @@ func (r *PersonRepo) GetByKeycloakSub(ctx context.Context, tx pgx.Tx, sub string
 	return p, nil
 }
 
-// GetByEmail resolves a person by email. Platform-scope (WithAllTenantsTx):
-// the same email may belong to a person visible under a different tenant
-// than the caller's current one (AUTH-002's single realm), so this must not
-// be run under a tenant-scoped tx.
+// GetByEmail resolves a person by email. Platform-scope
+// (WithAllTenantsReadTx — this is a read-only lookup): the same email may
+// belong to a person visible under a different tenant than the caller's
+// current one (AUTH-002's single realm), so this must not be run under a
+// tenant-scoped tx.
 func (r *PersonRepo) GetByEmail(ctx context.Context, tx pgx.Tx, email string) (domain.Person, error) {
 	const q = `
 		SELECT id, keycloak_sub, email, full_name, COALESCE(phone, ''), created_at, updated_at
@@ -120,6 +121,12 @@ func (r *PersonRepo) FindOrCreateByKeycloakSub(ctx context.Context, tx pgx.Tx, p
 	if err == nil {
 		return created, nil
 	}
+	if isUniqueViolation(err) {
+		// keycloak_sub is covered by ON CONFLICT above, so this can only be
+		// persons_email_idx: p.Email already belongs to a different persons
+		// row. A caller-actionable 409, not an unmapped 500 (H-1).
+		return domain.Person{}, fmt.Errorf("%w: e-mail %s already belongs to another person: %w", pub.ErrConflict, p.Email, err)
+	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return domain.Person{}, fmt.Errorf("identity/repo/person: find or create: insert: %w", err)
 	}
@@ -146,6 +153,13 @@ func (r *PersonRepo) Update(ctx context.Context, tx pgx.Tx, p domain.Person) (do
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Person{}, pub.ErrNotFound
+		}
+		if isUniqueViolation(err) {
+			// persons_email_idx: p.Email now collides with a different
+			// persons row (e.g. Keycloak's current email, pulled in by R1's
+			// drift sync, already belongs to someone else). A caller-actionable
+			// 409, not an unmapped 500 (H-1).
+			return domain.Person{}, fmt.Errorf("%w: e-mail %s already belongs to another person: %w", pub.ErrConflict, p.Email, err)
 		}
 		return domain.Person{}, fmt.Errorf("identity/repo/person: update: %w", err)
 	}

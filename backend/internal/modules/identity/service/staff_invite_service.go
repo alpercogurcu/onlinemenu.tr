@@ -210,9 +210,10 @@ func (s *StaffInviteService) Invite(ctx context.Context, tenantID uuid.UUID, req
 		// brand-new invite to this tenant that only becomes true once the
 		// membership just written above exists — which, inside this same
 		// transaction, it now does.
-		if kcUser.Email != "" && person.Email != kcUser.Email {
+		kcEmail := strings.ToLower(strings.TrimSpace(kcUser.Email))
+		if kcEmail != "" && person.Email != kcEmail {
 			updated := person
-			updated.Email = kcUser.Email
+			updated.Email = kcEmail
 			updated, err = s.personRepo.Update(ctx, tx, updated)
 			if err != nil {
 				return err
@@ -270,7 +271,9 @@ func (s *StaffInviteService) Invite(ctx context.Context, tenantID uuid.UUID, req
 // account behind that row's keycloak_sub still exists, it is reused instead
 // of provisioning a second one, which is what used to 500 on
 // persons_email_idx once the second account's row tried to insert with the
-// same (still-stale) email.
+// same (still-stale) email. If that row's keycloak_sub no longer resolves to
+// any account (deleted directly in Keycloak), this fails closed with
+// pub.ErrConflict instead — see reuseKeycloakUserByStaleEmail (H-1).
 //
 // The returned bool is true only when a brand new Keycloak user was created
 // by THIS call.
@@ -317,13 +320,21 @@ func (s *StaffInviteService) findOrCreateKeycloakUser(ctx context.Context, email
 // reuseKeycloakUserByStaleEmail implements R1's lookup: email did not resolve
 // to any live Keycloak user, but a persons row might still exist for that
 // same identity under this now-stale address. found is false (with a nil
-// error) whenever no such reuse applies — either no persons row carries this
-// email, or one does but its keycloak_sub no longer resolves to a live
-// account (e.g. deleted directly in Keycloak) — and the caller falls through
-// to its normal CreateUser path.
+// error) only when no persons row carries this email at all, in which case
+// the caller falls through to its normal CreateUser path.
+//
+// When a persons row IS found but its keycloak_sub no longer resolves to a
+// live account (e.g. deleted directly in Keycloak), this does NOT fall
+// through: falling through would let CreateUser provision a second Keycloak
+// user for the same email, whose FindOrCreateByKeycloakSub insert then hits
+// persons_email_idx and aborts the transaction — a 500 that repeats on every
+// retry, permanently blocking that email from being invited again (H-1). The
+// account is orphaned, not something this call may compensate for
+// (ADR-AUTH-003 forbids deleting/recreating to paper over that), so it fails
+// closed with pub.ErrConflict before any Keycloak write is attempted.
 func (s *StaffInviteService) reuseKeycloakUserByStaleEmail(ctx context.Context, email string) (keycloak.User, bool, error) {
 	var person domain.Person
-	err := s.db.WithAllTenantsTx(ctx, func(tx pgx.Tx) error {
+	err := s.db.WithAllTenantsReadTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		person, err = s.personRepo.GetByEmail(ctx, tx, email)
 		return err
@@ -340,7 +351,9 @@ func (s *StaffInviteService) reuseKeycloakUserByStaleEmail(ctx context.Context, 
 		return keycloak.User{}, false, fmt.Errorf("identity/service/staff_invite: get keycloak user by id: %w", err)
 	}
 	if !found {
-		return keycloak.User{}, false, nil
+		return keycloak.User{}, false, fmt.Errorf(
+			"%w: e-mail %s belongs to a person whose Keycloak account no longer exists; restore the account or change the person's e-mail",
+			pub.ErrConflict, email)
 	}
 	return kcUser, true, nil
 }

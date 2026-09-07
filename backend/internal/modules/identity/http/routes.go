@@ -138,8 +138,9 @@ func (h *Handler) handleErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, pub.ErrInvalidInput):
 		// 422, not 400: distinct sentinel from ErrInvalid (mirrors
 		// payment.ErrInvalidInput, commit d451cb2) so this mapping cannot
-		// change the status code of any existing identity endpoint — none of
-		// them return this sentinel today, only StaffInviteService does.
+		// change the status code of any existing identity endpoint. Returned
+		// by both StaffInviteService.Invite and MembershipService.Create
+		// (R2's branch-existence validation).
 		h.writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, pub.ErrInvalid):
 		h.writeError(w, http.StatusBadRequest, "invalid input")

@@ -1,6 +1,6 @@
 # Pilot Takip Listesi — İlk Satışa Kadar
 
-> Oluşturma: 2026-07-31 · Son büyük güncelleme: 2026-09-06 · Kapsam: **online-only pilot** (tek şube, tek kasa, sabit internet, edge-sync yok)
+> Oluşturma: 2026-07-31 · Son büyük güncelleme: 2026-09-07 · Kapsam: **online-only pilot** (tek şube, tek kasa, sabit internet, edge-sync yok)
 > Repo'da Jira yok; kalıcı kayıt burada tutulur. Bir madde tamamlanınca bu dosyadan silinir.
 > Kardeş listeler: [backlog-fiscal.md](backlog-fiscal.md) · Referans: [lessons-from-odoo.md](lessons-from-odoo.md)
 > 2026-09-05/06 sprint planı ve kararları: [superpowers/plans/2026-09-05-pilot-mvp.md](superpowers/plans/2026-09-05-pilot-mvp.md)
@@ -23,7 +23,7 @@ tanımı bu pilottan sonra tamamlanır.
 ## Halihazırda çalışan (2026-09-06 itibarıyla)
 
 - Satış omurgası uçtan uca test edilmiş (`internal/e2e/spine_test.go`): adisyon aç → sipariş → ödeme → ÖKC mali kayıt → settle → kapat. Token/Beko X30TR entegrasyonu gerçek.
-- Personel onboarding: admin panelden davet (ADR-AUTH-003), Keycloak Admin API, `settings/users` ekranı.
+- Personel onboarding: admin panelden davet (ADR-AUTH-003), Keycloak Admin API, `settings/users` ekranı; davette Keycloak e-postası persons'a senkron (silinmiş hesap → 409), şube varlığı `tenant/public` üzerinden doğrulanır (422).
 - Kasa oturumu + kasiyer PIN (ADR-DATA-008): açılış/sayım/kapanış, nakit hareket kaydı **ve defteri** (`GET /cash-sessions/{id}/movements`), kasa açılmadan nakit satış reddi, eski oturum uyarı izleyicisi (15 dk / 20 sa, yalnız Warn log).
 - QR dine-in online sipariş (ARCH-006): public menü, misafir oturumu, müşteri uygulaması (`web/apps/menu`), admin QR yönetimi.
 - KDS: canlı WebSocket kanban, snapshot N+1 giderildi, istemci tarafı toplu sipariş detayı (`GET /pos/orders?ids=`).
@@ -47,8 +47,6 @@ Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
 
 ### 2. Personel onboarding — kapatılmamış açıklar
 
-- [ ] **`persons.email` Keycloak ile senkron değil.** Realm yöneticisi e-postayı değiştirirse sonraki davet ikinci kullanıcı yaratıp `persons_email_idx` çakışmasıyla 500'e düşer
-- [ ] **Şube varlığı doğrulanmıyor.** `memberships.branch_id → branches` FK'sı modül izolasyonu için kaldırıldı; davet var olmayan şubeye membership yazabilir
 - [ ] SMTP prod'da fiilen zorunlu (şablonda var, gerçek değerler kurulumda girilecek)
 
 ### 3. Kasa oturumu — kalanlar

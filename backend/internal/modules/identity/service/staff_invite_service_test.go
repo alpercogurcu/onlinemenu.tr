@@ -112,6 +112,7 @@ func newStaffInviteService(admin keycloak.AdminAPI) *service.StaffInviteService 
 		MembershipRepo: repo.NewMembershipRepo(),
 		RoleRepo:       repo.NewRoleRepo(),
 		Admin:          admin,
+		TenantReader:   newFakeTenantReader(),
 		Logger:         zap.NewNop(),
 	})
 }
@@ -363,6 +364,28 @@ func TestStaffInvite_UnknownRole_ReturnsNotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, pub.ErrNotFound), "got %v", err)
 	assert.Equal(t, 0, admin.findCalls, "keycloak must not be contacted before the role is validated")
+}
+
+// TestStaffInvite_UnknownBranch_ReturnsErrInvalidInput pins R2: a branch_id
+// that does not exist in the tenant must be rejected before any Keycloak
+// write — identity carries no FK to tenant's branches table (module
+// isolation), so this is the only thing standing between a bogus id and a
+// membership row nothing else will ever catch.
+func TestStaffInvite_UnknownBranch_ReturnsErrInvalidInput(t *testing.T) {
+	ctx := context.Background()
+	admin := newFakeAdminAPI()
+	svc := newStaffInviteService(admin)
+	cashierRoleID := systemRoleID(t, "cashier")
+	unknownBranch := uuid.New()
+
+	_, err := svc.Invite(ctx, tenantA, service.StaffInviteRequest{
+		FullName: "X", Email: "unknown-branch+" + uuid.NewString() + "@example.com",
+		BranchID: &unknownBranch, RoleID: cashierRoleID,
+	})
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, pub.ErrInvalidInput), "got %v", err)
+	assert.Equal(t, 0, admin.findCalls, "keycloak must not be contacted before the branch is validated")
 }
 
 // TestStaffInvite_KeycloakEmailChangedSincePriorInvite_ReusesUserAndSyncsEmail

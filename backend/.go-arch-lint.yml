@@ -147,8 +147,12 @@ deps:
   identity_repo:
     # Repos return identity_public types directly (no separate domain DTOs).
     mayDependOn: [platform, identity_domain, identity_public, identity_repo]
+  # tenant_public added for R2 (docs/superpowers/plans/2026-09-07-deploy-oncesi-dialog.md):
+  # StaffInviteService/MembershipService validate branch_id via
+  # pub.TenantReader.GetBranch before writing a membership. Direction is
+  # one-way — tenant_service does NOT depend on identity_public.
   identity_service:
-    mayDependOn: [platform, identity_domain, identity_repo, identity_public, identity_service]
+    mayDependOn: [platform, identity_domain, identity_repo, identity_public, tenant_public, identity_service]
   identity_http:
     mayDependOn: [platform, identity_domain, identity_service, identity_public, identity_http]
   identity_public:

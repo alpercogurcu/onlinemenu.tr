@@ -13,6 +13,7 @@ import (
 	"onlinemenu.tr/internal/modules/identity/domain"
 	pub "onlinemenu.tr/internal/modules/identity/public"
 	"onlinemenu.tr/internal/modules/identity/repo"
+	tenantpub "onlinemenu.tr/internal/modules/tenant/public"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -21,6 +22,7 @@ type MembershipService struct {
 	db             *db.Pool
 	membershipRepo *repo.MembershipRepo
 	roleRepo       *repo.RoleRepo
+	tenantReader   tenantpub.TenantReader
 	logger         *zap.Logger
 }
 
@@ -31,6 +33,7 @@ type MembershipParams struct {
 	DB             *db.Pool
 	MembershipRepo *repo.MembershipRepo
 	RoleRepo       *repo.RoleRepo
+	TenantReader   tenantpub.TenantReader
 	Logger         *zap.Logger
 }
 
@@ -40,6 +43,7 @@ func NewMembershipService(p MembershipParams) *MembershipService {
 		db:             p.DB,
 		membershipRepo: p.MembershipRepo,
 		roleRepo:       p.RoleRepo,
+		tenantReader:   p.TenantReader,
 		logger:         p.Logger,
 	}
 }
@@ -132,6 +136,11 @@ func (s *MembershipService) Create(ctx context.Context, tenantID, personID uuid.
 	// migration 000012) is the last line of defence; this is the UX path.
 	if role.RequiresBranch() && branchID == nil {
 		return domain.Membership{}, pub.ErrInvalid
+	}
+
+	// R2: a branch_id, if supplied, must actually exist in this tenant.
+	if err := validateBranch(ctx, s.tenantReader, tenantID, branchID); err != nil {
+		return domain.Membership{}, err
 	}
 
 	m := domain.Membership{

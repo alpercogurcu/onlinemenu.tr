@@ -14,6 +14,7 @@ import (
 	"onlinemenu.tr/internal/modules/identity/domain"
 	pub "onlinemenu.tr/internal/modules/identity/public"
 	"onlinemenu.tr/internal/modules/identity/repo"
+	tenantpub "onlinemenu.tr/internal/modules/tenant/public"
 	"onlinemenu.tr/internal/platform/db"
 	"onlinemenu.tr/internal/platform/keycloak"
 )
@@ -62,6 +63,7 @@ type StaffInviteService struct {
 	membershipRepo *repo.MembershipRepo
 	roleRepo       *repo.RoleRepo
 	admin          keycloak.AdminAPI
+	tenantReader   tenantpub.TenantReader
 	logger         *zap.Logger
 }
 
@@ -74,6 +76,7 @@ type StaffInviteParams struct {
 	MembershipRepo *repo.MembershipRepo
 	RoleRepo       *repo.RoleRepo
 	Admin          keycloak.AdminAPI
+	TenantReader   tenantpub.TenantReader
 	Logger         *zap.Logger
 }
 
@@ -85,6 +88,7 @@ func NewStaffInviteService(p StaffInviteParams) *StaffInviteService {
 		membershipRepo: p.MembershipRepo,
 		roleRepo:       p.RoleRepo,
 		admin:          p.Admin,
+		tenantReader:   p.TenantReader,
 		logger:         p.Logger,
 	}
 }
@@ -136,6 +140,15 @@ func (s *StaffInviteService) Invite(ctx context.Context, tenantID uuid.UUID, req
 	}
 	if role.RequiresBranch() && req.BranchID == nil {
 		return StaffInviteResult{}, fmt.Errorf("%w: role %q requires a branch_id", pub.ErrInvalidInput, role.Name)
+	}
+
+	// R2: a branch_id, if supplied, must actually exist in this tenant.
+	// Validated here — before any Keycloak write — for the same reason as
+	// the role check above: identity carries no FK to tenant's branches
+	// table (module isolation), so a bogus id would otherwise surface much
+	// later as an opaque failure instead of a clean 422.
+	if err := validateBranch(ctx, s.tenantReader, tenantID, req.BranchID); err != nil {
+		return StaffInviteResult{}, err
 	}
 
 	kcUser, created, err := s.findOrCreateKeycloakUser(ctx, email, fullName)

@@ -16,6 +16,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,8 +36,10 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/identity/domain"
+	pub "onlinemenu.tr/internal/modules/identity/public"
 	"onlinemenu.tr/internal/modules/identity/repo"
 	"onlinemenu.tr/internal/modules/identity/service"
+	tenantpub "onlinemenu.tr/internal/modules/tenant/public"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -48,6 +51,41 @@ var (
 	personSvc     *service.PersonService
 	membershipSvc *service.MembershipService
 )
+
+// fakeTenantReader is an in-memory stand-in for tenant's pub.TenantReader —
+// only GetBranch is exercised by identity's R2 branch-existence validation
+// (StaffInviteService.Invite, MembershipService.Create).
+type fakeTenantReader struct {
+	branches map[uuid.UUID]tenantpub.Branch
+}
+
+func newFakeTenantReader() *fakeTenantReader {
+	return &fakeTenantReader{
+		branches: map[uuid.UUID]tenantpub.Branch{
+			branchA: {ID: branchA, TenantID: tenantA, Name: "Main Branch"},
+		},
+	}
+}
+
+func (f *fakeTenantReader) GetByID(context.Context, uuid.UUID) (tenantpub.Tenant, error) {
+	return tenantpub.Tenant{}, tenantpub.ErrNotFound
+}
+
+func (f *fakeTenantReader) GetBranch(_ context.Context, tenantID, branchID uuid.UUID) (tenantpub.Branch, error) {
+	b, ok := f.branches[branchID]
+	if !ok || b.TenantID != tenantID {
+		return tenantpub.Branch{}, tenantpub.ErrNotFound
+	}
+	return b, nil
+}
+
+func (f *fakeTenantReader) IsModuleEnabled(context.Context, uuid.UUID, string) (bool, error) {
+	return true, nil
+}
+
+func (f *fakeTenantReader) GetEffectiveIntegrator(context.Context, uuid.UUID, uuid.UUID, tenantpub.BillingProvider) (tenantpub.BillingIntegrator, error) {
+	return tenantpub.BillingIntegrator{}, tenantpub.ErrNotFound
+}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -116,7 +154,8 @@ func buildServices() {
 		DB: sharedPool, PersonRepo: repo.NewPersonRepo(), Logger: log,
 	})
 	membershipSvc = service.NewMembershipService(service.MembershipParams{
-		DB: sharedPool, MembershipRepo: repo.NewMembershipRepo(), RoleRepo: repo.NewRoleRepo(), Logger: log,
+		DB: sharedPool, MembershipRepo: repo.NewMembershipRepo(), RoleRepo: repo.NewRoleRepo(),
+		TenantReader: newFakeTenantReader(), Logger: log,
 	})
 }
 
@@ -299,4 +338,48 @@ func TestListContexts_ExistingPersonWithMemberships_Unchanged(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.Equal(t, tenantA, items[0].TenantID)
 	assert.Equal(t, cashierRoleID, items[0].RoleID)
+}
+
+// ---------------------------------------------------------------------------
+// MembershipService.Create — R2 branch existence validation
+// ---------------------------------------------------------------------------
+
+// TestMembershipService_Create_KnownBranch_Succeeds is the happy path: a
+// branch_id the fakeTenantReader actually knows about must not be rejected.
+func TestMembershipService_Create_KnownBranch_Succeeds(t *testing.T) {
+	ctx := context.Background()
+	cashierRoleID := systemRoleID(t, "cashier")
+
+	person, err := personSvc.Create(ctx, domain.Person{
+		KeycloakSub: "kc-sub-" + uuid.NewString(),
+		Email:       "known-branch+" + uuid.NewString() + "@example.com",
+		FullName:    "Known Branch",
+	})
+	require.NoError(t, err)
+
+	membership, err := membershipSvc.Create(ctx, tenantA, person.ID, &branchA, cashierRoleID)
+	require.NoError(t, err)
+	assert.Equal(t, branchA, *membership.BranchID)
+}
+
+// TestMembershipService_Create_UnknownBranch_ReturnsErrInvalidInput pins R2:
+// a branch_id that does not exist in the tenant must be rejected as a 422,
+// not left to fail later as an opaque error — identity carries no FK to
+// tenant's branches table (module isolation), so this check is the only
+// thing that catches it.
+func TestMembershipService_Create_UnknownBranch_ReturnsErrInvalidInput(t *testing.T) {
+	ctx := context.Background()
+	cashierRoleID := systemRoleID(t, "cashier")
+	unknownBranch := uuid.New()
+
+	person, err := personSvc.Create(ctx, domain.Person{
+		KeycloakSub: "kc-sub-" + uuid.NewString(),
+		Email:       "unknown-branch+" + uuid.NewString() + "@example.com",
+		FullName:    "Unknown Branch",
+	})
+	require.NoError(t, err)
+
+	_, err = membershipSvc.Create(ctx, tenantA, person.ID, &unknownBranch, cashierRoleID)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, pub.ErrInvalidInput), "got %v", err)
 }

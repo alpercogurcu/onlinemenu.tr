@@ -28,4 +28,20 @@ check "api /readyz"   "${API_URL%/}/readyz"
 check "admin /"       "${ADMIN_URL%/}/"
 check "menu /"        "${MENU_URL%/}/"
 
+# Alertmanager — observability profiliyle opsiyonel, host'a port AÇMAZ (bkz.
+# docker-compose.prod.yml), bu yüzden buradan da curl edilemez. Konteyner
+# ayakta değilse (profil kapalı veya prod'da observability hiç kurulmadıysa)
+# kontrol sessizce atlanır — bu bir FAIL değildir.
+COMPOSE_FILE="${COMPOSE_FILE:-$(dirname "$0")/docker-compose.prod.yml}"
+if command -v docker >/dev/null 2>&1 \
+  && docker compose -f "${COMPOSE_FILE}" ps --status running --services 2>/dev/null | grep -qx alertmanager; then
+  if docker compose -f "${COMPOSE_FILE}" exec -T alertmanager \
+    wget -q --spider http://localhost:9093/-/ready; then
+    echo "OK   alertmanager /-/ready (container-internal)"
+  else
+    echo "FAIL alertmanager /-/ready (container-internal)"
+    status=1
+  fi
+fi
+
 exit "${status}"

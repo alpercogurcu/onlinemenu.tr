@@ -43,8 +43,6 @@ Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
 - [ ] `.env.prod.sops` üretimi (SOPS/age), SMTP bilgileri dahil — şablon: `deploy/.env.prod.example`
 - [ ] `task deploy:smoke` ile canlı doğrulama
 - [ ] Vault: bugün yalnız Keycloak admin-client secret'ı Vault'tan okunuyor; DB/NATS/TokenX sırları `.env.sops` üzerinden düz env. Pilot için kabul; Faz 2'de dynamic secrets (CLAUDE.md düzeltildi)
-- [ ] Alertmanager / bildirim kanalı **yok** — `deploy/prometheus/rules.yml` kuralları tetiklense de kimseye ulaşmıyor (plan R6, ürün kararı bekliyor). [x] `absent(onlinemenu_outbox_pending)` kuralı eklendi (`OutboxMetricMissing`, dispatcher kapalıyken seri doğmuyor)
-- [ ] `deploy/prometheus/prometheus.yml` `external_labels` dev/prod paylaşımlı (`environment=development`) — prod için ayrıştırılmalı
 - [ ] SEC-005 deploy-öncesi/sonrası sorguları prod'da koşulmalı (bkz. backlog-fiscal.md)
 
 ### 2. Personel onboarding — kapatılmamış açıklar

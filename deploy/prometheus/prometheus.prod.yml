@@ -1,0 +1,61 @@
+# =============================================================================
+# Prometheus — Prod Configuration
+# prometheus.yml'nin (dev) kopyası DEĞİL, ayrı bir artefakt: external_labels
+# prod'u işaretler, remote-write receiver flag'i yok (yalnızca dev'de
+# gerekiyordu), scrape hedefleri host.docker.internal yerine bu compose
+# ağındaki servis adlarını kullanır (bkz. docker-compose.prod.yml).
+#
+# api servisi burada scrape edilMİYOR: uygulama metriklerini OTLP gRPC ile
+# otel-collector'a PUSH eder (backend/internal/platform/otel/otel.go), yerel
+# bir Prometheus /metrics ucu açmaz. otel-collector'ın prometheus exporter'ı
+# (8889) bu metrikleri "onlinemenu_" önekiyle tekrar dışa verir — job
+# "otel-collector" bunları zaten kapsıyor (bkz. rules.yml başlığındaki önek
+# notu).
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: prod
+    environment: production
+
+# Resolved relative to this file's directory: /etc/prometheus/rules.yml in
+# both compose stacks (deploy/docker-compose.dev.yml and .prod.yml mount the
+# same rules.yml next to prometheus.yml).
+rule_files:
+  - rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # OTel Collector: app metrikleri (onlinemenu_* önekli, prometheus exporter)
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  # OTel Collector kendi iç metrikleri
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  # Tempo metrics generator
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+    metrics_path: /metrics
+
+  # Loki
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+    metrics_path: /metrics
+
+  # NATS — observability profiline bağlı değil, prod compose'da her zaman ayakta
+  - job_name: nats
+    static_configs:
+      - targets: ["nats:8222"]
+    metrics_path: /varz

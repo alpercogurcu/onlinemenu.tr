@@ -48,6 +48,7 @@ volumes:
   postgres-backups:
   backup-tools-data:
   prometheus-data:
+  alertmanager-data:
   loki-data:
   tempo-data:
   grafana-data:
@@ -597,18 +598,49 @@ services:
     profiles: [observability]
     restart: unless-stopped
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--config.file=/etc/prometheus/prometheus.prod.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=14d"
       - "--web.enable-remote-write-receiver"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.prod.yml:ro
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - prometheus-data:/prometheus
     networks:
       - onlinemenu-prod
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512m
+
+  # ---------------------------------------------------------------------------
+  # Alertmanager — rules.yml'deki alarmları (OutboxBacklogHigh,
+  # FiscalSubmissionOverdue, OutboxMetricMissing) e-postayla ops-email
+  # alıcısına yönlendirir (bkz. deploy/alertmanager/alertmanager.yml, R3).
+  # Host'a port AÇMIYOR: Prometheus/Grafana gibi yalnızca compose ağı
+  # içinden erişilir, dışarıdan tetiklenecek bir HTTP ucu yok. prometheus'un
+  # buna depends_on olması GEREKMİYOR — Prometheus alarmları kuyruğa alır,
+  # Alertmanager'ın o an ayakta olmaması yalnızca teslimi geciktirir.
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: [observability]
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/smtp_password:/etc/alertmanager/smtp_password:ro
+      - alertmanager-data:/alertmanager
+    networks:
+      - onlinemenu-prod
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/ready || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10

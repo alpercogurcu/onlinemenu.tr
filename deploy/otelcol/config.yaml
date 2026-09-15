@@ -1,7 +1,13 @@
 # =============================================================================
-# OpenTelemetry Collector — Dev Configuration
-# Receivers: OTLP (gRPC + HTTP)
-# Processors: batch
+# OpenTelemetry Collector — dev VE prod ortak dosya (docker-compose.dev.yml
+# ve docker-compose.prod.yml aynı yoldan mount eder; başlıktaki "Dev" ibaresi
+# yanıltıcı, bkz. docs/deployment.md §9).
+# Receivers: OTLP (gRPC + HTTP), filelog (docker json-log, yalnızca prod'da
+#            veri görür — dev compose /var/lib/docker/containers'ı mount
+#            etmiyor; girişte BİR KEZ "no files match the configured criteria"
+#            WARN'ı basar, sonra sessizce bekler — tekrar etmiyor, ampirik
+#            doğrulandı (otelcol-contrib:0.123.0, mount'suz/non-root senaryo))
+# Processors: batch, memory_limiter
 # Exporters: prometheus, loki, tempo (otlp)
 # =============================================================================
 
@@ -16,6 +22,84 @@ receivers:
         endpoint: "0.0.0.0:4317"
       http:
         endpoint: "0.0.0.0:4318"
+
+  # ---------------------------------------------------------------------------
+  # Docker konteyner stdout/stderr'ı (json-file log sürücüsü) — backend henüz
+  # OTLP log exporter'ı yok (bkz. platform/otel/otel.go: yalnız Tracer/Meter
+  # provider var), bu yüzden Loki'ye giden TEK log kaynağı bu receiver.
+  #
+  # Container İSMİ (ör. "onlinemenu-prod-api-1") dosya YOLUNDAN çıkarılamaz:
+  # plain Docker'da yol yalnızca 64 haneli container ID taşır (k8s'in
+  # /var/log/pods/<ns>_<pod>_<uid>/... yolunun aksine — `container` operatörünün
+  # add_metadata_from_filepath özelliği YALNIZCA o k8s deseniyle çalışır).
+  # Bunun yerine docker-compose.prod.yml'deki `x-logging` (labels: com.docker.
+  # compose.*) her json satırına "attrs": {...} ekletir; aşağıdaki operatör
+  # zinciri bunu resource attribute'a taşır. Üçüncü bir yol (docker.sock +
+  # receiver_creator/docker_observer) BİLEREK kullanılmadı: log toplama için
+  # köke (root-equivalent) Docker API erişimi vermek, statik dosya okumaktan
+  # çok daha büyük bir güvenlik kararı — otelcol-contrib'in resmi "hints"
+  # tabanlı filelog keşfi de zaten yalnız k8sobserver için var, docker_observer
+  # için değil (doğrulandı: receiver/receivercreator README'si, v0.123.0 tag).
+  #
+  # Tüm zincir gerçek otelcol-contrib:0.123.0 imajıyla, gerçek docker json-log
+  # formatıyla (attrs dahil) ve yabancı (b2b/ashorial — attrs'sız) bir satırla
+  # ampirik test edildi: yalnızca onlinemenu-prod konteynerleri geçiyor, doğru
+  # resource attribute'larla (service.namespace/service.name/container.name —
+  # Loki 3.5'in varsayılan index label listesindeki üçü de).
+  #
+  # BİLİNEN SINIR (düzeltilmedi): Docker'ın json-file sürücüsü TEK bir stdout
+  # yazımı 16384 baytı geçerse onu birden fazla ayrı JSON satırına böler —
+  # containerd/CRI formatındaki gibi bir "partial" işareti YOK, bu yüzden
+  # bölünen parça ile gerçekten ayrı bir sonraki satır ayırt edilemiyor; bir
+  # `recombine` operatörü güvenilir şekilde eklenemedi. Sonuç: 16 KB'ı aşan
+  # tek satırlık loglar (ör. dev bağımlılıklarından gelen uzun stack trace)
+  # Loki'de kesik/bölünmüş görünür. Ampirik doğrulandı (gerçek dockerd, 20000
+  # baytlık tek satır → 16384 + 3616 baytlık iki ayrı GEÇERLİ JSON nesnesi;
+  # bozulma yok, yalnızca bölünme). Pilot ölçeğinde zap'ın tipik tek-satır JSON
+  # loglarının bu boyuta ulaşması beklenmiyor.
+  filelog/docker:
+    include:
+      - /var/lib/docker/containers/*/*-json.log
+    include_file_path: true
+    include_file_name: false
+    # "end": profil ilk açıldığında host'taki TÜM konteynerlerin (b2b/ashorial
+    # dahil) birikmiş log geçmişini taramaya başlamaz — yalnızca bundan sonraki
+    # satırlar işlenir. Offset yalnızca bellekte tutulur (file_storage extension
+    # yok): collector her restart'ta "end"e döner, o ana kadarki satırlar
+    # atlanır — pilot ölçeği için kabul edilebilir, bkz. docs/deployment.md §9.
+    start_at: end
+    operators:
+      - id: container-parser
+        type: container
+        format: docker
+        # k8s'e özgü path deseni bu host'ta hiçbir zaman eşleşmez (yukarıya
+        # bakın); false verilmezse HER satırda "failed to detect a valid log
+        # path" hata logu üretir (entry yine de "action: send" ile geçer, ama
+        # log gürültüsü gerçek hataları gizler) — ampirik olarak doğrulandı.
+        add_metadata_from_filepath: false
+      # Yabancı (b2b/ashorial) konteynerler x-logging'deki labels= ayarını
+      # almadı → satırlarında "attrs" hiç yok → burada düşürülür. Bu, resmi
+      # collector-level filterprocessor yerine BURADA (operatör zincirinde)
+      # yapılır: aksi halde aynı filtre gelecekte eklenecek app-native OTLP
+      # log kaydını da (o da "attrs" taşımaz) yanlışlıkla düşürebilirdi.
+      - id: drop-foreign-containers
+        type: filter
+        expr: 'attributes.attrs == nil'
+      - id: promote-service-namespace
+        type: move
+        from: attributes.attrs["com.docker.compose.project"]
+        to: resource["service.namespace"]
+      - id: promote-service-name
+        type: move
+        from: attributes.attrs["com.docker.compose.service"]
+        to: resource["service.name"]
+      - id: build-container-name
+        type: add
+        field: resource["container.name"]
+        value: 'EXPR(resource["service.namespace"] + "-" + resource["service.name"] + "-" + attributes.attrs["com.docker.compose.container-number"])'
+      - id: drop-attrs-wrapper
+        type: remove
+        field: attributes.attrs
 
 processors:
   batch:
@@ -67,6 +151,12 @@ service:
       exporters: [prometheus]
 
     logs:
-      receivers: [otlp]
+      # filelog/docker: bkz. receiver tanımındaki not — resource attribute'ları
+      # (service.name/service.namespace/container.name) zaten operatör
+      # zincirinde set edildiği için burada ek bir processor GEREKMİYOR; Loki
+      # 3.5 bunları varsayılan olarak index label'a çevirir (deploy/loki/
+      # config.yaml'a otlp_config eklemeye gerek yok, doğrulandı: Loki 3.5
+      # dokümantasyonu, default_resource_attributes_as_index_labels listesi).
+      receivers: [otlp, filelog/docker]
       processors: [memory_limiter, batch]
       exporters: [otlphttp/loki, debug]

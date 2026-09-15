@@ -26,7 +26,7 @@ servisi tanımlı değildir.
 
 ## Sertifika alma
 
-Tek sertifika, dört SAN (`pos`/`menu`/`api`/`auth.diverstreetfood.com`),
+Tek sertifika, beş SAN (`pos`/`menu`/`api`/`auth`/`grafana.diverstreetfood.com`),
 `--cert-name` ile dizin adı `pos.diverstreetfood.com` olarak sabitlenir:
 
 ```bash
@@ -39,6 +39,7 @@ docker run --rm --network host \
   -d menu.diverstreetfood.com \
   -d api.diverstreetfood.com \
   -d auth.diverstreetfood.com \
+  -d grafana.diverstreetfood.com \
   --email admin@diverstreetfood.com --agree-tos --no-eff-email
 ```
 

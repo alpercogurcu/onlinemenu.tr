@@ -63,3 +63,11 @@ services:
       onlinemenu-prod: {}
       b2b_edge:
         aliases: [onlinemenu-keycloak]
+
+  # profiles: [observability] prod compose'dan gelir, burada tekrar
+  # yazılmaz — bu katman yalnız ağ/alias ekler, servisi etkinleştirmez.
+  grafana:
+    networks:
+      onlinemenu-prod: {}
+      b2b_edge:
+        aliases: [onlinemenu-grafana]

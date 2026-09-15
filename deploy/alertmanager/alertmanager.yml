@@ -11,9 +11,9 @@
 # =============================================================================
 
 global:
-  smtp_smarthost: 'smtp.example.com:587'
-  smtp_from: 'alerts@example.com'
-  smtp_auth_username: 'alerts@example.com'
+  smtp_smarthost: 'mail.diverstreetfood.com:587'
+  smtp_from: 'noreply@diverstreetfood.com'
+  smtp_auth_username: 'noreply@diverstreetfood.com'
   smtp_auth_password_file: /etc/alertmanager/smtp_password
   smtp_require_tls: true
 
@@ -27,7 +27,7 @@ route:
 receivers:
   - name: ops-email
     email_configs:
-      - to: 'ops@example.com'
+      - to: 'admin@diverstreetfood.com'
         send_resolved: true
 
   # Opsiyonel webhook alıcısı — ihtiyaç doğarsa route.receiver'ı buna

@@ -36,6 +36,30 @@
 
 name: onlinemenu-prod
 
+# Tüm servislerde ortak log sürücüsü ayarı (aşağıda `logging: *default-logging`
+# ile referanslanır). İki amacı var:
+#   1) Rotasyon: bugüne kadar hiçbir serviste max-size/max-file YOKTU —
+#      json-file konteyner stdout'unu sınırsız büyütüyordu (bkz. §3 host
+#      notu: bir kez 28 GB `docker builder prune` gerekmişti). 10m×3 dosya/
+#      servis, ~510 MB tavan (17 servis) — host'ta yeterli baş payı var.
+#   2) Etiketleme: `labels:` seçeneği docker'ın her json-log SATIRINA
+#      "attrs": {...} alanı ekletir (compose'un container'a taktığı
+#      com.docker.compose.* label'larından bu üçünü). otel-collector'ın
+#      filelog receiver'ı (deploy/otelcol/config.yaml) bunu okuyup
+#      service.name/service.namespace/container.name resource attribute'una
+#      çevirir — Docker API'ye (docker.sock) hiç dokunmadan. Bu YOL, container
+#      İSMİNİN (ör. "onlinemenu-prod-api-1") log dosyası YOLUNDAN çıkarılamaması
+#      sorununu çözer: plain Docker json-log dosya yolu yalnızca 64 haneli
+#      container ID taşır, isim taşımaz (k8s'in /var/log/pods/... yolunun
+#      aksine) — doğrulandı (otelcol-contrib v0.123.0, pkg/stanza container
+#      operatörü, gerçek ortamda test edildi).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    labels: "com.docker.compose.project,com.docker.compose.service,com.docker.compose.container-number"
+    max-size: "10m"
+    max-file: "3"
+
 networks:
   onlinemenu-prod:
     driver: bridge
@@ -65,6 +89,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD gerekli (.env.sops)}
@@ -96,6 +121,7 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: >
       redis-server
       --appendonly yes
@@ -132,6 +158,7 @@ services:
   nats:
     image: nats:2.12-alpine
     restart: unless-stopped
+    logging: *default-logging
     command:
       - "-js"
       - "-sd=/data"
@@ -176,6 +203,7 @@ services:
   vault:
     image: hashicorp/vault:1.18
     restart: unless-stopped
+    logging: *default-logging
     cap_add:
       - IPC_LOCK
     environment:
@@ -227,6 +255,7 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.2
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -304,6 +333,7 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     restart: unless-stopped
+    logging: *default-logging
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER gerekli (.env.sops)}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD gerekli (.env.sops)}
@@ -328,6 +358,7 @@ services:
   minio-init:
     image: minio/mc:RELEASE.2025-05-21T01-59-54Z  # mc etiketleri registry'den silinebiliyor; yalnız `docker manifest inspect` ile doğrulanmış etiket pinlenir
     restart: "no"
+    logging: *default-logging
     depends_on:
       minio:
         condition: service_healthy
@@ -362,6 +393,7 @@ services:
   api:
     image: ${API_IMAGE:?API_IMAGE gerekli — ko build ile üretilip pushlanan pinned image (ör. registry.example.com/onlinemenu/api:v0.1.0), asla "latest"}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -491,6 +523,7 @@ services:
       args:
         PUBLIC_API_ORIGIN: http://api:8080
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       api:
         # service_healthy DEĞİL: api'nin healthcheck'i yok (yukarıdaki not).
@@ -527,10 +560,11 @@ services:
   # ⚠️ Port 3000 DEĞİL 3002: 3000'i observability profilindeki grafana
   # kullanıyor, ikisi birlikte açıldığında host portu çakışırdı.
   #
-  # AÇIK EKSİK (rapor): src/app/api/pos/kitchen-stream/route.ts yalnızca
-  # NEXT_PUBLIC_API_CORE_URL okuyor ve konteyner içinde localhost:8081'e
-  # düşüyor — mutfak ekranı SSE akışı bu konteynerden çalışmaz. Düzeltmesi
-  # web/apps/admin/src altında, bu görevin kapsamı dışında bırakıldı.
+  # DÜZELTİLDİ: src/app/api/pos/kitchen-stream/route.ts artık aşağıdaki
+  # API_CORE_ORIGIN env'ini (server-only) NEXT_PUBLIC_API_CORE_URL'den önce
+  # okuyor (bkz. web/apps/admin/src/lib/kitchen-ws-origin.ts) — konteyner
+  # içinde localhost:8081'e düşme sorunu giderildi. Not: bu route NDJSON
+  # (newline-delimited JSON) akışı üretir, SSE değil.
   # ---------------------------------------------------------------------------
   admin:
     image: ${ADMIN_IMAGE:-onlinemenu/admin:local}
@@ -553,6 +587,7 @@ services:
         # (yalnızca tam "false" dizesi kapatıyor).
         NEXT_PUBLIC_ENABLE_DEV_LOGIN: "false"
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       api:
         condition: service_started
@@ -587,6 +622,7 @@ services:
   postgres-backup:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -633,6 +669,7 @@ services:
     image: prom/prometheus:v3.3.1
     profiles: [observability]
     restart: unless-stopped
+    logging: *default-logging
     command:
       - "--config.file=/etc/prometheus/prometheus.prod.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -669,6 +706,7 @@ services:
     image: prom/alertmanager:v0.28.1
     profiles: [observability]
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - ./alertmanager/smtp_password:/etc/alertmanager/smtp_password:ro
@@ -691,6 +729,7 @@ services:
     image: grafana/loki:3.5.0
     profiles: [observability]
     restart: unless-stopped
+    logging: *default-logging
     command: -config.file=/etc/loki/config.yaml
     volumes:
       - ./loki/config.yaml:/etc/loki/config.yaml:ro
@@ -713,13 +752,20 @@ services:
     image: grafana/tempo:2.7.2
     profiles: [observability]
     restart: unless-stopped
+    logging: *default-logging
     command: -config.file=/etc/tempo/config.yaml
     expose:
       - "4317"
       - "4318"
     volumes:
       - ./tempo/config.yaml:/etc/tempo/config.yaml:ro
-      - tempo-data:/tmp/tempo
+      # /var/tempo, /tmp/tempo DEĞİL: imajda /tmp/tempo yok, Docker boş named
+      # volume'ü root sahipli yaratıyor ve tempo (uid 10001) "mkdir
+      # /tmp/tempo/blocks: permission denied" ile açılamıyor (2026-09-15 ilk
+      # observability açılışında görüldü; Vault'taki /vault/file dersiyle aynı).
+      # /var/tempo imajda tempo:tempo sahipli hazır dizin; config.yaml yolları da
+      # buna göre.
+      - tempo-data:/var/tempo
     networks:
       - onlinemenu-prod
     healthcheck:
@@ -738,6 +784,14 @@ services:
     image: otel/opentelemetry-collector-contrib:0.123.0
     profiles: [observability]
     restart: unless-stopped
+    logging: *default-logging
+    # UID 0 (root) ZORUNLU — imajın varsayılan kullanıcısı (10001:10001) DEĞİL:
+    # /var/lib/docker/containers/<id>/ dizinleri ve *-json.log dosyaları
+    # host'ta root:root, dizin izni "drwx--x---" (0710) — group'ta bile READ
+    # yok, yalnızca root traverse/okuyabilir. Gerçek sunucuda doğrulanmadı
+    # (bu depoda çalıştırılamaz) ama Docker Desktop'ta gerçek dockerd ile
+    # ampirik doğrulandı: 10001 UID "Permission denied", UID 0 okuyabiliyor.
+    user: "0"
     depends_on:
       prometheus:
         condition: service_healthy
@@ -748,14 +802,20 @@ services:
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./otelcol/config.yaml:/etc/otelcol/config.yaml:ro
+      # Yalnızca OKUMA — otel-collector json-log dosyalarını tail eder, hiçbir
+      # şey yazmaz. root:root/0710 izinleri yüzünden salt-okunur (:ro) mount +
+      # yukarıdaki `user: "0"` birlikte gerekli (yalnız biri yetmez: :ro olmadan
+      # root'un YANLIŞLIKLA yazması mümkün olurdu, yalnız root olmadan da hiç
+      # okuyamaz — bkz. yukarıdaki not).
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     networks:
       - onlinemenu-prod
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:13133 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
+    # Healthcheck YOK: otelcol-contrib imajı distroless (/bin/sh, wget yok),
+    # CMD-SHELL healthcheck "exec: /bin/sh: no such file" ile her zaman
+    # başarısız olup servisi kalıcı "unhealthy" gösteriyordu (2026-09-15).
+    # health_check extension'ı 13133'te açık; dıştan doğrulama:
+    #   docker run --rm --network onlinemenu-prod_onlinemenu-prod \
+    #     curlimages/curl:8.11.1 -s http://otel-collector:13133
     deploy:
       resources:
         limits:
@@ -766,6 +826,7 @@ services:
     image: grafana/grafana:11.6.1
     profiles: [observability]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       prometheus:
         condition: service_healthy
@@ -780,9 +841,17 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SERVER_HTTP_PORT: "3000"
       GF_FEATURE_TOGGLES_ENABLE: traceToMetrics,metricsSummary,tempoApmTable
+      # Ters proxy arkasında doğru mutlak URL üretimi (OAuth redirect, Grafana
+      # Live WS origin kontrolü) için zorunlu — GRAFANA_PUBLIC_HOST verilmeden
+      # (yalnız observability profili değil, HER compose çağrısı) hata verir,
+      # bkz. GRAFANA_ADMIN_USER/PASSWORD ile aynı desen. Sonunda / OLMALI:
+      # Grafana root_url'i olduğu gibi WS origin karşılaştırmasında kullanır.
+      GF_SERVER_ROOT_URL: https://${GRAFANA_PUBLIC_HOST:?GRAFANA_PUBLIC_HOST gerekli (.env.sops) — Grafana'nın genel adresi, ör. grafana.example.com}/
+      GF_SERVER_DOMAIN: ${GRAFANA_PUBLIC_HOST:?GRAFANA_PUBLIC_HOST gerekli (.env.sops)}
     ports:
-      # Yalnızca loopback — domain/TLS kararı gerektirmeden SSH tüneliyle
-      # ("ssh -L 3000:localhost:3000 host") erişim.
+      # Yalnızca loopback — genel erişim ters proxy (grafana.<domain>) üzerinden;
+      # bu port yalnız sunucu içi teşhis için (SSH tüneli: "ssh -L
+      # 3000:localhost:3000 host"), nginx'e bağlı değil (ağ alias'ı kullanılır).
       - "127.0.0.1:3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana

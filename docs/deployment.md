@@ -35,7 +35,7 @@ Mevcut kayıtlar (2026-09-15 `dig` ile alındı):
 
 | Kayıt | Tür | Hedef | Not |
 |---|---|---|---|
-| `diverstreetfood.com` | A | `213.238.183.121` | Cenuta paylaşımlı hosting (rDNS `static.cenuta.com`). HTTPS şu an **403** dönüyor, HTTP 200. |
+| `diverstreetfood.com` | A | `213.238.183.121` | Cenuta paylaşımlı hosting (rDNS `static.cenuta.com`), addon domain kökü `/home/httpdjfq/diverstreetfood.com` (statik site). `curl` varsayılan UA'sına 403 döner (sunucu tarafı bot filtresi), tarayıcı UA'sıyla 200 — gerçek ziyaretçi etkilenmez. |
 | `www.diverstreetfood.com` | CNAME | `diverstreetfood.com` | |
 | `b2b.diverstreetfood.com` | A | `77.92.144.75` | b2b prod sunucusu (§3) |
 
@@ -226,9 +226,9 @@ Sırlar: `deploy/.env.prod.example` → `deploy/.env.prod` (doldur) → `task de
 
 ## 8. Gözlemler (deploy dışı, dikkat)
 
-- `https://diverstreetfood.com` ana sitesi **403** dönüyor (HTTP 200). Cenuta tarafında
-  bir kural ya da sertifika/SNI sorunu olabilir; Token ile yazışırken alan adı görünür
-  olacağı için düzeltilmesi iyi olur.
+- `https://diverstreetfood.com` ana sitesindeki **403 yanlış alarm**: yalnız bot imzalı istemcilere
+  (curl varsayılan UA) dönüyor, tarayıcı UA'sı 200 alıyor; Cenuta'nın sunucu tarafı filtresi.
+  Sağlık kontrolü yazılırken `-A` ile tarayıcı UA verilmeli.
 - b2b sunucusundaki 12 GiB "used" bellek ile konteyner toplamı uyuşmazlığı **açıklandı**
   (VMware balloon driver, §3) — gerçek kaynak sorunu değil, yine de sağlayıcı ticket'ı açık.
 - b2b sunucusundaki Docker dışı `apache2` süreçleri **tanımlandı** (`/opt/ashorial-demo`, §3).
@@ -287,14 +287,20 @@ Sırlar: `deploy/.env.prod.example` → `deploy/.env.prod` (doldur) → `task de
 | MinIO, observability profili | **kapalı** (§8) |
 | Tenant | `Diver Street Food` (slug `diverstreetfood`), şube `Ana Şube`, yönetici `admin@diverstreetfood.com` (manager, chain-wide) |
 
-Kimlik bilgileri (repo dışı, sunucuda root:600):
-- İlk yönetici geçici parolası: `/root/.onlinemenu-first-admin.txt` (ilk girişte parola
-  değiştirme zorunlu). Not: `admin@diverstreetfood.com` posta kutusu **yok**; davet e-postaları
-  için gerçek adresli kullanıcılar admin panelden davet edilmeli.
-- Vault unseal anahtarı + root token: `/root/.onlinemenu-vault-init.json` — kasaya taşı, sil.
+Kimlik bilgileri (repo dışı):
+- **`deploy/.env.diverserver.local`** (git dışı, `.env.*.local`): Vault unseal anahtarı + root token,
+  ilk yöneticinin geçici parolası, `admin@diverstreetfood.com` posta kutusu parolası. Sunucudaki
+  `/root/.onlinemenu-*` dosyaları buraya taşınıp `shred` ile silindi (2026-09-15). Reboot sonrası
+  unseal komutu dosyanın başında.
+- `admin@diverstreetfood.com` posta kutusu Cenuta'da **açıldı** (Keycloak parola sıfırlama e-postaları
+  artık ulaşır; webmail `https://mail.diverstreetfood.com`).
 - Keycloak bootstrap admin (`kcadmin`), tüm servis parolaları: `deploy/.env.prod.sops`
   (`task deploy:secrets:edit`).
 - Cenuta cPanel ve `noreply@` SMTP parolası: `deploy/.env.cenuta.local` (git dışı).
+- Token webhook adresi (sözleşme/teknik formda bildirilecek):
+  `https://api.diverstreetfood.com/webhooks/fiscal/tokenx/<TOKENX_WEBHOOK_SECRET>` — secret
+  `.env.prod.sops`'ta, rota yalnız `TOKENX_WEBHOOK_SECRET` doluyken kayıtlı
+  (`payment/http/webhook_handler.go`).
 
 Sıradaki işler:
 1. Token client-id/secret gelince `.env.prod.sops`'tan `FISCAL_DEVICE_TYPE=mock` satırını sil,
@@ -303,5 +309,5 @@ Sıradaki işler:
 2. Alertmanager SMTP + observability profili (§6 adım 12), SEC-005 sorguları (adım 13).
 3. Offsite yedek (`BACKUP_S3_*`), MinIO etiketleri, Vault token yenileme stratejisi (AppRole),
    KDS akışı düzeltmesi, dev-seed idempotency, rate-limit zone kararı.
-4. b2b reposundaki nginx/compose/DEPLOYMENT.md değişikliklerini commit etmek (Jira kodu ile).
+4. ~~b2b reposundaki değişiklikleri commit etmek~~ — yapıldı (`2bcdccb`, `feature/ui-ux-improvements` dalına push'landı; main'e merge edilmeli).
 

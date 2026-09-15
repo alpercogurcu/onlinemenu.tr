@@ -34,14 +34,59 @@ Bu klasör docker-compose'da Keycloak'a `--import-realm` ile bağlanır.
 
 | clientId | Tip | Akış | Redirect | Not |
 |---|---|---|---|---|
-| `admin-panel` | public | Authorization Code + **PKCE (S256)** | `http://localhost:3000/*` | Next.js admin paneli (Wave 2) |
+| `admin-panel` | public | Authorization Code + **PKCE (S256)** | `http://localhost:3000/*` + `${ADMIN_PUBLIC_URL:http://localhost:3000}/*` | Next.js admin paneli (Wave 2). Prod adresi placeholder'dan gelir — bkz. §"Ortama göre adresler" |
 | `pos-desktop` | public | Authorization Code + **PKCE (S256)** | `http://127.0.0.1/callback`, `http://127.0.0.1:*/callback` | Wails masaüstü, RFC 8252 loopback (Wave 3) |
 | `onlinemenu-dev-cli` | public | **Direct Access Grants (password)** | — | ⚠️ **DEV/TEST ONLY** — üretime alınmaz |
 | `onlinemenu-dev-shortlived` | public | Direct Access Grants, `access.token.lifespan=1s` | — | ⚠️ **DEV/TEST ONLY** — expired-token testi için |
 
 > Gerçek client'lar (`admin-panel`, `pos-desktop`) **PKCE-saf**tır:
 > `directAccessGrantsEnabled=false`. Password grant yalnızca dev/test client'larında
-> açıktır. Üretim realm'inde dev client'lar ve seed kullanıcı **bulunmamalıdır**.
+> açıktır. Üretim realm'inde dev client'lar ve seed kullanıcı **bulunmamalıdır**
+> — bunu `deploy/scripts/keycloak-harden.sh` yapar (aşağıya bakın).
+
+`pos-desktop` loopback redirect'leri (`http://127.0.0.1:*/callback`) prod'da da
+gereklidir: Wails masaüstü uygulaması RFC 8252 loopback akışını kullanır, bu
+yüzden sertleştirmede **silinmez**.
+
+## Üretim Sertleştirmesi — `deploy/scripts/keycloak-harden.sh`
+
+Keycloak'ın **ilk açılışından sonra** sunucuda bir kez çalıştırılır; idempotenttir.
+Realm import'u tek seferlik olduğu için (strateji `IGNORE_EXISTING`) buradaki
+silmeler kalıcıdır.
+
+```bash
+FIRST_ADMIN_EMAIL=ad@ornek.com FIRST_ADMIN_NAME="Ad Soyad" \
+  ADMIN_PUBLIC_URL=https://pos.diverstreetfood.com \
+  VAULT_TOKEN=... deploy/scripts/keycloak-harden.sh
+```
+
+Yaptıkları:
+
+1. `deploy/.env.prod.sops`'tan bootstrap admin kimliğini çözer, master realm'den
+   token alır (host'tan `http://127.0.0.1:8090`).
+2. `onlinemenu-dev-cli`, `onlinemenu-dev-shortlived` client'larını ve `dev-cashier`
+   kullanıcısını siler (yoksa atlar).
+3. `onlinemenu-admin-api` client secret'ını okur — **stdout'a yazmaz**:
+   `KEYCLOAK_ADMIN_CLIENT_SECRET_OUT` verilmişse o dosyaya (0600), yoksa Vault'a
+   (`secret/keycloak/admin-client`, key `client_secret`) stdin üzerinden yazar.
+4. `ADMIN_PUBLIC_URL` verilmişse `admin-panel` client'ının `redirectUris` /
+   `webOrigins` listelerinde prod adresinin bulunduğundan emin olur (yalnız
+   **ekler**, silmez). Bu, realm zaten `ADMIN_PUBLIC_URL` tanımlanmadan import
+   edilmişse placeholder'ın bir daha çalışmayacağı durumun kurtarma yoludur.
+5. `FIRST_ADMIN_EMAIL` verilmişse ilk yöneticiyi oluşturur (`UPDATE_PASSWORD`
+   required action + geçici parola) ve **stdout'a** `FIRST_ADMIN_SUB=<uuid>` yazar
+   — seed SQL bunu `persons.keycloak_sub` olarak kullanır. Kullanıcı zaten varsa
+   parolaya/required action'a **dokunmaz** (parolasını belirlemiş yöneticiyi
+   kilitlememek için), yalnız id'yi yazdırır.
+
+> Vault ön koşulu: `vault server` modu KV mount'unu kendiliğinden açmaz. Script
+> sealed durumu ve `secret/` mount'unu önden denetler; yoksa şunu söyler:
+> `vault secrets enable -path=secret kv-v2`.
+>
+> `VAULT_TOKEN` verilmezse script `/root/.onlinemenu-vault-init.json` içindeki
+> `root_token`'ı okur (yol `VAULT_INIT_FILE` ile değiştirilebilir). `.env`'deki
+> `VAULT_TOKEN` **kullanılmaz**: o api'nin token'ıdır ve `onlinemenu-api`
+> policy'si bu path'te yalnız READ yetkilidir — yazma yetkisi yoktur.
 
 ## Client Scope'lar
 
@@ -63,10 +108,40 @@ Bu klasör docker-compose'da Keycloak'a `--import-realm` ile bağlanır.
 ### Backend ortam değişkenleri (üretim/staging)
 
 ```
-KEYCLOAK_ISSUER_URL=http://<keycloak-host>:8090/realms/onlinemenu
+KEYCLOAK_ISSUER_URL=https://auth.<domain>/realms/onlinemenu
 KEYCLOAK_AUDIENCE=onlinemenu-backend
-# opsiyonel: KEYCLOAK_JWKS_URL (varsayılan: ISSUER_URL + /protocol/openid-connect/certs)
+KEYCLOAK_JWKS_URL=http://keycloak:8080/realms/onlinemenu/protocol/openid-connect/certs
 ```
+
+> `KEYCLOAK_ISSUER_URL` **genel** adrestir: token'daki `iss` claim'i buna eşit
+> olmak zorunda (tarayıcı token'ı genel adresten alır).
+> `KEYCLOAK_JWKS_URL` ise **internal**'dır ve prod compose'da açıkça verilir:
+> verifier bu adresi vermezseniz issuer'dan türetir ve **açılışta senkron bir
+> fetch** yapar — genel adres üzerinden çekmek konteynerden çıkıp ters proxy'ye
+> geri dönmeyi (NAT hairpin) gerektirir, proxy ayakta değilse api hiç başlamaz.
+> Issuer doğrulaması JWKS'in nereden geldiğinden bağımsızdır
+> (`backend/internal/platform/auth/keycloak_verifier.go`; OIDC discovery yok).
+
+### Ortama göre adresler (placeholder'lar)
+
+`admin-panel` client'ının `redirectUris` / `webOrigins` listeleri hem localhost
+girdisini hem `${ADMIN_PUBLIC_URL:http://localhost:3000}` placeholder'ını taşır:
+
+| Ortam | `ADMIN_PUBLIC_URL` | Sonuç |
+|---|---|---|
+| dev (`docker-compose.dev.yml`), e2e (testcontainers) | tanımsız | fallback `http://localhost:3000` — liste localhost'u iki kez içerir, Keycloak set olarak saklar, tekilleşir |
+| prod (`docker-compose.prod.yml`) | `.env`'den **zorunlu** | ör. `https://pos.diverstreetfood.com` |
+
+`post.logout.redirect.uris` artık `"+"` — Keycloak bunu "redirect URI listesinin
+aynısı" diye yorumlar (`OIDCAdvancedConfigWrapper.getPostLogoutRedirectUris`), yani
+prod adresi tek bir yerde tanımlı kalır.
+
+> ⚠️ `ADMIN_PUBLIC_URL` **sonunda `/` olmadan** yazılır. Sondaki `/`,
+> webOrigin'i `https://.../` yapar ve tarayıcının `Origin` başlığıyla asla
+> eşleşmez — sessiz CORS hatası.
+>
+> ⚠️ Placeholder yalnız **ilk import'ta** çözülür (realm varsa import atlanır).
+> Adres sonradan değişirse client'ı Admin Console'dan elle güncelleyin.
 
 ## Realm İçe Aktarma (Import)
 
@@ -198,10 +273,25 @@ vault kv put secret/keycloak/admin-client client_secret='<client secret>'
 `${SMTP_FROM}`, `${SMTP_USER}`, `${SMTP_PASSWORD}`, `${SMTP_STARTTLS}`
 placeholder'larını taşır. Bunlar Keycloak'ın **kendi** config placeholder
 mekanizmasıdır (`docs/guides/server/importExport.adoc` — `${VAR_NAME}`
-biçimi; `${ENV_VAR:fallback}` de desteklenir) — Spring/Helm'deki `${env.X}`
-biçimi **değildir**, Keycloak öyle bir söz dizimini tanımıyor. `command:
-start --import-realm` ile başlarken bu placeholder'lar container'ın ortam
-değişkenlerinden çözülür; ayrı bir Admin Console adımı **gerekmez**.
+biçimi) — Spring/Helm'deki `${env.X}` biçimi **değildir**, Keycloak öyle bir
+söz dizimini tanımıyor. `command: start --import-realm` ile başlarken bu
+placeholder'lar container'ın ortam değişkenlerinden çözülür; ayrı bir Admin
+Console adımı **gerekmez**.
+
+Kaynak koddan doğrulanan davranış (Keycloak `release/26.2`):
+
+| Soru | Cevap | Kaynak |
+|---|---|---|
+| Placeholder değişimi açık mı? | `--import-realm` (import-at-startup) yolunda **otomatik açılır** | `ExportImportManager` → `getDir().isPresent()` dalı: `setStrategy(IGNORE_EXISTING)` + `setReplacePlaceholders(true)` |
+| Değerler nereden okunur? | Yalnız **ortam değişkenlerinden** (`System.getenv`) | `AbstractFileBasedImportProvider.parseFile` |
+| `${VAR:fallback}` destekleniyor mu? | **Evet**; ilk `:` ayırıcıdır, fallback kendi içinde `:` taşıyabilir (URL'ler güvenli) | `StringPropertyReplacer.replaceProperties` |
+| Değişken yoksa ve fallback da yoksa? | `${VAR}` dizgesi **olduğu gibi kalır** (hata verilmez) | aynı |
+
+> ⚠️ Bunun dev'deki sonucu: `docker-compose.dev.yml` keycloak servisine hiç
+> `SMTP_*` geçmiyor, dolayısıyla dev realm'i SMTP host'u olarak düz `${SMTP_HOST}`
+> dizgesiyle import olur. Dev'de personel daveti denenirse e-posta "${SMTP_HOST}"
+> adlı bir sunucuya bağlanmaya çalışıp hata verir (davet yine başarılı sayılır,
+> `notification_sent: false`).
 
 `docker-compose.prod.yml`'daki `keycloak` servisi `SMTP_*` değişkenlerini
 `.env.prod`'dan devralır (bkz. `deploy/.env.prod.example`). Değerler boş

@@ -21,10 +21,12 @@
 #   2) docker compose -f deploy/docker-compose.prod.yml up -d postgres redis nats vault
 #   3) Vault'u elle initialize + unseal et (bkz. aşağıda "vault" servisi notu —
 #      bu adım OTOMATİKE BAĞLANAMAZ, Shamir key'leri kimseye teslim edilemez)
-#   4) Vault'a runtime sırlarını yaz (keycloak/admin-client, vb.)
+#   4) Vault'ta KV mount'unu aç — "vault server" modu bunu KENDİLİĞİNDEN
+#      YAPMAZ: vault secrets enable -path=secret kv-v2
 #   5) docker compose -f deploy/docker-compose.prod.yml up -d keycloak
-#   6) Keycloak'ın ürettiği onlinemenu-admin-api client secret'ını al (bkz.
-#      deploy/keycloak/README.md) → adım 4'teki Vault path'ine yaz
+#   6) deploy/scripts/keycloak-harden.sh — dev client'ları/seed kullanıcıyı
+#      siler, onlinemenu-admin-api client secret'ını Vault'a yazar ve ilk
+#      yöneticiyi açar (bkz. deploy/keycloak/README.md)
 #   7) docker compose -f deploy/docker-compose.prod.yml build menu admin
 #      (menu/admin imajları api'den farklı olarak burada kaynaktan derlenir —
 #       sebebi ilgili servis notlarında; MENU_PUBLIC_URL ve KEYCLOAK_HOSTNAME
@@ -101,12 +103,18 @@ services:
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
       --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD gerekli (.env.sops)}
+    environment:
+      # Healthcheck bu değişkenle kimlik doğrular; redis-cli REDISCLI_AUTH'u
+      # otomatik okur, böylece parola komut satırında (ps çıktısında) görünmez.
+      # Eskiden $$REDIS_PASSWORD konteyner ortamında yoktu → healthcheck her
+      # zaman WRONGPASS ile düşüyor, servis kalıcı "unhealthy" kalıyordu.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     volumes:
       - redis-data:/data
     networks:
       - onlinemenu-prod
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -175,13 +183,18 @@ services:
       VAULT_LOCAL_CONFIG: |
         {
           "listener": [{"tcp": {"address": "0.0.0.0:8200", "tls_disable": true}}],
-          "storage": [{"file": {"path": "/vault/data"}}],
+          "storage": [{"file": {"path": "/vault/file"}}],
           "disable_mlock": false,
           "ui": true
         }
     command: server
     volumes:
-      - vault-data:/vault/data
+      # /vault/file, /vault/data DEĞİL: imajın docker-entrypoint.sh'ı yalnızca
+      # /vault/{logs,file,config} dizinlerini vault kullanıcısına chown'lar;
+      # root sahipli boş bir named volume /vault/data'ya bağlanınca
+      # "failed to persist keyring: mkdir /vault/data/core: permission
+      # denied" ile init hiç yapılamıyor (2026-09-15 ilk kurulumda görüldü).
+      - vault-data:/vault/file
     networks:
       - onlinemenu-prod
     healthcheck:
@@ -226,8 +239,23 @@ services:
       KC_DB_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?POSTGRES_SUPERUSER_PASSWORD gerekli (.env.sops)}
       # Barındırma kararı burada zorunlu hale geliyor: domain henüz yok, bu
       # yüzden env değişkeni olarak bırakıldı, varsayılan verilmedi.
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:?KEYCLOAK_HOSTNAME gerekli — gerçek genel erişim domaini (ör. auth.example.com); TLS'i önündeki ters proxy sağlar}
+      #
+      # ŞEMA ZORUNLU ("https://" ön eki): hostname v2'de yalnız hostname
+      # verilirse şema VE PORT X-Forwarded-* başlıklarından dinamik çözülür
+      # (hostname.adoc "Partially dynamic URLs"). Ters proxy X-Forwarded-Port'u
+      # göndermez/yanlış gönderirse issuer "https://auth.example.com:8080/..."
+      # olur ve api'nin KEYCLOAK_ISSUER_URL doğrulaması her token'da patlar.
+      # Tam URL verilince hiçbir şey dinamik çözülmez ("Fixed URLs").
+      KC_HOSTNAME: https://${KEYCLOAK_HOSTNAME:?KEYCLOAK_HOSTNAME gerekli — gerçek genel erişim domaini (ör. auth.example.com, ŞEMASIZ); TLS'i önündeki ters proxy sağlar}
+      # KC_HOSTNAME verildiğinde bu ayar Keycloak tarafından YOK SAYILIR
+      # (hostname.adoc Validations); niyeti belgelemek için duruyor.
       KC_HOSTNAME_STRICT: "true"
+      # admin-panel client'ının prod redirect/web-origin adresi realm import
+      # placeholder'ı üzerinden buradan gelir (realm-onlinemenu.json:
+      # "${ADMIN_PUBLIC_URL:http://localhost:3000}"). Placeholder yalnız
+      # İLK açılıştaki import'ta çözülür; sonradan değiştirmek realm'i
+      # güncellemez — Keycloak Admin Console'dan elle düzeltmek gerekir.
+      ADMIN_PUBLIC_URL: ${ADMIN_PUBLIC_URL:?ADMIN_PUBLIC_URL gerekli — admin panelinin genel adresi, sonunda / OLMADAN (ör. https://pos.example.com)}
       KC_HTTP_ENABLED: "true"
       # Bu container HTTP dinler; TLS'i önündeki ters proxy sonlandırır ve
       # X-Forwarded-* başlıklarını gönderir — reverse proxy KURULANA KADAR bu
@@ -374,6 +402,14 @@ services:
       KEYCLOAK_ISSUER_URL: https://${KEYCLOAK_HOSTNAME:?KEYCLOAK_HOSTNAME gerekli}/realms/onlinemenu
       KEYCLOAK_AUDIENCE: onlinemenu-backend
       KEYCLOAK_REALM: onlinemenu
+      # JWKS ayrı verilir, çünkü verifier bunu varsayılan olarak ISSUER_URL'den
+      # türetir ve AÇILIŞTA bir kez senkron çeker: public adres üzerinden
+      # çekmek, konteynerden çıkıp DNS + ters proxy üzerinden geri dönmeyi
+      # (NAT hairpin) gerektirir; proxy henüz ayakta değilse api HİÇ
+      # başlamaz. İnternal adres bu bağımlılığı kaldırır; issuer doğrulaması
+      # JWKS kaynağından bağımsız olarak KEYCLOAK_ISSUER_URL'e karşı yapılır
+      # (backend/internal/platform/auth/keycloak_verifier.go).
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/onlinemenu/protocol/openid-connect/certs
       # Personel davet ucu (backlog-pilot.md madde 2) — bu client artık realm
       # dosyasında (bkz. deploy/keycloak/README.md). İnternal URL kullanılır:
       # bu, tarayıcı değil backend-to-backend Admin API çağrısı.

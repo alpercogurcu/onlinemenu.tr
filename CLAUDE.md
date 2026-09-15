@@ -10,6 +10,7 @@ Türkiye pazarı için çok-kiracılı, modüler POS & işletme yönetim platfor
 - Mimari kararlar: `docs/adr/` (17 ADR, kategorili)
 - Delta direktifleri: `delta-v2.md` (baseline üzerinde tüm kararlar)
 - b2b denetim dersleri: `docs/lessons-from-b2b.md` (kardeş repo denetiminden aktarılan güvenlik/enforcement iş listesi — **oku ve uygula**)
+- Deployment hazırlığı: `docs/deployment.md` (DNS/Cenuta, hedef sunucu, ters proxy planı, açık kararlar; sırlar `deploy/.env.cenuta.local` git dışı)
 
 ---
 

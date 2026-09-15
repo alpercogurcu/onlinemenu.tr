@@ -37,11 +37,18 @@ tanımı bu pilottan sonra tamamlanır.
 
 ### 1. Prod kurulumu — gerçek sunucuya ilk deploy
 
-Compose ve şablonlar hazır; hiç gerçek ortama kurulmadı.
+**2026-09-15: ilk kurulum yapıldı** — b2b sunucusu, `pos/menu/api/auth.diverstreetfood.com`, mock fiscal.
+Ayrıntı ve kalanlar: [deployment.md §10](deployment.md).
 
-- [ ] Sunucu + ters proxy (TLS) kurulumu; `/readyz` ve `/healthz` dışarıya açılıyorsa rate-limit'e alınması (bkz. Task 7 review notu)
-- [ ] `.env.prod.sops` üretimi (SOPS/age), SMTP bilgileri dahil — şablon: `deploy/.env.prod.example`
-- [ ] `task deploy:smoke` ile canlı doğrulama
+- [x] Sunucu + ters proxy (TLS) kurulumu; `/healthz`/`/readyz` nginx `limit_req` altında
+- [x] `.env.prod.sops` üretimi (SOPS/age), SMTP dahil
+- [x] `task deploy:smoke` ile canlı doğrulama (4/4 OK)
+- [ ] Token bilgileri gelince mock override'ı kaldır (`FISCAL_DEVICE_TYPE`), webhook adresini Token'a bildir
+- [ ] Alertmanager SMTP + observability profili; offsite yedek (`BACKUP_S3_*`)
+- [ ] Vault api token'ı 2027-09-15'te dolar, api yenilemiyor → AppRole/yenileme stratejisi
+- [ ] MinIO imaj/`mc` etiketleri kaldırılmış (410) → güncel etiket + `minio` servislerini açma
+- [ ] Admin `kitchen-stream` route'u konteynerde `localhost:8081` → KDS canlı akışı prod'da çalışmıyor
+- [ ] `backend/deploy/dev-seed.sql`: chain-wide (branch_id NULL) membership `ON CONFLICT` ile idempotent değil
 - [ ] Vault: bugün yalnız Keycloak admin-client secret'ı Vault'tan okunuyor; DB/NATS/TokenX sırları `.env.sops` üzerinden düz env. Pilot için kabul; Faz 2'de dynamic secrets (CLAUDE.md düzeltildi)
 - [ ] SEC-005 deploy-öncesi/sonrası sorguları prod'da koşulmalı (bkz. backlog-fiscal.md)
 

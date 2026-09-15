@@ -13,13 +13,22 @@ log() { echo "[entrypoint] $(date -u +%H:%M:%SZ) $*"; }
 # mc is fetched once into a named volume (see docker-compose.prod.yml) so a
 # container restart does not require network egress to dl.min.io again.
 # Version and checksum are pinned — never "latest".
-if [ ! -x "$MC_BIN" ]; then
+#
+# Only needed for the optional S3 upload, and best-effort even then: dl.min.io
+# has started returning 410 Gone for archived releases (seen 2026-09-15), and a
+# failed fetch under `set -e` used to crash-loop the sidecar — taking LOCAL
+# backups down as well. A missing mc now only disables the S3 step.
+if [ -n "${BACKUP_S3_ENDPOINT:-}" ] && [ ! -x "$MC_BIN" ]; then
   log "fetching mc ${MC_VERSION} (pinned + checksum-verified)..."
   mkdir -p "$(dirname "$MC_BIN")"
-  wget -q -O "$MC_BIN" "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
-  echo "${MC_SHA256}  ${MC_BIN}" | sha256sum -c -
-  chmod +x "$MC_BIN"
-  log "mc installed at ${MC_BIN}"
+  if wget -q -O "$MC_BIN" "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}" \
+     && echo "${MC_SHA256}  ${MC_BIN}" | sha256sum -c - >/dev/null; then
+    chmod +x "$MC_BIN"
+    log "mc installed at ${MC_BIN}"
+  else
+    rm -f "$MC_BIN"
+    log "WARNING: mc fetch/verify failed — S3 upload disabled, local backups continue"
+  fi
 fi
 export PATH="$(dirname "$MC_BIN"):${PATH}"
 

@@ -297,6 +297,9 @@ Kimlik bilgileri (repo dışı):
 - Keycloak bootstrap admin (`kcadmin`), tüm servis parolaları: `deploy/.env.prod.sops`
   (`task deploy:secrets:edit`).
 - Cenuta cPanel ve `noreply@` SMTP parolası: `deploy/.env.cenuta.local` (git dışı).
+- **Çevrimdışı kopya:** iki `.local` dosyası, iki age özel anahtarı (MacBook + sunucu) ve README,
+  b2b yedeklerinin gittiği Google Drive hesabında `onlinemenu-secrets/` klasöründe (sunucudaki
+  `rclone` `gdrive:` remote'u ile, 2026-09-15). Düz metin — Drive erişimi tüm prod sırları demektir.
 - Token webhook adresi (sözleşme/teknik formda bildirilecek):
   `https://api.diverstreetfood.com/webhooks/fiscal/tokenx/<TOKENX_WEBHOOK_SECRET>` — secret
   `.env.prod.sops`'ta, rota yalnız `TOKENX_WEBHOOK_SECRET` doluyken kayıtlı

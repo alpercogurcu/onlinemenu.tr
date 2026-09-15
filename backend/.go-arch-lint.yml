@@ -225,8 +225,14 @@ deps:
   # storage/verification) and pub.MembershipResolver (role lookup for the
   # PIN-switched token). Direction is one-way — identity_service does NOT
   # depend on payment_public — so this is a new edge, not a cycle.
+  # pos_public is the check write guard (pub.CheckWriteGuard): RegisterSale
+  # must refuse money aimed at a closed/cancelled adisyon, and payment may not
+  # read pos tables to find that out. The reverse edge (pos_service →
+  # payment_public, SaleReader) already exists; the two are not a cycle at the
+  # object level because pos binds the guard to CheckReadService, which depends
+  # on nothing but the pool and the check repo.
   payment_service:
-    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public, identity_public, payment_service]
+    mayDependOn: [platform, payment_domain, payment_repo, payment_public, notification_public, identity_public, pos_public, payment_service]
   # payment_fiscal is allowed here for ONE reason: the TokenX webhook endpoint
   # is definitionally the vendor's inbound edge, so the transport layer must
   # speak the vendor's wire format (tokenx.ParseWebhook / ParseLockEvent) to

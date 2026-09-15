@@ -168,6 +168,36 @@ type GuestOrderReader interface {
 	GetGuestOrder(ctx context.Context, tenantID, orderID uuid.UUID) (GuestOrderView, error)
 }
 
+// ErrCheckNotOpen is returned when an order or a payment is written against
+// a check whose status is no longer "open" (closed or cancelled). Until this
+// existed, both writes succeeded: POST /pos/orders and POST /payments never
+// looked at the check's status, so a cashier (or a stale POS station) could
+// append food and money to an already-settled adisyon, silently corrupting
+// the day-end report and the fiscal trail. CheckService.Close was the only
+// place the status was enforced, and by then the damage was persisted.
+// The HTTP layer maps it to 409 with code "check_not_open".
+var ErrCheckNotOpen = errors.New("pos: check is not open")
+
+// ErrCheckBranchMismatch is returned when the branch_id supplied with an
+// order or a payment does not match the branch of the check it is written
+// against. It is distinct from ErrBranchForbidden: the principal may well be
+// entitled to act on the branch it named — the check simply belongs to a
+// different one, which would book the revenue in the wrong branch's report.
+// The HTTP layer maps it to 409 with code "check_branch_mismatch".
+var ErrCheckBranchMismatch = errors.New("pos: check belongs to another branch")
+
+// CheckWriteGuard answers "may I attach something to this check" for modules
+// that must not read pos tables themselves (payment). It is a guard, not a
+// getter, on purpose: the invariant (which statuses are writable, whether a
+// branch mismatch outranks a status mismatch) stays owned by pos, and the
+// caller never needs pos's domain enum to evaluate it.
+//
+// branchID is the branch the caller intends to book the write under. Pass
+// uuid.Nil to skip the branch comparison.
+type CheckWriteGuard interface {
+	AssertCheckWritable(ctx context.Context, tenantID, checkID, branchID uuid.UUID) error
+}
+
 // CheckReader allows other modules to read check state without importing POS internals.
 type CheckReader interface {
 	GetByID(ctx context.Context, tenantID, checkID uuid.UUID) (Check, error)

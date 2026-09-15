@@ -101,6 +101,8 @@ func newOrderService() *service.OrderService {
 	return service.NewOrderService(service.OrderParams{
 		DB:        sharedPool,
 		OrderRepo: repo.NewOrderRepo(),
+		CheckRepo: repo.NewCheckRepo(),
+		TableRepo: repo.NewTableRepo(),
 		Logger:    zap.NewNop(),
 	})
 }

@@ -90,15 +90,14 @@ type Check struct {
 // filters client-side rather than assuming a query param the handler
 // doesn't have.
 //
-// The branch filter is not cosmetic: PlaceOrder/RegisterCashPayment always
-// send the calling station's own branchID alongside whatever check_id the
-// cashier selected, and the backend does not cross-validate that the
-// check's branch matches the order/payment's branch_id at write time — only
-// CloseCheck's requireBranch catches the mismatch, and only at close time.
-// Without this filter, a station could select another branch's open check
-// from the list and place orders/payments against it under its own
-// branch_id before CloseCheck finally 403s. Pass branchID="" only for a
-// chain-wide staff session, which legitimately sees every branch.
+// The branch filter keeps the station from OFFERING a check it cannot use:
+// PlaceOrder/RegisterCashPayment always send the calling station's own
+// branchID alongside whatever check_id the cashier selected, and the backend
+// now cross-validates both the check's status and its branch at write time
+// (409 check_not_open / check_branch_mismatch). Filtering here means the
+// cashier never picks a check that is about to be refused, rather than
+// finding out after tapping "öde". Pass branchID="" only for a chain-wide
+// staff session, which legitimately sees every branch.
 func (c *Client) ListOpenChecks(ctx context.Context, branchID string) ([]Check, error) {
 	var all []Check
 	if err := c.do(ctx, http.MethodGet, "/api/v1/pos/checks", nil, &all); err != nil {

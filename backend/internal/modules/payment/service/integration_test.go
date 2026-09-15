@@ -228,6 +228,7 @@ func newPaymentService() *service.PaymentService {
 		SubmissionRepo: repo.NewFiscalSubmissionRepo(),
 		StatusRepo:     repo.NewFiscalStatusRepo(),
 		SessionRepo:    repo.NewCashSessionRepo(),
+		Checks:         writableCheckGuard,
 		Fiscal:         domain.MockFiscalAdapter{},
 		Logger:         zap.NewNop(),
 	})

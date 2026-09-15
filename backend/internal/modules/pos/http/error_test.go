@@ -46,6 +46,22 @@ func TestHandler_Error_MapsSentinels(t *testing.T) {
 			wantBodyCode: codeTableOccupied,
 		},
 		{
+			// The 2026-09-15 production finding: an order placed onto a
+			// closed check used to return 201. The body code is what lets
+			// the POS station say "bu adisyon kapanmış" instead of the
+			// generic conflict text it would otherwise show.
+			name:         "check not open",
+			err:          fmt.Errorf("pos/service/order: place: %w", pub.ErrCheckNotOpen),
+			wantCode:     http.StatusConflict,
+			wantBodyCode: codeCheckNotOpen,
+		},
+		{
+			name:         "check branch mismatch",
+			err:          fmt.Errorf("pos/service/order: place: %w", pub.ErrCheckBranchMismatch),
+			wantCode:     http.StatusConflict,
+			wantBodyCode: codeCheckBranchMismatch,
+		},
+		{
 			name:     "branch forbidden",
 			err:      fmt.Errorf("pos/service/check: close: %w", pub.ErrBranchForbidden),
 			wantCode: http.StatusForbidden,

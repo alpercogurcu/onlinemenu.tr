@@ -311,7 +311,7 @@ func newTestEnvWithPool(t *testing.T, pool *db.Pool) *testEnv {
 
 	orderRepo := repo.NewOrderRepo()
 	checkRepo := repo.NewCheckRepo()
-	orders := service.NewOrderService(service.OrderParams{DB: pool, OrderRepo: orderRepo, Logger: logger})
+	orders := service.NewOrderService(service.OrderParams{DB: pool, OrderRepo: orderRepo, CheckRepo: checkRepo, Logger: logger})
 	checks := service.NewCheckService(service.CheckParams{DB: pool, CheckRepo: checkRepo, SaleReader: zeroSaleReader{}, Logger: logger})
 
 	lc := &fakeLifecycle{}

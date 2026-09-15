@@ -327,15 +327,40 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		Meta:           req.Meta.toDomain(),
 		TerminalSerial: req.TerminalSerial,
 	})
+	if err != nil {
+		h.registerSaleError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusCreated, toPaymentResponse(payment))
+}
+
+// registerSaleError maps RegisterSale's sentinels to their HTTP answers.
+//
+// The two check conflicts carry a machine-readable body code, mirroring
+// pos_http: 409 alone cannot tell a station whether the adisyon was closed
+// behind its back or whether it picked another branch's check, and those need
+// different things said to the cashier. The pre-existing plain-text answers
+// are left as they are — clients already parse them.
+func (h *Handler) registerSaleError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, pub.ErrCheckNotOpen):
+		// The 2026-09-15 production finding: cash was collected and a fiscal
+		// receipt minted against a closed adisyon, and the response was 201.
+		respondError(w, http.StatusConflict, codeCheckNotOpen, "check is not open")
+	case errors.Is(err, pub.ErrCheckBranchMismatch):
+		respondError(w, http.StatusConflict, codeCheckBranchMismatch, "check belongs to another branch")
+	case errors.Is(err, pub.ErrCheckNotFound):
+		// 422, not 404: the resource addressed by this route (a payment) is
+		// not what is missing — a field in the body is unusable. A 404 here
+		// would read as "POST /api/v1/payments does not exist".
+		respondError(w, http.StatusUnprocessableEntity, codeCheckNotFound, "check_id does not resolve to a check")
 	case errors.Is(err, pub.ErrNoCashSessionOpen):
 		// 409, not 500: the branch's drawer state is a caller-actionable
 		// conflict, not a server fault (follows the same rationale as
-		// ErrCashSessionAlreadyOpen below). The message is written for the
+		// ErrCashSessionAlreadyOpen elsewhere). The message is written for the
 		// cashier, not a developer: they need to know to open the drawer
 		// before they can take cash.
 		http.Error(w, "bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı", http.StatusConflict)
-		return
 	case errors.Is(err, pub.ErrInvalidInput):
 		// 422, not 500. Until now this endpoint had no sentinel mapping at
 		// all, so an unknown payment method or a non-positive amount was
@@ -344,13 +369,27 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		// false alarms. Same defect d451cb2 fixed on the cash session
 		// handlers; it survived here because the sentinel did not exist yet.
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-		return
-	case err != nil:
+	default:
 		h.logger.Error("payment: register sale", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
 	}
-	respondJSON(w, http.StatusCreated, toPaymentResponse(payment))
+}
+
+// Machine-readable error codes returned in the JSON error body. Stable
+// identifiers: POS clients branch on these, not on the human-readable message.
+const (
+	codeCheckNotOpen        = "check_not_open"
+	codeCheckBranchMismatch = "check_branch_mismatch"
+	codeCheckNotFound       = "check_not_found"
+)
+
+type errorResponse struct {
+	Error string `json:"error"`
+	Code  string `json:"code"`
+}
+
+func respondError(w http.ResponseWriter, status int, code, msg string) {
+	respondJSON(w, status, errorResponse{Error: msg, Code: code})
 }
 
 func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {

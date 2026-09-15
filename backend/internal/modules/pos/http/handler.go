@@ -935,6 +935,14 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		respondError(w, http.StatusConflict, codeInsufficientPayment, "payment insufficient to close check")
 		return
 	}
+	if errors.Is(err, pub.ErrCheckNotOpen) {
+		respondError(w, http.StatusConflict, codeCheckNotOpen, "check is not open")
+		return
+	}
+	if errors.Is(err, pub.ErrCheckBranchMismatch) {
+		respondError(w, http.StatusConflict, codeCheckBranchMismatch, "check belongs to another branch")
+		return
+	}
 	if errors.Is(err, pub.ErrTableOccupied) {
 		respondError(w, http.StatusConflict, codeTableOccupied, "table is already occupied")
 		return
@@ -974,6 +982,8 @@ const (
 	codeInsufficientPayment = "insufficient_payment"
 	codeInvalidTransition   = "invalid_transition"
 	codeTableOccupied       = "table_occupied"
+	codeCheckNotOpen        = "check_not_open"
+	codeCheckBranchMismatch = "check_branch_mismatch"
 	codeInvalidBranchID     = "invalid_branch_id"
 	codeInvalidRange        = "invalid_range"
 	codeRangeTooLong        = "range_too_long"

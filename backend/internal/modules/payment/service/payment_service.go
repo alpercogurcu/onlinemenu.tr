@@ -16,6 +16,7 @@ import (
 	"onlinemenu.tr/internal/modules/payment/domain"
 	pub "onlinemenu.tr/internal/modules/payment/public"
 	"onlinemenu.tr/internal/modules/payment/repo"
+	pospub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/platform/db"
 )
 
@@ -26,6 +27,7 @@ type PaymentService struct {
 	submissionRepo *repo.FiscalSubmissionRepo
 	statusRepo     *repo.FiscalStatusRepo
 	sessionRepo    *repo.CashSessionRepo
+	checks         pospub.CheckWriteGuard
 	fiscal         domain.FiscalDeviceAdapter
 	adapterType    string
 	logger         *zap.Logger
@@ -40,8 +42,15 @@ type Params struct {
 	SubmissionRepo *repo.FiscalSubmissionRepo
 	StatusRepo     *repo.FiscalStatusRepo
 	SessionRepo    *repo.CashSessionRepo
-	Fiscal         domain.FiscalDeviceAdapter
-	Logger         *zap.Logger
+	// Checks is pos's guard for "may this check still receive money"
+	// (ADR-AUTH-001 layer 3 is about who acts; this is about what they act
+	// on). It is an interface from pos/public: payment never reads a pos
+	// table. Unit/integration tests that construct Params directly may leave
+	// it nil, in which case a sale naming a check_id is refused rather than
+	// silently unguarded — see RegisterSale.
+	Checks pospub.CheckWriteGuard
+	Fiscal domain.FiscalDeviceAdapter
+	Logger *zap.Logger
 }
 
 func NewPaymentService(p Params) *PaymentService {
@@ -51,6 +60,7 @@ func NewPaymentService(p Params) *PaymentService {
 		submissionRepo: p.SubmissionRepo,
 		statusRepo:     p.StatusRepo,
 		sessionRepo:    p.SessionRepo,
+		checks:         p.Checks,
 		fiscal:         p.Fiscal,
 		adapterType:    adapterTypeOf(p.Fiscal),
 		logger:         p.Logger,
@@ -132,8 +142,23 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 		req.Currency = "TRY"
 	}
 
+	// The check verdict is obtained BEFORE the transaction opens, for the same
+	// reason CheckService.Close reads its payment totals before taking the
+	// check lock: the guard runs on another pooled connection, and calling it
+	// while holding this module's write transaction risks pool starvation.
+	//
+	// It is only APPLIED further down, after the idempotency fast path misses
+	// — a retry of a payment that was legitimately taken while the check was
+	// open must keep returning that payment, not start conflicting the moment
+	// the cashier closes the adisyon. Same rule the cash-session guard below
+	// follows, and the reason the verdict is carried rather than returned here.
+	checkVerdict, err := s.checkVerdictFor(ctx, req)
+	if err != nil {
+		return domain.Payment{}, err
+	}
+
 	var payment domain.Payment
-	err := s.db.WithTenantTx(ctx, req.TenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, req.TenantID, func(tx pgx.Tx) error {
 		// Idempotency fast path: return the existing payment if the key was already used.
 		existing, err := s.paymentRepo.GetByIdempotencyKey(ctx, tx, req.TenantID, req.IdempotencyKey)
 		if err == nil {
@@ -142,6 +167,10 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 		}
 		if !errors.Is(err, repo.ErrNotFound) {
 			return fmt.Errorf("payment/service: check idempotency: %w", err)
+		}
+
+		if checkVerdict != nil {
+			return checkVerdict
 		}
 
 		// Only a genuinely new registration is gated — never a replay of an
@@ -212,6 +241,31 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 		return domain.Payment{}, fmt.Errorf("payment/service: register sale: %w", err)
 	}
 	return payment, nil
+}
+
+// checkVerdictFor asks pos whether req's check may still receive money.
+//
+// It returns (verdict, nil) when pos refused — the caller applies that verdict
+// after the idempotency fast path — and (nil, err) when pos could not be asked
+// at all, which is a 500, not a conflict. A sale with no check_id (masasız
+// satış, paket servis) is unaffected: there is nothing to validate.
+func (s *PaymentService) checkVerdictFor(ctx context.Context, req RegisterSaleRequest) (verdict, failure error) {
+	if req.CheckID == nil || *req.CheckID == uuid.Nil {
+		return nil, nil
+	}
+	if s.checks == nil {
+		// Fail closed. A nil guard means the composition root did not wire pos
+		// in; silently skipping would restore exactly the production defect
+		// this guard exists to close.
+		return nil, fmt.Errorf("payment/service: check write guard not wired")
+	}
+	if err := s.checks.AssertCheckWritable(ctx, req.TenantID, *req.CheckID, req.BranchID); err != nil {
+		if verdict := translateCheckGuardErr(err); verdict != nil {
+			return verdict, nil
+		}
+		return nil, fmt.Errorf("payment/service: assert check writable: %w", err)
+	}
+	return nil, nil
 }
 
 // fetchExistingByIdempotencyKey re-reads a payment in a fresh transaction after

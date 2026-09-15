@@ -54,6 +54,18 @@ func NewOrderService(p OrderParams) *OrderService {
 // to the requested branch_id (ADR-AUTH-001 layer 3 / security sprint); there
 // is no persisted entity yet at this point, so the client-supplied
 // branch_id is what gets validated.
+//
+// When o.CheckID is set, the check must still be open and must belong to
+// o.BranchID. Until 2026-09-15 neither was verified: production accepted
+// orders onto closed and cancelled adisyons (201), because the only status
+// enforcement lived in CheckService.Close — by which time the food had
+// already been sent to the kitchen and booked against a settled check. The
+// check row is taken FOR UPDATE inside this same transaction, so a cashier
+// closing the check concurrently either loses the race or makes this call
+// fail; a plain read would leave a TOCTOU window the lock closes for free.
+//
+// A nil o.CheckID (takeaway/delivery — masasız satış) skips the guard: those
+// orders legitimately have no check to validate.
 func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, o domain.Order) (domain.Order, error) {
 	if err := requireBranch(ctx, principal, o.BranchID); err != nil {
 		return domain.Order{}, err
@@ -66,6 +78,9 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 
 	var created domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := s.lockWritableCheck(ctx, tx, o.CheckID, o.BranchID); err != nil {
+			return err
+		}
 		var err error
 		created, err = s.orderRepo.Create(ctx, tx, o)
 		if err != nil {
@@ -81,9 +96,25 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 		})
 	})
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("pos/service/order: place: %w", err)
+		return domain.Order{}, wrapErr(err, "pos/service/order: place: %w")
 	}
 	return created, nil
+}
+
+// lockWritableCheck locks the order's check and rejects the placement when it
+// can no longer receive one. A nil checkID is a no-op (see Place).
+func (s *OrderService) lockWritableCheck(ctx context.Context, tx pgx.Tx, checkID *uuid.UUID, branchID uuid.UUID) error {
+	if checkID == nil || *checkID == uuid.Nil {
+		return nil
+	}
+	if s.checkRepo == nil {
+		return errors.New("check repo not wired")
+	}
+	current, err := s.checkRepo.GetForUpdate(ctx, tx, *checkID)
+	if err != nil {
+		return err
+	}
+	return assertCheckWritable(current, branchID)
 }
 
 // PlaceGuest places an anonymous QR order (ADR-ARCH-006 §8).

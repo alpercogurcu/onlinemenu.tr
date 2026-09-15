@@ -255,9 +255,9 @@ func (s *CheckService) TableLabelsByIDs(ctx context.Context, tenantID uuid.UUID,
 // GetByIDWithTotal is GetByID plus the check's current bill total (kurus —
 // CheckRepo.GetTotal, rejected/cancelled order items excluded). It exists
 // alongside the plain GetByID rather than replacing it because GetByID's
-// signature is depended on by GetPublic (cross-module pub.Check projection
-// consumed by payment) and ws/hub.go's table-label lookup — neither needs
-// nor should carry the extra query. Both reads happen in the same
+// signature is depended on by ws/hub.go's table-label lookup and by
+// CheckReadService's cross-module pub.Check projection — neither needs nor
+// should carry the extra query. Both reads happen in the same
 // tenant-scoped transaction so the total reflects the same RLS-visible
 // snapshot as the check row.
 func (s *CheckService) GetByIDWithTotal(ctx context.Context, tenantID, checkID uuid.UUID) (domain.Check, int64, error) {
@@ -473,22 +473,6 @@ func (s *CheckService) releaseTableToCleaning(ctx context.Context, tx pgx.Tx, ta
 		return fmt.Errorf("pos/service/check: release table to cleaning: %w", err)
 	}
 	return nil
-}
-
-// GetPublic returns a cross-module projection of a check.
-func (s *CheckService) GetPublic(ctx context.Context, tenantID, checkID uuid.UUID) (pub.Check, error) {
-	c, err := s.GetByID(ctx, tenantID, checkID)
-	if err != nil {
-		return pub.Check{}, err
-	}
-	return pub.Check{
-		ID:         c.ID,
-		TenantID:   c.TenantID,
-		BranchID:   c.BranchID,
-		TableLabel: c.TableLabel,
-		Status:     c.Status,
-		OpenedAt:   c.OpenedAt,
-	}, nil
 }
 
 // wrapErr maps repo/domain sentinel errors to their pub equivalents so HTTP

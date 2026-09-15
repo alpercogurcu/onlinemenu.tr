@@ -181,6 +181,7 @@ func newObservedPaymentService() (*service.PaymentService, *observer.ObservedLog
 		PaymentRepo:    repo.NewPaymentRepo(),
 		SubmissionRepo: repo.NewFiscalSubmissionRepo(),
 		StatusRepo:     repo.NewFiscalStatusRepo(),
+		Checks:         writableCheckGuard,
 		Fiscal:         domain.MockFiscalAdapter{},
 		Logger:         zap.New(core),
 	}), logs

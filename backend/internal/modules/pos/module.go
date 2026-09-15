@@ -29,7 +29,14 @@ var Module = fx.Module("pos",
 		service.NewReportService,
 		poshttp.NewHandler,
 		posws.NewHub,
-		fx.Annotate(newCheckReader, fx.As(new(pub.CheckReader))),
+		// CheckReadService — not CheckService — backs both cross-module check
+		// interfaces: it depends only on the pool and the check repo, so the
+		// fx graph stays acyclic even though payment consumes the write guard
+		// while CheckService consumes payment's SaleReader (see its doc
+		// comment).
+		fx.Annotate(service.NewCheckReadService,
+			fx.As(new(pub.CheckReader)),
+			fx.As(new(pub.CheckWriteGuard))),
 		// Guest (QR) entry points — ADR-ARCH-006 §8. Three narrow interfaces
 		// instead of one wide one: the storefront's session guard needs only
 		// the table read, its polling endpoint only the order read, and only
@@ -46,17 +53,6 @@ var Module = fx.Module("pos",
 		hub.Register(lc)
 	}),
 )
-
-// checkReaderAdapter satisfies pub.CheckReader using CheckService.
-type checkReaderAdapter struct{ svc *service.CheckService }
-
-func newCheckReader(svc *service.CheckService) *checkReaderAdapter {
-	return &checkReaderAdapter{svc: svc}
-}
-
-func (a *checkReaderAdapter) GetByID(ctx context.Context, tenantID, checkID uuid.UUID) (pub.Check, error) {
-	return a.svc.GetPublic(ctx, tenantID, checkID)
-}
 
 // guestOrderAdapter satisfies the guest-facing pub interfaces using
 // OrderService. It exists as a distinct type so a cross-module consumer can

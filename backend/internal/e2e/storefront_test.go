@@ -112,8 +112,12 @@ func newStorefrontStack(t *testing.T) storefrontStack {
 		DB:          sharedPool,
 		PaymentRepo: paymentrepo.NewPaymentRepo(),
 		SessionRepo: paymentrepo.NewCashSessionRepo(),
-		Fiscal:      paymentdomain.MockFiscalAdapter{},
-		Logger:      log,
+		Checks: possvc.NewCheckReadService(possvc.CheckReadParams{
+			DB:        sharedPool,
+			CheckRepo: posrepo.NewCheckRepo(),
+		}),
+		Fiscal: paymentdomain.MockFiscalAdapter{},
+		Logger: log,
 	})
 	checkService := possvc.NewCheckService(possvc.CheckParams{
 		DB:         sharedPool,

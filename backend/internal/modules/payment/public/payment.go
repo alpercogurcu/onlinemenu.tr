@@ -44,6 +44,28 @@ var ErrNoCashSessionOpen = errors.New("payment: branch has no open cash session"
 // error log fills with false alarms that mask real faults.
 var ErrInvalidInput = errors.New("payment: invalid input")
 
+// ErrCheckNotOpen is returned by PaymentService.RegisterSale when the sale
+// names a check (adisyon) that is no longer open. Until 2026-09-15 payment
+// never asked: POST /api/v1/payments happily collected cash against a closed
+// or cancelled check, minted a fiscal receipt for it, and left money attached
+// to a settled adisyon that no close flow would ever reconcile. The status is
+// read through pos's public CheckWriteGuard — payment does not touch pos
+// tables. Callers map it to HTTP 409 with code "check_not_open".
+var ErrCheckNotOpen = errors.New("payment: check is not open")
+
+// ErrCheckBranchMismatch is returned when the sale's branch_id differs from
+// the branch of the check it settles. Booking a branch's money onto another
+// branch's adisyon silently corrupts both branches' day-end reports, and
+// nothing downstream can untangle it afterwards. Callers map it to HTTP 409
+// with code "check_branch_mismatch".
+var ErrCheckBranchMismatch = errors.New("payment: check belongs to another branch")
+
+// ErrCheckNotFound is returned when the sale names a check id that does not
+// resolve for this tenant (never existed, or belongs to another tenant and is
+// invisible under RLS). Before the guard existed such a payment was written
+// with a dangling check_id. Callers map it to HTTP 422.
+var ErrCheckNotFound = errors.New("payment: check not found")
+
 // ErrCashSessionClosed is returned by CashSessionPinService.Join/Switch when
 // the target session is not open (ADR-DATA-008 PIN akışı §4: participation
 // and switching only make sense against an open drawer). Callers map it to

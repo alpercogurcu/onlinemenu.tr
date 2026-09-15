@@ -29,6 +29,7 @@ import (
 	paymentrepo "onlinemenu.tr/internal/modules/payment/repo"
 	paymentsvc "onlinemenu.tr/internal/modules/payment/service"
 	posdomain "onlinemenu.tr/internal/modules/pos/domain"
+	pospub "onlinemenu.tr/internal/modules/pos/public"
 	posrepo "onlinemenu.tr/internal/modules/pos/repo"
 	possvc "onlinemenu.tr/internal/modules/pos/service"
 	"onlinemenu.tr/internal/platform/auth"
@@ -242,18 +243,28 @@ func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.Pa
 	log := zap.NewNop()
 
 	payRepo := paymentrepo.NewPaymentRepo()
+	checkRepo := posrepo.NewCheckRepo()
+	orderRepo := posrepo.NewOrderRepo()
+
+	// The real pos guard, not a stub: the point of the spine is that the two
+	// modules agree at the boundary. CheckReadService is also what keeps the
+	// production fx graph acyclic while payment consults pos and pos consults
+	// payment (see its doc comment).
+	checkGuard := possvc.NewCheckReadService(possvc.CheckReadParams{
+		DB:        sharedPool,
+		CheckRepo: checkRepo,
+	})
+
 	payService := paymentsvc.NewPaymentService(paymentsvc.Params{
 		DB:          sharedPool,
 		PaymentRepo: payRepo,
 		SessionRepo: paymentrepo.NewCashSessionRepo(),
+		Checks:      checkGuard,
 		Fiscal:      paymentdomain.MockFiscalAdapter{},
 		Logger:      log,
 	})
 
 	reader := &saleReaderAdapter{svc: payService}
-
-	checkRepo := posrepo.NewCheckRepo()
-	orderRepo := posrepo.NewOrderRepo()
 
 	checkService := possvc.NewCheckService(possvc.CheckParams{
 		DB:         sharedPool,
@@ -264,6 +275,8 @@ func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.Pa
 	orderService := possvc.NewOrderService(possvc.OrderParams{
 		DB:        sharedPool,
 		OrderRepo: orderRepo,
+		CheckRepo: checkRepo,
+		TableRepo: posrepo.NewTableRepo(),
 		Logger:    log,
 	})
 
@@ -389,6 +402,104 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
 	assert.NotNil(t, closed.ClosedBy)
 	assert.Equal(t, staffID, *closed.ClosedBy)
+}
+
+// TestPOSSpine_SettledCheckRejectsOrderAndPayment is the regression for the
+// 2026-09-15 production finding: with a tenant manager's token, both
+// POST /api/v1/pos/orders and POST /api/v1/payments answered 201 for checks
+// whose status was already 'closed' or 'cancelled' — food went to the
+// kitchen and cash (plus a fiscal receipt) was booked against an adisyon
+// nobody would ever reconcile again.
+//
+// It runs across the real module boundary rather than against a stub: pos's
+// CheckReadService is what payment consults, so this also proves the two
+// modules' verdicts stay in step.
+func TestPOSSpine_SettledCheckRejectsOrderAndPayment(t *testing.T) {
+	ctx := context.Background()
+	checkSvc, orderSvc, paySvc := buildServices()
+
+	newOrder := func(checkID uuid.UUID, branch uuid.UUID) posdomain.Order {
+		return posdomain.Order{
+			BranchID:     branch,
+			CheckID:      &checkID,
+			OrderChannel: posdomain.OrderChannelDineIn,
+			Items: []posdomain.OrderItem{
+				{ProductID: uuid.New(), ProductName: "Çay", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 500},
+			},
+		}
+	}
+	newSale := func(checkID uuid.UUID, branch uuid.UUID) paymentsvc.RegisterSaleRequest {
+		return paymentsvc.RegisterSaleRequest{
+			TenantID:       tenantID,
+			BranchID:       branch,
+			CheckID:        &checkID,
+			IdempotencyKey: uuid.NewString(),
+			Method:         paymentdomain.PaymentMethodCash,
+			AmountTotal:    500,
+			Currency:       "TRY",
+		}
+	}
+
+	openAndSettle := func(t *testing.T, cancel bool) posdomain.Check {
+		t.Helper()
+		c, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
+			BranchID:   branchID,
+			TableLabel: "Masa Guard",
+			OpenedBy:   &staffID,
+		})
+		require.NoError(t, err)
+		if cancel {
+			_, err = checkSvc.Cancel(ctx, tenantID, staffPrincipal(), c.ID, staffID)
+		} else {
+			_, err = checkSvc.Close(ctx, tenantID, staffPrincipal(), c.ID, staffID)
+		}
+		require.NoError(t, err)
+		return c
+	}
+
+	t.Run("closed check rejects a new order", func(t *testing.T) {
+		c := openAndSettle(t, false)
+		_, err := orderSvc.Place(ctx, tenantID, staffPrincipal(), newOrder(c.ID, branchID))
+		assert.ErrorIs(t, err, pospub.ErrCheckNotOpen)
+	})
+
+	t.Run("cancelled check rejects a new order", func(t *testing.T) {
+		c := openAndSettle(t, true)
+		_, err := orderSvc.Place(ctx, tenantID, staffPrincipal(), newOrder(c.ID, branchID))
+		assert.ErrorIs(t, err, pospub.ErrCheckNotOpen)
+	})
+
+	t.Run("closed check rejects a new payment", func(t *testing.T) {
+		c := openAndSettle(t, false)
+		_, err := paySvc.RegisterSale(ctx, newSale(c.ID, branchID))
+		assert.ErrorIs(t, err, paymentpub.ErrCheckNotOpen)
+
+		// Nothing was written: no payment row and therefore no fiscal
+		// submission for the device to print.
+		payments, err := paySvc.ListByCheck(ctx, tenantID, c.ID)
+		require.NoError(t, err)
+		assert.Empty(t, payments)
+	})
+
+	t.Run("cancelled check rejects a new payment", func(t *testing.T) {
+		c := openAndSettle(t, true)
+		_, err := paySvc.RegisterSale(ctx, newSale(c.ID, branchID))
+		assert.ErrorIs(t, err, paymentpub.ErrCheckNotOpen)
+	})
+
+	t.Run("open check still accepts both", func(t *testing.T) {
+		c, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
+			BranchID:   branchID,
+			TableLabel: "Masa Guard OK",
+			OpenedBy:   &staffID,
+		})
+		require.NoError(t, err)
+
+		_, err = orderSvc.Place(ctx, tenantID, staffPrincipal(), newOrder(c.ID, branchID))
+		require.NoError(t, err)
+		_, err = paySvc.RegisterSale(ctx, newSale(c.ID, branchID))
+		require.NoError(t, err)
+	})
 }
 
 func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {

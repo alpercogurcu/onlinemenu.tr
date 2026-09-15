@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	identitypub "onlinemenu.tr/internal/modules/identity/public"
+	pospub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/platform/auth"
 	"onlinemenu.tr/internal/platform/db"
 	platformotel "onlinemenu.tr/internal/platform/otel"
@@ -57,6 +58,16 @@ func (stubPersonReader) GetByKeycloakSub(context.Context, string) (identitypub.P
 	return identitypub.Person{}, nil
 }
 
+// stubCheckWriteGuard satisfies pos's check guard for graph resolution only.
+// payment consumes it one-way through pos_public (PaymentService refuses a
+// sale aimed at a closed adisyon); in the real app pos.Module provides it
+// from CheckReadService.
+type stubCheckWriteGuard struct{}
+
+func (stubCheckWriteGuard) AssertCheckWritable(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error {
+	return nil
+}
+
 // supplyExternals provides the dependencies cmd/api/main.go injects into this
 // module. ValidateApp only resolves the graph — no constructor runs and no hook
 // fires — so the nil pointers (and the stub interface impls above) are never
@@ -82,6 +93,7 @@ func supplyExternals(cfg FiscalConfig) fx.Option {
 		fx.Annotate(stubCashierPinService{}, fx.As(new(identitypub.CashierPinService))),
 		fx.Annotate(stubMembershipResolver{}, fx.As(new(identitypub.MembershipResolver))),
 		fx.Annotate(stubPersonReader{}, fx.As(new(identitypub.PersonReader))),
+		fx.Annotate(stubCheckWriteGuard{}, fx.As(new(pospub.CheckWriteGuard))),
 	)
 }
 

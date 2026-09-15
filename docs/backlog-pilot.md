@@ -44,7 +44,8 @@ Ayrıntı ve kalanlar: [deployment.md §10](deployment.md).
 - [x] `.env.prod.sops` üretimi (SOPS/age), SMTP dahil
 - [x] `task deploy:smoke` ile canlı doğrulama (4/4 OK)
 - [ ] Token bilgileri gelince mock override'ı kaldır (`FISCAL_DEVICE_TYPE`), webhook adresini Token'a bildir
-- [ ] Alertmanager SMTP + observability profili; offsite yedek (`BACKUP_S3_*`)
+- [ ] Alertmanager SMTP + observability profili
+- [x] Offsite yedek — günlük rclone → Google Drive (`deploy/scripts/offsite-backup.sh`, 2026-09-15)
 - [ ] Vault api token'ı 2027-09-15'te dolar, api yenilemiyor → AppRole/yenileme stratejisi
 - [ ] MinIO imaj/`mc` etiketleri kaldırılmış (410) → güncel etiket + `minio` servislerini açma
 - [ ] Admin `kitchen-stream` route'u konteynerde `localhost:8081` → KDS canlı akışı prod'da çalışmıyor

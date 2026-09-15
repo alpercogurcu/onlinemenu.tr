@@ -270,10 +270,12 @@ Sırlar: `deploy/.env.prod.example` → `deploy/.env.prod` (doldur) → `task de
 - **Sertifika yenileme:** ayrı cron yok; b2b'nin `renew-ssl.sh` cron'u (03:17 ve 15:17)
   `/etc/letsencrypt/live/*` altındaki her sertifikayı, dolayısıyla `pos.diverstreetfood.com`
   sertifikasını da yeniler ve değişince nginx'i reload eder. Log: `/var/log/b2b-certbot.log`.
-- **Yedekleme:** `postgres-backup` sidecar'ı compose içinde otomatik döngüyle çalışır (6 saatte
-  bir, `deploy/backup/README.md`); `BACKUP_S3_*` bu sunucuda **boş** — yedekler yalnızca
-  named volume'de yerel kalıyor, offsite kopya yok. Host kaybında yedek de kaybolur; S3 hedefi
-  doldurulması ayrı bir karar (bkz. §5 "Yedek" satırı).
+- **Yedekleme:** `postgres-backup` sidecar'ı compose içinde 6 saatte bir yerel dump alır
+  (`deploy/backup/README.md`, `BACKUP_S3_*` boş). **Offsite kopya:** root cron'u her gün 03:45'te
+  `deploy/scripts/offsite-backup.sh` ile dump'ları b2b'nin kullandığı Drive hesabına
+  (`rclone` `gdrive:onlinemenu-backups/`) kopyalar, 30 günden eski olanları Drive'dan siler;
+  log `/var/log/onlinemenu-offsite.log`, elle tetikleme `task deploy:offsite-backup`
+  (2026-09-15'te kuruldu, ilk kopya doğrulandı).
 
 ## 10. Canlı durum (2026-09-15 akşamı)
 
@@ -310,7 +312,7 @@ Sıradaki işler:
    `TOKENX_*` değerlerini doldur, `task deploy:sync` + `task deploy:up`; webhook adresi
    `https://api.diverstreetfood.com/...` (payment modülü webhook yolu) Token'a bildirilir.
 2. Alertmanager SMTP + observability profili (§6 adım 12), SEC-005 sorguları (adım 13).
-3. Offsite yedek (`BACKUP_S3_*`), MinIO etiketleri, Vault token yenileme stratejisi (AppRole),
+3. ~~Offsite yedek~~ (Drive'a rclone ile kuruldu), MinIO etiketleri, Vault token yenileme stratejisi (AppRole),
    KDS akışı düzeltmesi, dev-seed idempotency, rate-limit zone kararı.
 4. ~~b2b reposundaki değişiklikleri commit etmek~~ — yapıldı (`2bcdccb`, `feature/ui-ux-improvements` dalına push'landı; main'e merge edilmeli).
 

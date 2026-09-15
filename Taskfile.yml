@@ -268,6 +268,16 @@ tasks:
     cmds:
       - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && FIRST_ADMIN_EMAIL="{{.FIRST_ADMIN_EMAIL}}" FIRST_ADMIN_NAME="{{.FIRST_ADMIN_NAME}}" deploy/scripts/keycloak-harden.sh'
 
+  deploy:offsite-backup:
+    desc: "Sunucuda Postgres dump'larını Google Drive'a (rclone gdrive:onlinemenu-backups) kopyala — cron 03:45'te zaten koşuyor"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/offsite-backup.sh'
+
   deploy:seed:first-tenant:
     desc: "Sunucuda ilk pilot tenant + şube + yönetici üyeliğini seed'le (FIRST_ADMIN_SUB, FIRST_ADMIN_EMAIL, FIRST_ADMIN_NAME, TENANT_NAME, TENANT_SLUG, BRANCH_NAME gerekli)"
     vars:

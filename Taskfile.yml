@@ -278,6 +278,18 @@ tasks:
     cmds:
       - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/offsite-backup.sh'
 
+  deploy:reset-test-data:
+    desc: "Sunucuda bir tenant'ın işlem verisini (adisyon/sipariş/ödeme/kasa) SİL — pilot öncesi; TENANT_SLUG ve CONFIRM=yes-wipe-<slug> zorunlu"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    requires:
+      vars: [TENANT_SLUG, CONFIRM]
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && TENANT_SLUG="{{.TENANT_SLUG}}" CONFIRM="{{.CONFIRM}}" deploy/scripts/reset-test-data.sh'
+
   deploy:seed:first-tenant:
     desc: "Sunucuda ilk pilot tenant + şube + yönetici üyeliğini seed'le (FIRST_ADMIN_SUB, FIRST_ADMIN_EMAIL, FIRST_ADMIN_NAME, TENANT_NAME, TENANT_SLUG, BRANCH_NAME gerekli)"
     vars:

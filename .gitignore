@@ -91,3 +91,9 @@ web/apps/pos-desktop/build/bin/
 # Test screenshots (root dizininde oluşturulanlar)
 /*.png
 /*.jpg
+
+# Deploy — sunucuda üretilen, sync.sh/build-api.sh tarafından yazılan durum
+# dosyaları (rsync ile gönderilmez, git'e girmez; deploy/scripts/sync.sh'daki
+# --exclude listesiyle eşleşir).
+deploy/.git-sha
+deploy/.api-image

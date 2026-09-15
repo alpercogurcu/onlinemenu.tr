@@ -1,0 +1,65 @@
+# =============================================================================
+# Online Menu — Diver Street Food sunucusuna (srv.diverstreetfood.com) özgü
+# katman. docker-compose.prod.yml'nin ÜSTÜNE uygulanır; tek başına anlamsız:
+#
+#   docker compose -f deploy/docker-compose.prod.yml \
+#                  -f deploy/docker-compose.diverserver.yml ...
+#   (bkz. deploy/scripts/compose.sh — bu iki dosyayı ve sops çözümünü sarar)
+#
+# Neden ayrı dosya: prod compose barındırma sağlayıcısından bağımsız. Bu
+# sunucuda 80/443 b2b projesinin nginx konteynerinde (b2b_nginx); onlinemenu'nün
+# dış servisleri o nginx'le paylaşılan onlinemenu-edge ağına katılır.
+# Başka bir sunucuya taşınırken yalnızca bu dosya değişir.
+# =============================================================================
+
+networks:
+  # Elle yaratılan, hiçbir compose'un sahibi olmadığı paylaşımlı kenar ağı:
+  #   docker network create onlinemenu-edge
+  # b2b_nginx de bu ağa katılır (onlinemenu.b2b/docker-compose.prod.yml).
+  # NEDEN b2b'nin kendi ağı (b2b_b2b_network) DEĞİL: b2b compose'unda da
+  # "postgres" ve "redis" adlı servisler var; aynı ağa katılan keycloak/api
+  # "postgres" adını b2b'nin Postgres'ine çözüp parola hatasıyla düşüyordu
+  # (2026-09-15 ilk kurulum). Bu ağda yalnız nginx + aşağıdaki dört servis
+  # olduğu için ad çakışması yok; ağ elle yaratıldığından `compose down`
+  # onu silmez ve b2b_nginx Online Menu'den bağımsız yeniden başlayabilir.
+  b2b_edge:
+    external: true
+    name: onlinemenu-edge
+
+services:
+  postgres:
+    # Yalnız host loopback: migration (go run ./cmd/migrate) ve psql seed'i
+    # host üzerinden koşar; dış dünyaya açılmaz. Port 5432 b2b_postgres ile
+    # çakışmasın diye 5433.
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  api:
+    environment:
+      # Token client-id/secret sözleşme sonrası gelecek (docs/deployment.md
+      # §5). O güne kadar .env'de FISCAL_DEVICE_TYPE=mock verilir; değişken
+      # .env'den SİLİNİNCE prod compose'un sabit değeri (beko_x30tr_cloud)
+      # geri gelir. Mock ile pilot SATIŞ YAPILMAZ — fiş kesilmez.
+      FISCAL_DEVICE_TYPE: ${FISCAL_DEVICE_TYPE:-beko_x30tr_cloud}
+    networks:
+      onlinemenu-prod: {}
+      b2b_edge:
+        aliases: [onlinemenu-api]
+
+  menu:
+    networks:
+      onlinemenu-prod: {}
+      b2b_edge:
+        aliases: [onlinemenu-menu]
+
+  admin:
+    networks:
+      onlinemenu-prod: {}
+      b2b_edge:
+        aliases: [onlinemenu-admin]
+
+  keycloak:
+    networks:
+      onlinemenu-prod: {}
+      b2b_edge:
+        aliases: [onlinemenu-keycloak]

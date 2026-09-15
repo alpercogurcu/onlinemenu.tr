@@ -148,6 +148,165 @@ tasks:
     cmds:
       - wails generate module
 
+  deploy:sync:
+    desc: "Repo'yu prod sunucusuna rsync ile gönder (deploy/scripts/sync.sh, DEPLOY_HOST/DEPLOY_DIR)"
+    cmds:
+      - bash deploy/scripts/sync.sh
+
+  deploy:secrets:encrypt:
+    desc: "deploy/.env.prod'u SOPS ile şifrele → deploy/.env.prod.sops, düz metni sil"
+    cmds:
+      - |
+        if [ ! -f deploy/.env.prod ]; then
+          echo "HATA: deploy/.env.prod yok — önce 'cp deploy/.env.prod.example deploy/.env.prod' ile oluşturup gerçek değerleri doldurun." >&2
+          exit 1
+        fi
+        # .sops uzantısından dosya tipi çıkarılamıyor ve .sops.yaml'ın
+        # creation_rules'undaki input_type/output_type alanları geçersiz —
+        # tip her çağrıda açıkça verilmeli.
+        sops -e --input-type dotenv --output-type dotenv deploy/.env.prod > deploy/.env.prod.sops
+        rm deploy/.env.prod
+
+  deploy:secrets:edit:
+    desc: "deploy/.env.prod.sops'u yerinde (şifreli) düzenle"
+    cmds:
+      - sops --input-type dotenv --output-type dotenv deploy/.env.prod.sops
+
+  deploy:secrets:updatekeys:
+    desc: "deploy/.env.prod.sops age alıcılarını .sops.yaml ile senkronize et"
+    cmds:
+      # `sops updatekeys` --output-type BAYRAĞINI TANIMIYOR (yalnız --input-type
+      # var) — eklenirse sessizce "dosya adı" sanılıp dosya bulunamadı hatası
+      # verir (test edildi: 3 sahte dosya denemesi). Yalnızca --input-type.
+      - sops updatekeys --input-type dotenv -y deploy/.env.prod.sops
+
+  deploy:ssh:
+    desc: "Prod sunucusuna SSH bağlan (DEPLOY_HOST, varsayılan: diverserver)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}}
+
+  deploy:build:api:
+    desc: "Sunucuda API imajını ko ile yerel Docker daemon'a derle (deploy/scripts/build-api.sh)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/build-api.sh'
+
+  deploy:build:web:
+    desc: "Sunucuda menu + admin imajlarını kaynaktan derle (docker compose build)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/compose.sh build menu admin'
+
+  deploy:migrate:
+    desc: "Sunucuda tüm modül migration'larını uygula (app_migrator, Postgres 127.0.0.1:5433)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/migrate.sh up'
+
+  deploy:up:
+    desc: "Sunucuda tüm stack'i ayağa kaldır (docker compose up -d, prod + diverserver katmanı)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/compose.sh up -d'
+
+  deploy:ps:
+    desc: "Sunucuda servis durumunu göster (docker compose ps)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/compose.sh ps'
+
+  deploy:logs:
+    desc: "Sunucuda servis loglarını izle (CLI_ARGS ile servis adı, ör: task deploy:logs -- api)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh -t {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/compose.sh logs -f {{.CLI_ARGS}}'
+
+  deploy:compose:
+    desc: "Sunucuda genel docker compose sarmalayıcısı (CLI_ARGS geçişli, ör: task deploy:compose -- restart api)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh -t {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && deploy/scripts/compose.sh {{.CLI_ARGS}}'
+
+  deploy:keycloak:harden:
+    desc: "Sunucuda Keycloak sertleştirme (dev artefaktlarını sil, admin-api secret → Vault, ilk yönetici; FIRST_ADMIN_EMAIL/FIRST_ADMIN_NAME opsiyonel)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    cmds:
+      - ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} && FIRST_ADMIN_EMAIL="{{.FIRST_ADMIN_EMAIL}}" FIRST_ADMIN_NAME="{{.FIRST_ADMIN_NAME}}" deploy/scripts/keycloak-harden.sh'
+
+  deploy:seed:first-tenant:
+    desc: "Sunucuda ilk pilot tenant + şube + yönetici üyeliğini seed'le (FIRST_ADMIN_SUB, FIRST_ADMIN_EMAIL, FIRST_ADMIN_NAME, TENANT_NAME, TENANT_SLUG, BRANCH_NAME gerekli)"
+    vars:
+      DEPLOY_HOST:
+        sh: echo "${DEPLOY_HOST:-diverserver}"
+      DEPLOY_DIR:
+        sh: echo "${DEPLOY_DIR:-/opt/onlinemenu}"
+    requires:
+      vars: [FIRST_ADMIN_SUB, FIRST_ADMIN_EMAIL, FIRST_ADMIN_NAME, TENANT_NAME, TENANT_SLUG, BRANCH_NAME]
+    cmds:
+      # Değerler tek tırnak İÇERMEMELİ (dış komut ssh argümanını tek tırnakla
+      # taşıyor; çift tırnak sunucudaki bash'e olduğu gibi ulaşır).
+      - >-
+        ssh {{.DEPLOY_HOST}} 'cd {{.DEPLOY_DIR}} &&
+        FIRST_ADMIN_SUB="{{.FIRST_ADMIN_SUB}}"
+        FIRST_ADMIN_EMAIL="{{.FIRST_ADMIN_EMAIL}}"
+        FIRST_ADMIN_NAME="{{.FIRST_ADMIN_NAME}}"
+        TENANT_NAME="{{.TENANT_NAME}}"
+        TENANT_SLUG="{{.TENANT_SLUG}}"
+        BRANCH_NAME="{{.BRANCH_NAME}}"
+        deploy/scripts/seed-first-tenant.sh'
+
+  deploy:release:
+    desc: "Tam yayın akışı: sync → build:api → build:web → migrate → up → smoke"
+    vars:
+      API_URL:
+        sh: echo "${API_URL:-https://api.diverstreetfood.com}"
+      ADMIN_URL:
+        sh: echo "${ADMIN_URL:-https://pos.diverstreetfood.com}"
+      MENU_URL:
+        sh: echo "${MENU_URL:-https://menu.diverstreetfood.com}"
+    cmds:
+      - task: deploy:sync
+      - task: deploy:build:api
+      - task: deploy:build:web
+      - task: deploy:migrate
+      - task: deploy:up
+      - cmd: API_URL={{.API_URL}} ADMIN_URL={{.ADMIN_URL}} MENU_URL={{.MENU_URL}} task deploy:smoke
+
   deploy:smoke:
     desc: "Prod deploy sonrası /healthz, /readyz, admin ve menu uçlarını doğrula (API_URL, ADMIN_URL, MENU_URL gerekli)"
     cmds:

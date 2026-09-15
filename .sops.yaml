@@ -1,0 +1,15 @@
+# SOPS kuralları — deploy/.env.prod.sops (bkz. deploy/.env.prod.example başlığı).
+#
+# ".sops" uzantısından sops dosya tipini çıkaramaz; her çağrıda
+# `--input-type dotenv --output-type dotenv` verilmeli (Taskfile ve
+# deploy/scripts/*.sh bunu yapar). creation_rules yalnız alıcıları belirler.
+# age alıcıları: geliştirici makinesi (sops -e için) + prod sunucusu (sops -d
+# için, özel anahtar /root/.config/sops/age/keys.txt). Yeni bir alıcı
+# eklenince: sops updatekeys deploy/.env.prod.sops
+creation_rules:
+  # Hem düz metin girdi (sops -e deploy/.env.prod) hem şifreli dosya (sops
+  # deploy/.env.prod.sops) aynı kurala düşsün diye .sops eki opsiyonel.
+  - path_regex: deploy/\.env\.prod(\.sops)?$
+    age: >-
+      age1kxm5dvhdxu3dcrtfvaw70583093vrgq2xqrgxmwwef86y9ct8vlsyr0gxw,
+      age1eqhhazhrv8qqy9gqtgj8ecefndw5lmy3hx87rspukg35ku5tc99sxmrema

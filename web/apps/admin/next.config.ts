@@ -27,8 +27,10 @@ const nextConfig: NextConfig = {
     // assigning the browser an origin it cannot use.
     //
     // Left unset (dev, and every existing checkout) behaviour is unchanged.
-    // NOTE: kitchen-stream/route.ts still reads only NEXT_PUBLIC_API_CORE_URL
-    // and so still falls back to localhost:8081 inside a container.
+    // kitchen-stream/route.ts (src/lib/kitchen-ws-origin.ts) now reads
+    // API_CORE_ORIGIN with the same priority for its own server-side
+    // WebSocket target, so both proxies resolve to the same backend inside
+    // a container.
     const apiCoreUrl =
       process.env.API_CORE_ORIGIN ??
       process.env.NEXT_PUBLIC_API_CORE_URL ??

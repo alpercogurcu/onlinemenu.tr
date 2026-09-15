@@ -32,6 +32,13 @@ export interface AuthorizeUrlParams {
   state: string
   nonce: string
   codeChallenge: string
+  /**
+   * `none` asks Keycloak to answer from the existing SSO cookie without ever
+   * showing a login screen, returning `error=login_required` when it cannot
+   * (OIDC Core 3.1.2.1). Used by the silent session restore in
+   * lib/session-restore.ts; omitted for the interactive login.
+   */
+  prompt?: "none"
 }
 
 export function buildAuthorizeUrl(params: AuthorizeUrlParams): string {
@@ -45,6 +52,9 @@ export function buildAuthorizeUrl(params: AuthorizeUrlParams): string {
     code_challenge: params.codeChallenge,
     code_challenge_method: "S256",
   })
+  if (params.prompt) {
+    query.set("prompt", params.prompt)
+  }
   return `${authorizationEndpoint()}?${query.toString()}`
 }
 

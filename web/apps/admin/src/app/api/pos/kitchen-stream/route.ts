@@ -24,6 +24,8 @@
 import { NextRequest } from "next/server"
 import WebSocket from "ws"
 
+import { backendWsOrigin } from "@/lib/kitchen-ws-origin"
+
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
@@ -36,11 +38,6 @@ const KITCHEN_WS_PATH = "/api/v1/pos/ws/kitchen"
 // connection after a cold backend start can be slow, but bounded so a dead
 // backend doesn't leave the browser's fetch() hanging forever.
 const CONNECT_TIMEOUT_MS = 10_000
-
-function backendWsOrigin(): string {
-  const httpOrigin = process.env.NEXT_PUBLIC_API_CORE_URL ?? "http://localhost:8081"
-  return httpOrigin.replace(/^http/, "ws").replace(/\/+$/, "")
-}
 
 function toText(data: WebSocket.RawData): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf8")
@@ -59,7 +56,14 @@ export async function GET(request: NextRequest) {
     return new Response("branch_id is required", { status: 422 })
   }
 
-  const targetUrl = `${backendWsOrigin()}${KITCHEN_WS_PATH}?branch_id=${encodeURIComponent(branchId)}`
+  // API_CORE_ORIGIN (server-only, container network address) takes priority
+  // over NEXT_PUBLIC_API_CORE_URL (the browser's base URL, kept relative in
+  // prod) — mirrors next.config.ts's rewrite target for the same reason: a
+  // container has no "localhost:8081" backend to reach. See
+  // kitchen-ws-origin.ts for why these two reads must stay written out like
+  // this rather than passed through as an env object.
+  const wsOrigin = backendWsOrigin(process.env.API_CORE_ORIGIN, process.env.NEXT_PUBLIC_API_CORE_URL)
+  const targetUrl = `${wsOrigin}${KITCHEN_WS_PATH}?branch_id=${encodeURIComponent(branchId)}`
   const socket = new WebSocket(targetUrl, {
     headers: { Authorization: authHeader },
     handshakeTimeout: CONNECT_TIMEOUT_MS,

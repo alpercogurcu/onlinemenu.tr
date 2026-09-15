@@ -1,7 +1,6 @@
 "use client"
 
 import { useRouter, useSearchParams } from "next/navigation"
-import { toast } from "sonner"
 
 import { type ReactNode, useEffect, useRef, useState } from "react"
 
@@ -17,6 +16,13 @@ import { fetchContexts, fetchMe, selectMembershipContext } from "@/lib/identity-
 import { decodeJwtPayload } from "@/lib/jwt"
 import { consumePkceParams } from "@/lib/keycloak"
 import { setKeycloakTokens, setSelectedMembershipId, tokensFromResponse } from "@/lib/keycloak-token-store"
+import {
+  clearSessionHint,
+  consumeReturnPath,
+  consumeSilentAttempt,
+  readSessionHint,
+  saveSessionHint,
+} from "@/lib/session-restore"
 import { useAuthStore } from "@/store/auth-store"
 import type { TenantContext } from "@/types"
 
@@ -68,32 +74,53 @@ export default function AuthCallbackClient() {
   ) {
     const ctxToken = await selectMembershipContext(accessToken, membershipId)
     setSelectedMembershipId(membershipId)
+    saveSessionHint(membershipId)
     const me = await fetchMe(ctxToken)
     const context = contextList.find((c) => c.membership_id === membershipId)
     setSession(ctxToken, { id: me.id, name: me.full_name, email: me.email }, context?.tenant_id ?? "")
-    router.push("/")
+    // replace() keeps the spent ?code= URL out of history, so Back cannot
+    // land on an already-consumed authorization code.
+    router.replace(consumeReturnPath() ?? "/")
+  }
+
+  // Every non-success exit has to drop the one-shot redirect state, otherwise
+  // a stale return path or silent-attempt flag leaks into the next login.
+  function abort(message: string) {
+    consumePkceParams()
+    consumeReturnPath()
+    setErrorMessage(message)
+    setStatus("error")
   }
 
   async function run() {
+    const silent = consumeSilentAttempt()
+
     const kcError = searchParams.get("error")
     if (kcError) {
-      setErrorMessage(searchParams.get("error_description") ?? kcError)
-      setStatus("error")
+      // prompt=none could not reuse the SSO session (login_required /
+      // interaction_required): there is nothing to report, the user simply
+      // has to authenticate for real.
+      if (silent) {
+        consumePkceParams()
+        consumeReturnPath()
+        clearSessionHint()
+        router.replace("/login")
+        return
+      }
+      abort(searchParams.get("error_description") ?? kcError)
       return
     }
 
     const code = searchParams.get("code")
     const state = searchParams.get("state")
     if (!code || !state) {
-      setErrorMessage("Eksik yetkilendirme parametreleri")
-      setStatus("error")
+      abort("Eksik yetkilendirme parametreleri")
       return
     }
 
     const pkce = consumePkceParams()
     if (!pkce || pkce.state !== state) {
-      setErrorMessage("Oturum durumu doğrulanamadı, tekrar giriş yapın")
-      setStatus("error")
+      abort("Oturum durumu doğrulanamadı, tekrar giriş yapın")
       return
     }
 
@@ -124,19 +151,29 @@ export default function AuthCallbackClient() {
       setContexts(list)
 
       if (list.length === 0) {
+        clearSessionHint()
+        consumeReturnPath()
         setStatus("no-access")
         return
       }
+
+      // On a silent restore the user never asked to pick anything — reuse the
+      // membership they were last in. Only if it is gone (deactivated, role
+      // revoked) does the picker come back. The interactive login keeps
+      // showing the picker: choosing a context is the point of that flow.
+      const hinted = silent ? readSessionHint()?.membershipId : undefined
+      if (hinted && list.some((c) => c.membership_id === hinted)) {
+        await completeLogin(tokens.accessToken, hinted, list)
+        return
+      }
+
       if (list.length === 1) {
         await completeLogin(tokens.accessToken, list[0].membership_id, list)
         return
       }
       setStatus("picking")
     } catch (err) {
-      setErrorMessage(
-        err instanceof Error ? err.message : "Giriş sırasında beklenmeyen bir hata oluştu",
-      )
-      setStatus("error")
+      abort(err instanceof Error ? err.message : "Giriş sırasında beklenmeyen bir hata oluştu")
     }
   }
 
@@ -145,8 +182,7 @@ export default function AuthCallbackClient() {
     try {
       await completeLogin(keycloakAccessToken, membershipId, contexts)
     } catch {
-      toast.error("Bağlam seçilemedi, tekrar deneyin")
-      setStatus("error")
+      abort("Bağlam seçilemedi, tekrar deneyin")
     }
   }
 

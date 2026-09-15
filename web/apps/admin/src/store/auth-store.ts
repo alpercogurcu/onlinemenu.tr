@@ -2,6 +2,7 @@ import { create } from "zustand"
 
 import { clearAccessToken, setAccessToken } from "@/lib/api"
 import { clearKeycloakTokens, getKeycloakTokens } from "@/lib/keycloak-token-store"
+import { clearSessionHint } from "@/lib/session-restore"
 
 interface User {
   id: string
@@ -28,6 +29,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: () => {
     clearAccessToken()
     clearKeycloakTokens()
+    // Without this the next page load would try to silently restore the
+    // session the user just ended.
+    clearSessionHint()
     set({ user: null, tenantId: null })
   },
 }))

@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label"
 import api from "@/lib/api"
 import { buildAuthorizeUrl, callbackRedirectUri, savePkceParams } from "@/lib/keycloak"
 import { generateCodeChallenge, generateCodeVerifier, generateNonce, generateState } from "@/lib/pkce"
+import { clearSilentAttempt } from "@/lib/session-restore"
 import { useAuthStore } from "@/store/auth-store"
 
 // Dev-login form (email-only, no password check server-side) is a local
@@ -60,6 +61,9 @@ export default function LoginPage() {
       const state = generateState()
       const nonce = generateNonce()
       savePkceParams({ verifier, state, nonce })
+      // An abandoned silent restore may have left its flag behind; the
+      // callback must treat this attempt as interactive and surface errors.
+      clearSilentAttempt()
       window.location.href = buildAuthorizeUrl({
         redirectUri: callbackRedirectUri(),
         state,

@@ -3,6 +3,7 @@
 import type { ReactNode } from "react"
 import { useEffect, useLayoutEffect, useState } from "react"
 
+import SessionGuard from "@/components/auth/session-guard"
 import AdminSidebar from "@/components/layouts/admin-sidebar"
 import DynamicBreadcrumb from "@/components/layouts/dynamic-breadcrumb"
 import NavProfile from "@/components/layouts/nav-profile"
@@ -30,6 +31,14 @@ function SidebarSkeleton() {
 export default function MainLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
+  return (
+    <SessionGuard>
+      <MainShell>{children}</MainShell>
+    </SessionGuard>
+  )
+}
+
+function MainShell({ children }: Readonly<{ children: ReactNode }>) {
   const [isMounted, setIsMounted] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
 

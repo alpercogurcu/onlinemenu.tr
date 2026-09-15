@@ -26,6 +26,19 @@ describe("buildAuthorizeUrl", () => {
     expect(parsed.searchParams.get("nonce")).toBe("nonce-1")
     expect(parsed.searchParams.get("code_challenge")).toBe("challenge-1")
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256")
+    expect(parsed.searchParams.has("prompt")).toBe(false)
+  })
+
+  it("adds prompt=none for the silent session restore", () => {
+    const url = buildAuthorizeUrl({
+      redirectUri: "http://localhost:3000/auth/callback",
+      state: "state-1",
+      nonce: "nonce-1",
+      codeChallenge: "challenge-1",
+      prompt: "none",
+    })
+
+    expect(new URL(url).searchParams.get("prompt")).toBe("none")
   })
 })
 

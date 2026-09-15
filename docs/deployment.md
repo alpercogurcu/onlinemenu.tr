@@ -239,9 +239,12 @@ Sırlar: `deploy/.env.prod.example` → `deploy/.env.prod` (doldur) → `task de
   artık yalnız S3 açıkken ve hata toleranslı indiriyor. Etiketler güncellenmeli (backlog).
 - **Yedekleme koruması:** sidecar `tenants` tablosu boşken "RLS tuzağı" diye dump'ı reddeder;
   ilk tenant seed'inden önce çalışan ilk iki tur bu yüzden başarısız görünür (beklenen).
-- **Mutfak ekranı akışı:** admin'in `kitchen-stream` route'u konteynerde `localhost:8081`'e
-  düşüyor (compose'daki mevcut not) — KDS canlı akışı prod'da çalışmaz, admin tarafında düzeltme
-  gerekiyor (backlog).
+- **Mutfak ekranı akışı — DÜZELTİLDİ:** admin'in `kitchen-stream` route'u artık
+  `API_CORE_ORIGIN`'i (server-only) `NEXT_PUBLIC_API_CORE_URL`'den önce okuyor
+  (`web/apps/admin/src/lib/kitchen-ws-origin.ts`), konteyner içinde `localhost:8081`'e
+  düşme sorunu giderildi. Açık kalan nokta: `deploy/admin/Dockerfile`'ın `runtime` aşaması
+  build aşamasındaki `API_CORE_ORIGIN` ENV'ini miras almıyor — imaj yalnızca compose'un
+  verdiği `environment:` değeriyle doğru çalışıyor, tek başına `docker run` ile değil.
 - **dev-seed.sql idempotency:** `memberships` unique index'i NULL `branch_id`'leri farklı saydığı
   için chain-wide üyelik `ON CONFLICT` ile yakalanmaz, her tekrar koşuda kopya satır ekler.
   Prod seed'i `WHERE NOT EXISTS` kullanır; dev-seed düzeltilmeli (backlog).
@@ -277,6 +280,104 @@ Sırlar: `deploy/.env.prod.example` → `deploy/.env.prod` (doldur) → `task de
   log `/var/log/onlinemenu-offsite.log`, elle tetikleme `task deploy:offsite-backup`
   (2026-09-15'te kuruldu, ilk kopya doğrulandı).
 
+- **Gözlemlenebilirlik (`--profile observability`):** varsayılanda kapalı — prometheus,
+  alertmanager, loki, tempo, otel-collector, grafana yalnızca profil açıkken ayağa kalkar.
+  api bu profil kapalıyken de her dakika `lookup otel-collector: server misbehaving` uyarısı
+  basar (collector yok); profil açılınca durur.
+  1. `GRAFANA_PUBLIC_HOST` (ör. `grafana.diverstreetfood.com`) **profil açılmadan önce**
+     `.env.prod.sops`'a girmeli: `docker-compose.prod.yml`'deki
+     `GF_SERVER_ROOT_URL`/`GF_SERVER_DOMAIN` bunu `${GRAFANA_PUBLIC_HOST:?...}` ile zorunlu
+     kılıyor ve bu, dosya ayrıştırma anında çözüldüğü için profil kapalıyken bile —
+     `task deploy:up` dahil **her** compose çağrısını — bu değişken olmadan başarısız kılar
+     (`GRAFANA_ADMIN_USER`/`PASSWORD` ile aynı desen). `task deploy:secrets:edit` →
+     `GRAFANA_PUBLIC_HOST=grafana.diverstreetfood.com` ekle → `task deploy:sync`.
+  2. `deploy/alertmanager/smtp_password` sunucuda **elle** üretilir (git dışı,
+     `deploy/alertmanager/.gitignore`'da), `up --profile observability`'den ÖNCE var olmalı —
+     yoksa Docker bind-mount kaynağını dizin sanıp orada boş bir klasör yaratır ve
+     Alertmanager parolayı hiç okuyamaz:
+     ```bash
+     sops -d --input-type dotenv deploy/.env.prod.sops \
+       | grep '^SMTP_PASSWORD=' | cut -d= -f2- > deploy/alertmanager/smtp_password
+     chmod 600 deploy/alertmanager/smtp_password
+     ```
+     (`grep` başa çapalı — çapasız kullanılırsa birden çok satır eşleşip yanlış/boş parolayla
+     sessiz SMTP auth hatası verir.) SMTP auth başarısız olursa ilk kontrol edilecek şey satır
+     sonu karakteri (trailing newline) — bazı `sops`/`cut` kombinasyonları ekler, Alertmanager
+     bunu parolanın parçası sanabilir.
+  3. Profili aç: `deploy/scripts/compose.sh --profile observability up -d`.
+  4. Grafana: `https://grafana.diverstreetfood.com`, giriş `GRAFANA_ADMIN_USER` /
+     `GRAFANA_ADMIN_PASSWORD` (`.env.prod.sops`, `task deploy:secrets:edit` ile okunur).
+  5. Alarm alıcısı: `admin@diverstreetfood.com` (`deploy/alertmanager/alertmanager.yml`,
+     SMTP `mail.diverstreetfood.com:587` STARTTLS, gönderen `noreply@diverstreetfood.com`).
+     Kurallar: `deploy/prometheus/rules.yml` (`OutboxBacklogHigh`, `FiscalSubmissionOverdue`,
+     `OutboxMetricMissing`).
+  6. **Konteyner logları (Loki) — çözüldü:** backend'in kendisi hâlâ OTLP log exporter'ı
+     kullanmıyor (`backend/internal/platform/otel/otel.go` yalnızca Trace/Metric provider
+     kaydediyor — bu backlog kalemi duruyor), ama `otel-collector` artık Docker'ın
+     `json-file` sürücüsünün ürettiği konteyner stdout/stderr'ını doğrudan okuyor
+     (`filelog/docker` receiver, `deploy/otelcol/config.yaml`). Bunun için:
+     - `docker-compose.prod.yml`'deki `x-logging` (`&default-logging`) tüm servislere
+       `logging: *default-logging` ile uygulanır — hem rotasyon (10m×3 dosya, önceden
+       **hiç yoktu**, host'ta sınırsız büyüyordu) hem de her json satırına compose
+       etiketlerini (`com.docker.compose.project/service/container-number`) `"attrs"`
+       alanı olarak ekleten `labels:` seçeneği için.
+     - `otel-collector` servisi `/var/lib/docker/containers`'ı **salt okunur** mount eder
+       ve **`user: "0"`** ile (root) çalışır — dizin/dosya izinleri `root:root`,
+       `drwx--x---` (0710): imajın varsayılan kullanıcısı (10001) hiçbir şey okuyamaz,
+       ampirik doğrulandı (gerçek `dockerd`, macOS Docker Desktop).
+     - Operatör zinciri (`container` parser → `filter` → `move`×2 → `add` → `remove`)
+       `"attrs"` içindeki compose etiketlerini `resource["service.namespace"]` /
+       `resource["service.name"]` / `resource["container.name"]`'a taşır (Loki 3.5'in
+       varsayılan index-label listesindeki üçü de) ve `"attrs"` alanı olmayan (b2b/
+       ashorial gibi yabancı) konteynerleri **düşürür** — yalnızca onlinemenu-prod
+       servisleri Loki'ye ulaşır. Tüm zincir gerçek `otelcol-contrib:0.123.0` imajıyla,
+       gerçek docker json-log formatıyla uçtan uca test edildi (bu repoda, Docker
+       Desktop ile — sunucuda değil).
+     - Container İSMİ (`onlinemenu-prod-api-1` gibi) json-log dosya YOLUNDAN
+       çıkarılamıyor — plain Docker'da yol yalnızca 64 haneli container ID taşıyor
+       (k8s'in `/var/log/pods/...` yolunun aksine); bu yüzden `container` operatörünün
+       `add_metadata_from_filepath` özelliği burada **bilerek kapatıldı** (`false`) —
+       açık bırakılsaydı her satırda "failed to detect a valid log path" hata gürültüsü
+       üretirdi (ampirik doğrulandı).
+     - **Bilinçli tercih edilmeyen yol:** `receiver_creator` + `docker_observer`
+       (Docker API/`docker.sock` üzerinden container adı keşfi) kullanılmadı — hem
+       log toplayıcıya root-eşdeğeri Docker API erişimi vermek daha büyük bir güvenlik
+       kararı hem de otelcol-contrib'in resmi "hints" tabanlı otomatik `filelog` keşfi
+       yalnızca `k8sobserver` için var, `docker_observer` için resmi/test edilmiş bir
+       örnek yok (doğrulandı: `receiver/receivercreator` README'si, v0.123.0 tag).
+     - **Bilinen sınır (offset):** offset yalnızca bellekte tutuluyor (`file_storage`
+       extension yok) — collector her restart'ta `start_at: end`'e döner, restart
+       anındaki birikmiş satırlar atlanır. Pilot ölçeği için kabul edilebilir.
+     - **Bilinen sınır (16 KB satır bölünmesi, düzeltilmedi):** Docker'ın `json-file`
+       sürücüsü tek bir stdout yazımı 16384 baytı geçerse onu, containerd/CRI'daki
+       gibi bir "partial" işareti OLMADAN, birden fazla ayrı (ama her biri tek
+       başına geçerli) JSON satırına bölüyor — bir `recombine` operatörü güvenilir
+       eklenemedi, bölünen parça ile gerçek bir sonraki satır ayırt edilemiyor.
+       Ampirik doğrulandı (gerçek `dockerd`: 20000 baytlık tek satır → 16384 +
+       3616 baytlık iki ayrı geçerli JSON nesnesi). 16 KB'ı aşan tek satırlık loglar
+       (ör. dev'de görülen uzun stack trace) Loki'de bölünmüş görünür; zap'ın tipik
+       tek-satır JSON logları bu boyuta normalde ulaşmaz.
+     - **dev ortamı etkisi (doğrulandı, sorun değil):** `deploy/otelcol/config.yaml`
+       dev/prod ortak — `docker-compose.dev.yml` `/var/lib/docker/containers`'ı mount
+       etmiyor. Bu durumda `filelog/docker` girişte **bir kez**
+       `"no files match the configured criteria"` WARN'ı basıyor, sonra tekrar
+       etmeden sessizce bekliyor (mount'suz/non-root senaryo ampirik test edildi —
+       her poll'da tekrarlayan log gürültüsü YOK).
+     - **⚠️ Devreye alırken dikkat:** `logging: *default-logging` artık **tüm** 17
+       servise uygulanıyor — bir sonraki `task deploy:up` (ya da `compose.sh up -d`)
+       her servisin `logging` config'ini değiştirdiği için Docker TÜMÜNÜ yeniden
+       YARATACAK (in-place restart değil, recreate). Bu, o an **canlı olan pilot
+       stack'i** (api/admin/menu/keycloak dahil) kısa süreliğine kesintiye uğratır —
+       gece/düşük trafik saatinde yapılması önerilir, observability profiliyle
+       aynı anda değil zorunlu olarak ama aynı deploy penceresinde beklenmeli.
+     - **Doğrulama (profil açıldıktan sonra):** `deploy/scripts/compose.sh logs
+       otel-collector | grep -i "started watching file"` çıktısında onlinemenu-prod
+       konteynerlerinin json-log yolları görünmeli; `user: "0"`/izin varsayımı
+       gerçek sunucuda (Ubuntu 24.04, bu depo dışı bir ortam) doğrulanmadı — yalnızca
+       macOS Docker Desktop'ta gerçek `dockerd` ile doğrulandı. Yanlış çıkarsa
+       collector sessizce hiçbir şey toplamaz (mount başarısız olmaz, sadece
+       `Permission denied` ile dosya okunamaz) — bu grep adımı onu yakalar.
+
 ## 10. Canlı durum (2026-09-15 akşamı)
 
 | Bileşen | Durum |
@@ -286,8 +387,10 @@ Sırlar: `deploy/.env.prod.example` → `deploy/.env.prod` (doldur) → `task de
 | `https://api.diverstreetfood.com` | `/healthz`, `/readyz` OK; `FISCAL_DEVICE_TYPE=mock` |
 | `https://auth.diverstreetfood.com` | Keycloak 26.2, realm `onlinemenu`, dev client/kullanıcılar silindi |
 | Postgres / Redis / NATS / Vault / postgres-backup | sağlıklı; ilk yerel yedek alındı |
-| MinIO, observability profili | **kapalı** (§8) |
-| Tenant | `Diver Street Food` (slug `diverstreetfood`), şube `Ana Şube`, yönetici `admin@diverstreetfood.com` (manager, chain-wide) |
+| MinIO | **kapalı** (§8, imaj etiketi) |
+| Observability profili | **açık** (2026-09-15 gece): Prometheus, Alertmanager (alıcı admin@), Loki (docker log toplama, `service_name`/`container_name` etiketleri), Tempo (`/var/tempo`), otel-collector, Grafana `https://grafana.diverstreetfood.com` (kullanıcı `grafana-admin`, parola sops `GRAFANA_ADMIN_PASSWORD`) |
+| Tenant | `Diver Street Food` (slug `diverstreetfood`), şube `Ana Şube`, yönetici `admin@diverstreetfood.com` (manager, chain-wide) — kalıcı parola belirlendi (`deploy/.env.diverserver.local`) |
+| Test verisi | Katalog (2 kategori, 3 ürün) ve masa planı (Salon, 3 masa) **duruyor**; adisyon/sipariş/ödeme/kasa verisi `task deploy:reset-test-data` ile 2026-09-15 gece sıfırlandı |
 
 Kimlik bilgileri (repo dışı):
 - **`deploy/.env.diverserver.local`** (git dışı, `.env.*.local`): Vault unseal anahtarı + root token,
@@ -315,4 +418,33 @@ Sıradaki işler:
 3. ~~Offsite yedek~~ (Drive'a rclone ile kuruldu), MinIO etiketleri, Vault token yenileme stratejisi (AppRole),
    KDS akışı düzeltmesi, dev-seed idempotency, rate-limit zone kararı.
 4. ~~b2b reposundaki değişiklikleri commit etmek~~ — yapıldı (`2bcdccb`, `feature/ui-ux-improvements` dalına push'landı; main'e merge edilmeli).
+
+## 11. Prod kabul testleri (2026-09-15 gece)
+
+Gerçek API (`api.diverstreetfood.com`, yönetici CTX token'ı) ve tarayıcı (Playwright) ile koşuldu;
+script'ler geçici, repoya alınmadı.
+
+**Geçenler:** Keycloak parola belirleme + SSO + bağlam seçimi; katalog/masa oluşturma; kasa
+açılışı; adisyon → sipariş → ödemesiz kapatma 409 → nakit ödeme → mock fiscal fiş (~1 sn) →
+kapanış → masa `cleaning`; gün sonu raporu (brüt, KDV kırılımı, ödeme yöntemi, kasa oturumu);
+idempotent ödeme (aynı anahtar = tek ödeme); kısmi ödeme; KDS durum zinciri (accept →
+preparing → ready → delivered, geçersiz geçiş 409); adisyon iptali; kasa hareketi + sayım
+(fark raporlanıyor) + kapanış; admin arayüzünde adisyon listesi, masa durumu değiştirme,
+mutfak ekranı canlı akışı; tam sayfa yenilemede oturum kalıcılığı (silent SSO).
+
+**Bulunup düzeltilenler (aynı gece deploy edildi):**
+- Kapalı/iptal adisyona sipariş ve ödeme kabul ediliyordu (201) → artık 409
+  `check_not_open`; şube uyuşmazlığı 409 `check_branch_mismatch` (`pos/service/check_guard.go`,
+  `payment/service/check_guard.go`; fx döngüsü için ayrı `CheckReadService`).
+- Sayfa yenilemede admin oturumu sessizce düşüyordu → `prompt=none` silent SSO +
+  `SessionGuard`; oturumsuz açılış `/login`'e yönlenir (`web/apps/admin/src/lib/session-restore.ts`).
+- Mutfak ekranı canlı akışı konteynerde `localhost:8081`'e düşüyordu → `API_CORE_ORIGIN`
+  önceliği (`web/apps/admin/src/lib/kitchen-ws-origin.ts`).
+- Tempo volume sahipliği (`/tmp/tempo` → `/var/tempo`).
+
+**Açık kalan küçükler:** breadcrumb "POS" bağlantısı `/pos` 404; `ErrTableBranchMismatch` 422 iken
+`check_branch_mismatch` 409 (tutarsızlık); `OrderService.Accept/advance` kapalı adisyonun
+siparişlerini hâlâ ilerletebiliyor; Keycloak `KC_CACHE=local` olduğu için konteyner yeniden
+yaratılınca tüm oturumlar düşer (kullanıcılar yeniden giriş yapar); admin Dockerfile `runtime`
+stage'i `API_CORE_ORIGIN` varsayılanı taşımıyor (compose sağlıyor).
 

@@ -38,6 +38,14 @@ COPY . .
 # Server-only. Rewrites are serialised at build time, so this must be present
 # for the build; next.config.ts also documents why it is separate from
 # NEXT_PUBLIC_API_CORE_URL (one variable, two incompatible meanings).
+#
+# Also read at RUNTIME (not just build time) by kitchen-stream/route.ts
+# (src/lib/kitchen-ws-origin.ts), unlike the other ARGs on this page. The
+# `runtime` stage below starts a fresh `FROM` and does not inherit this
+# build-stage ENV, so the image alone (run without the orchestrator supplying
+# API_CORE_ORIGIN again) silently falls back to localhost:8081 for that one
+# route. docker-compose.prod.yml's admin service supplies it a second time
+# under `environment:` for exactly this reason — keep both in sync.
 ARG API_CORE_ORIGIN=http://api:8080
 ENV API_CORE_ORIGIN=${API_CORE_ORIGIN}
 

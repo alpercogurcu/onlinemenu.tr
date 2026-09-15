@@ -44,11 +44,20 @@ Ayrıntı ve kalanlar: [deployment.md §10](deployment.md).
 - [x] `.env.prod.sops` üretimi (SOPS/age), SMTP dahil
 - [x] `task deploy:smoke` ile canlı doğrulama (4/4 OK)
 - [ ] Token bilgileri gelince mock override'ı kaldır (`FISCAL_DEVICE_TYPE`), webhook adresini Token'a bildir
-- [ ] Alertmanager SMTP + observability profili
+- [x] Alertmanager SMTP + observability profili — açıldı 2026-09-15 (Grafana grafana.diverstreetfood.com, Loki docker log toplama)
 - [x] Offsite yedek — günlük rclone → Google Drive (`deploy/scripts/offsite-backup.sh`, 2026-09-15)
 - [ ] Vault api token'ı 2027-09-15'te dolar, api yenilemiyor → AppRole/yenileme stratejisi
 - [ ] MinIO imaj/`mc` etiketleri kaldırılmış (410) → güncel etiket + `minio` servislerini açma
-- [ ] Admin `kitchen-stream` route'u konteynerde `localhost:8081` → KDS canlı akışı prod'da çalışmıyor
+- [x] Admin `kitchen-stream` route'u — düzeltildi 2026-09-15 (`API_CORE_ORIGIN` önceliği)
+- [x] Kapalı/iptal adisyona sipariş ve ödeme kabulü — düzeltildi 2026-09-15 (409 `check_not_open`)
+- [x] Admin sayfa yenilemede oturum kaybı — düzeltildi 2026-09-15 (silent SSO + SessionGuard)
+- [ ] `OrderService.Accept/advance` kapalı adisyona bağlı siparişleri hâlâ ilerletebiliyor (aynı guard'a alınmalı)
+- [ ] `ErrTableBranchMismatch` 422 / `check_branch_mismatch` 409 tutarsızlığı
+- [ ] `POST /api/v1/payments` hata gövdeleri karışık: yeni 409/422'ler `{error, code}` JSON, eski `ErrNoCashSessionOpen`/`ErrInvalidInput` düz metin (backlog-fiscal'daki genel madde ile birleştir)
+- [ ] Prometheus hedefleri `nats:8222` ve `otel-collector:8888` down (monitoring portları açık değil)
+- [ ] Admin breadcrumb "POS" bağlantısı `/pos` 404
+- [ ] Keycloak `KC_CACHE=local`: konteyner yeniden yaratılınca tüm oturumlar düşüyor — kalıcı/ISPN cache ya da kabul kararı
+- [ ] Alertmanager alarmının gerçekten e-posta attığı test edilmedi (fiscal-overdue kuralı tetiklenerek)
 - [ ] `backend/deploy/dev-seed.sql`: chain-wide (branch_id NULL) membership `ON CONFLICT` ile idempotent değil
 - [ ] Vault: bugün yalnız Keycloak admin-client secret'ı Vault'tan okunuyor; DB/NATS/TokenX sırları `.env.sops` üzerinden düz env. Pilot için kabul; Faz 2'de dynamic secrets (CLAUDE.md düzeltildi)
 - [ ] SEC-005 deploy-öncesi/sonrası sorguları prod'da koşulmalı (bkz. backlog-fiscal.md)

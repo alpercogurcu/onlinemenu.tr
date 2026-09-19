@@ -367,11 +367,11 @@ export function ProductEditor({ productId }: ProductEditorProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <div className="lg:col-span-7">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-7">
           <ProductForm values={values} errors={errors} categories={categories} onChange={handleChange} />
         </div>
-        <div className="space-y-6 lg:col-span-5">
+        <div className="space-y-6 xl:col-span-5">
           {!isNew && productId ? (
             <>
               <ProductModifierGroupsCard productId={productId} assignedGroupIds={assignedGroupIds} />

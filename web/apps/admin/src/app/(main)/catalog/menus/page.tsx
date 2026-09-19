@@ -2,10 +2,10 @@
 
 import { FileText, ListPlus, Plus } from "lucide-react"
 import { useTranslations } from "next-intl"
+import Link from "next/link"
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { MenuItemsDialog } from "@/components/catalog/menu-items-dialog"
 import { FormDialog } from "@/components/layouts/form-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -49,9 +49,6 @@ export default function MenusPage() {
   const t = useTranslations("catalogMenus")
   const [dialogOpen, setDialogOpen] = useState(false)
   const [form, setForm] = useState<FormState>(defaultForm)
-  // The menu whose items are being edited. Holding the whole menu (not just an
-  // id) keeps the sheet's title correct even while the list is refetching.
-  const [itemsMenu, setItemsMenu] = useState<Menu | null>(null)
 
   const { data, isLoading } = useMenus()
   const createMenu = useCreateMenu()
@@ -143,9 +140,11 @@ export default function MenusPage() {
                       {new Date(menu.created_at).toLocaleDateString("tr-TR")}
                     </TableCell>
                     <TableCell>
-                      <Button variant="outline" size="sm" onClick={() => setItemsMenu(menu)}>
-                        <ListPlus className="size-3.5" />
-                        {t("manageItems")}
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href={`/catalog/menus/${menu.id}`}>
+                          <ListPlus className="size-3.5" />
+                          {t("manageItems")}
+                        </Link>
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -202,19 +201,6 @@ export default function MenusPage() {
           </div>
         </form>
       </FormDialog>
-
-      {itemsMenu && (
-        // Keyed per menu so the add form's local state does not leak from one
-        // menu into the next.
-        <MenuItemsDialog
-          key={itemsMenu.id}
-          open
-          onOpenChange={(next) => {
-            if (!next) setItemsMenu(null)
-          }}
-          menu={itemsMenu}
-        />
-      )}
     </div>
   )
 }

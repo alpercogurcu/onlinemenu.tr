@@ -1,4 +1,4 @@
-// Contract test for menu item management. The two things that can silently go
+// Contract test for the menu content page (/catalog/menus/[id]). The two things that can silently go
 // wrong here are the money unit (the API stores kuruş, the operator types lira)
 // and the "no override" case — an empty price field must send null, not 0,
 // because 0 would put the product on the menu for free.
@@ -8,7 +8,7 @@ import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { MenuItemsDialog } from "@/components/catalog/menu-items-dialog"
+import { MenuItemsEditor } from "@/components/catalog/menu-items-editor"
 import messages from "@/messages/tr.json"
 import type { Menu, MenuItem, Product } from "@/types"
 
@@ -57,10 +57,15 @@ let menuItems: MenuItem[] = []
 const post = vi.fn()
 const del = vi.fn()
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => `/catalog/menus/${MENU.id}`,
+}))
+
 vi.mock("@/lib/api", () => ({
   default: {
     get: (url: string) => {
       if (url.endsWith("/items")) return Promise.resolve({ data: menuItems })
+      if (url.endsWith(`/menus/${MENU.id}`)) return Promise.resolve({ data: MENU })
       return Promise.resolve({ data: PRODUCTS })
     },
     post: (...args: unknown[]) => post(...args),
@@ -85,8 +90,14 @@ function Wrapper({ children }: { children: ReactNode }) {
   )
 }
 
-function renderSheet() {
-  return render(<MenuItemsDialog open onOpenChange={() => {}} menu={MENU} />, { wrapper: Wrapper })
+function renderPage(menuId: string = MENU.id) {
+  return render(<MenuItemsEditor menuId={menuId} />, { wrapper: Wrapper })
+}
+
+// Adding and editing both happen in a FormDialog opened from the page.
+async function openAddDialog() {
+  fireEvent.click(await screen.findByRole("button", { name: "Kalem ekle" }))
+  return screen.findByRole("dialog")
 }
 
 // The <select> element exists before its options do (the product query is still
@@ -97,7 +108,7 @@ async function pickProduct(name: string, id: string) {
   fireEvent.change(screen.getByLabelText("Ürün"), { target: { value: id } })
 }
 
-describe("MenuItemsDialog", () => {
+describe("MenuItemsEditor", () => {
   beforeEach(() => {
     menuItems = []
     post.mockReset()
@@ -108,7 +119,8 @@ describe("MenuItemsDialog", () => {
   })
 
   it("converts a lira price override into kuruş", async () => {
-    renderSheet()
+    renderPage()
+    await openAddDialog()
 
     await pickProduct("Adana Kebap", PRODUCTS[0].id)
     fireEvent.change(screen.getByLabelText("Menüye özel fiyat (₺)"), {
@@ -125,7 +137,8 @@ describe("MenuItemsDialog", () => {
   })
 
   it("sends null (not zero) when no override is typed", async () => {
-    renderSheet()
+    renderPage()
+    await openAddDialog()
 
     await pickProduct("Adana Kebap", PRODUCTS[0].id)
     fireEvent.click(screen.getByRole("button", { name: "Menüye ekle" }))
@@ -138,7 +151,8 @@ describe("MenuItemsDialog", () => {
   })
 
   it("refuses an unparseable price instead of clearing the override", async () => {
-    renderSheet()
+    renderPage()
+    await openAddDialog()
 
     await pickProduct("Adana Kebap", PRODUCTS[0].id)
     fireEvent.change(screen.getByLabelText("Menüye özel fiyat (₺)"), {
@@ -151,7 +165,8 @@ describe("MenuItemsDialog", () => {
   })
 
   it("requires a product to be picked", async () => {
-    renderSheet()
+    renderPage()
+    await openAddDialog()
 
     await screen.findByLabelText("Ürün")
     fireEvent.click(screen.getByRole("button", { name: "Menüye ekle" }))
@@ -162,7 +177,7 @@ describe("MenuItemsDialog", () => {
 
   it("lists a placed item with the product's own price when it has no override", async () => {
     menuItems = PLACED
-    renderSheet()
+    renderPage()
 
     expect(await screen.findByText("Adana Kebap")).toBeInTheDocument()
     expect(screen.getByText("₺160,00")).toBeInTheDocument()
@@ -170,7 +185,7 @@ describe("MenuItemsDialog", () => {
 
   it("removes a placed item by product id", async () => {
     menuItems = PLACED
-    renderSheet()
+    renderPage()
 
     fireEvent.click(await screen.findByRole("button", { name: "Adana Kebap ürününü menüden çıkar" }))
 
@@ -178,5 +193,41 @@ describe("MenuItemsDialog", () => {
     expect(del).toHaveBeenCalledWith(
       `/api/v1/catalog/menus/${MENU.id}/items/${PRODUCTS[0].id}`,
     )
+  })
+
+  it("prefills the dialog when a placed item is edited and locks its product", async () => {
+    menuItems = [{ ...PLACED[0], price_override: 14990, is_active: false }]
+    renderPage()
+
+    fireEvent.click(await screen.findByRole("button", { name: "Düzenle" }))
+
+    expect(await screen.findByLabelText("Menüye özel fiyat (₺)")).toHaveValue("149,90")
+    expect(screen.getByLabelText("Ürün")).toBeDisabled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Kalemi güncelle" }))
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    expect(post).toHaveBeenCalledWith(`/api/v1/catalog/menus/${MENU.id}/items`, {
+      product_id: PRODUCTS[0].id,
+      price_override: 14990,
+      is_active: false,
+    })
+  })
+
+  it("shows the menu name, a way back to the list and the empty state", async () => {
+    renderPage()
+
+    expect(await screen.findByRole("heading", { name: MENU.name })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Menülere dön" })).toHaveAttribute(
+      "href",
+      "/catalog/menus",
+    )
+    expect(await screen.findByText("Bu menüde henüz ürün yok.")).toBeInTheDocument()
+  })
+
+  it("renders not-found for a malformed id without asking the API", () => {
+    renderPage("not-a-uuid")
+
+    expect(screen.getByText("Menü bulunamadı.")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Menülere dön" })).toBeInTheDocument()
   })
 })

@@ -105,6 +105,17 @@ export function useMenus() {
   })
 }
 
+export function useMenu(id: string) {
+  return useQuery({
+    queryKey: ["menus", id],
+    queryFn: async () => {
+      const { data } = await api.get<Menu>(`/api/v1/catalog/menus/${id}`)
+      return data
+    },
+    enabled: Boolean(id),
+  })
+}
+
 export function useMenuItems(menuId: string) {
   return useQuery({
     queryKey: ["menus", menuId, "items"],

@@ -288,6 +288,12 @@ test.describe("kasa günü", () => {
     const completed = await waitCompleted(manager, payment.id)
     expect(completed.fiscal_receipt_id).not.toBeNull()
 
+    // A paid adisyon cannot be cancelled away: the registered sale would be
+    // left pointing at a check that claims nothing was sold.
+    const paidCancel = await cashier.post(`/api/v1/pos/checks/${saleCheckId}/cancel`, {})
+    await expectStatus(paidCancel, 409)
+    expect(await paidCancel.json()).toMatchObject({ code: "check_has_payments" })
+
     // The cashier cannot read payments; the check-scoped settlement is their view.
     const settlement = await json<{ completed: { payment_id: string; amount_total: number }[]; pending_total: number }>(
       await cashier.get(`/api/v1/payments/checks/${saleCheckId}/settlement`),

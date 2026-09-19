@@ -79,19 +79,19 @@ function advance(request: APIRequestContext, headers: Headers, orderId: string, 
   return request.post(`${POS}/orders/${orderId}/advance`, { headers, data: { status } })
 }
 
+function cancelOrder(request: APIRequestContext, headers: Headers, orderId: string) {
+  return request.post(`${POS}/orders/${orderId}/cancel`, { headers })
+}
+
 async function accept(request: APIRequestContext, headers: Headers, orderId: string) {
   const res = await request.post(`${POS}/orders/${orderId}/accept`, { headers })
   expect(res.status(), await res.text()).toBe(200)
 }
 
-// Cancelling a check does not touch its orders, so a test that leaves live
-// tickets behind would haunt the shared kitchen board. Cancel them first,
-// then the check. Best-effort: the assertions in the test body are what fail.
+// Cancelling a check cancels its live orders too, so this alone keeps the
+// shared kitchen board clean. Best-effort: the assertions in the test body
+// are what fail.
 async function cleanup(request: APIRequestContext, headers: Headers, checkId: string) {
-  const orders = await listCheckOrders(request, headers, checkId).catch(() => [] as Order[])
-  for (const order of orders) {
-    await advance(request, headers, order.id, "cancelled")
-  }
   await request.post(`${POS}/checks/${checkId}/cancel`, { headers, data: {} })
 }
 
@@ -112,7 +112,10 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
         data: { reason: "Garson yanlış masaya girdi" },
       })
       expect(reject.status(), await reject.text()).toBe(200)
-      expect(((await reject.json()) as Order).status).toBe("rejected")
+      const rejected = (await reject.json()) as Order & { rejection_reason: string; items: unknown[] }
+      expect(rejected.status).toBe("rejected")
+      expect(rejected.rejection_reason).toBe("Garson yanlış masaya girdi")
+      expect(rejected.items).toHaveLength(2)
 
       // The rejected ticket stays on the check for the audit trail, but its
       // lines no longer count towards the bill.
@@ -155,7 +158,14 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
       expect(((await reject.json()) as { code: string }).code).toBe("invalid_transition")
       expect((await getOrder(request, headers, cancelledId)).status).toBe("accepted")
 
-      const cancel = await advance(request, headers, cancelledId, "cancelled")
+      // Cancellation has its own endpoint; /advance refuses it so kitchen
+      // roles (who hold only pos.order.advance) cannot cancel.
+      const viaAdvance = await advance(request, headers, cancelledId, "cancelled")
+      expect(viaAdvance.status()).toBe(422)
+      expect(((await viaAdvance.json()) as { code: string }).code).toBe("use_dedicated_endpoint")
+      expect((await getOrder(request, headers, cancelledId)).status).toBe("accepted")
+
+      const cancel = await cancelOrder(request, headers, cancelledId)
       expect(cancel.status(), await cancel.text()).toBe(200)
       expect(((await cancel.json()) as Order).status).toBe("cancelled")
       expect((await getCheck(request, headers, checkId)).total).toBe(2 * UNIT_PRICE)
@@ -165,7 +175,7 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
         const res = await advance(request, headers, deliveredId, status)
         expect(res.status(), `${status}: ${await res.text()}`).toBe(200)
       }
-      const lateCancel = await advance(request, headers, deliveredId, "cancelled")
+      const lateCancel = await cancelOrder(request, headers, deliveredId)
       expect(lateCancel.status()).toBe(409)
       expect(((await lateCancel.json()) as { code: string }).code).toBe("invalid_transition")
       expect((await getOrder(request, headers, deliveredId)).status).toBe("delivered")
@@ -207,7 +217,7 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
     }
   })
 
-  test("adisyon iptali içindeki canlı siparişlere dokunmaz", async ({ request }) => {
+  test("adisyon iptali içindeki canlı siparişleri de iptal eder", async ({ request }) => {
     const label = `E2E-HAY-${Date.now().toString(36)}`
     const headers = await headersFor(request, USERS.manager)
     const checkId = await openCheck(request, headers, label)
@@ -221,15 +231,66 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
       expect(cancel.status(), await cancel.text()).toBe(200)
       expect(((await cancel.json()) as Check).status).toBe("cancelled")
 
-      // Pins current behaviour: Check.Cancel only flips the check row, so the
-      // kitchen keeps seeing both tickets of a check that no longer exists.
-      expect((await getOrder(request, headers, pendingId)).status).toBe("pending")
-      expect((await getOrder(request, headers, acceptedId)).status).toBe("accepted")
+      // The kitchen must not keep tickets of a check that no longer exists.
+      expect((await getOrder(request, headers, pendingId)).status).toBe("cancelled")
+      expect((await getOrder(request, headers, acceptedId)).status).toBe("cancelled")
+
+      for (const res of [
+        await request.post(`${POS}/orders/${pendingId}/accept`, { headers }),
+        await advance(request, headers, acceptedId, "preparing"),
+      ]) {
+        expect(res.status()).toBe(409)
+        expect(((await res.json()) as { code: string }).code).toBe("check_not_open")
+      }
 
       const second = await request.post(`${POS}/checks/${checkId}/cancel`, { headers, data: {} })
       expect(second.status()).toBe(409)
     } finally {
       await cleanup(request, headers, checkId)
+    }
+  })
+
+  test("mutfak siparişi kabul/ret/iptal edemez; advance yalnız mutfak adımlarını kabul eder", async ({ request }) => {
+    const label = `E2E-MTF-${Date.now().toString(36)}`
+    const manager = await headersFor(request, USERS.manager)
+    const kitchen = await headersFor(request, USERS.kitchen)
+    const checkId = await openCheck(request, manager, label)
+
+    try {
+      const pendingId = await placeOrder(request, manager, checkId, [1])
+      const acceptedId = await placeOrder(request, manager, checkId, [1])
+      await accept(request, manager, acceptedId)
+
+      for (const action of ["accept", "reject", "cancel"]) {
+        const res = await request.post(`${POS}/orders/${pendingId}/${action}`, { headers: kitchen, data: {} })
+        expect(res.status(), `${action}: ${await res.text()}`).toBe(403)
+      }
+
+      // The 2026-09-19 escalation: the same transitions used to go through /advance.
+      for (const [orderId, status] of [
+        [pendingId, "accepted"],
+        [pendingId, "rejected"],
+        [acceptedId, "cancelled"],
+      ]) {
+        const res = await advance(request, kitchen, orderId, status)
+        expect(res.status(), `${status}: ${await res.text()}`).toBe(422)
+        expect(((await res.json()) as { code: string }).code).toBe("use_dedicated_endpoint")
+      }
+
+      const bogus = await advance(request, kitchen, acceptedId, "bogus")
+      expect(bogus.status()).toBe(422)
+      expect(((await bogus.json()) as { code: string }).code).toBe("invalid_status")
+
+      expect((await getOrder(request, manager, pendingId)).status).toBe("pending")
+      expect((await getOrder(request, manager, acceptedId)).status).toBe("accepted")
+
+      const preparing = await advance(request, kitchen, acceptedId, "preparing")
+      expect(preparing.status(), await preparing.text()).toBe(200)
+      const body = (await preparing.json()) as Order & { items: unknown[] }
+      expect(body.status).toBe("preparing")
+      expect(body.items).toHaveLength(1)
+    } finally {
+      await cleanup(request, manager, checkId)
     }
   })
 

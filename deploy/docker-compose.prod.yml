@@ -332,6 +332,9 @@ services:
   # ---------------------------------------------------------------------------
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # Uygulama MinIO kullanmıyor ve imaj etiketi registry'den silinebiliyor;
+    # profilsiz `up -d` tüm yayını iptal etmesin diye storage profiline alındı.
+    profiles: [storage]
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -357,6 +360,7 @@ services:
 
   minio-init:
     image: minio/mc:RELEASE.2025-05-21T01-59-54Z  # mc etiketleri registry'den silinebiliyor; yalnız `docker manifest inspect` ile doğrulanmış etiket pinlenir
+    profiles: [storage]
     restart: "no"
     logging: *default-logging
     depends_on:

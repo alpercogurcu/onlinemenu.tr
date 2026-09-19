@@ -17,6 +17,16 @@ import (
 	"onlinemenu.tr/internal/platform/db"
 )
 
+// ErrInvalidOrderStatus is returned when /advance is asked for a status that
+// is not a kitchen advance target and has no dedicated endpoint either
+// (unknown strings, "pending").
+var ErrInvalidOrderStatus = errors.New("pos/service/order: invalid order status")
+
+// ErrUseDedicatedEndpoint is returned when /advance is asked for accepted,
+// rejected or cancelled. Those transitions have their own endpoints behind
+// stricter permissions; see domain.IsKitchenAdvanceTarget.
+var ErrUseDedicatedEndpoint = errors.New("pos/service/order: status requires its dedicated endpoint")
+
 // OrderService manages order lifecycle within a check or as standalone (delivery/takeaway).
 type OrderService struct {
 	db        *db.Pool
@@ -430,21 +440,20 @@ func (s *OrderService) ListActiveByBranch(ctx context.Context, tenantID, branchI
 }
 
 // Accept marks an order as accepted by staff.
-// The current status is read with a row lock (GetForUpdate) so the
+// The current status is read with a row lock (lockOrderForTransition) so the
 // transition check and the guarded UPDATE are race-free against any other
 // concurrent transition attempt on the same order. The acting principal
 // must belong to the order's branch (ADR-AUTH-001 layer 3 / security
-// sprint) — checked right after loading, before the transition check, so a
-// branch-forbidden caller gets 403 rather than a 409 that would otherwise
-// leak the order's current status.
+// sprint) — checked before the transition check, so a branch-forbidden
+// caller gets 403 rather than a 409 that would otherwise leak the order's
+// current status. An order on a closed or cancelled check is refused with
+// pub.ErrCheckNotOpen: accepting it would send food to the kitchen for a
+// check that can no longer be billed.
 func (s *OrderService) Accept(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID, acceptedBy uuid.UUID) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
+		current, err := s.lockOrderForTransition(ctx, tx, principal, orderID)
 		if err != nil {
-			return err
-		}
-		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionOrderStatus(current.Status, domain.OrderStatusAccepted); err != nil {
@@ -473,11 +482,8 @@ func (s *OrderService) Accept(ctx context.Context, tenantID uuid.UUID, principal
 func (s *OrderService) Reject(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID, rejectedBy uuid.UUID, reason string) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
+		current, err := s.lockOrderForTransition(ctx, tx, principal, orderID)
 		if err != nil {
-			return err
-		}
-		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionOrderStatus(current.Status, domain.OrderStatusRejected); err != nil {
@@ -501,22 +507,54 @@ func (s *OrderService) Reject(ctx context.Context, tenantID uuid.UUID, principal
 	return o, nil
 }
 
-// AdvanceStatus transitions an accepted order through preparing → ready → delivered
-// (or cancels it), validating the move against the order status machine.
-// The acting principal must belong to the order's branch (ADR-AUTH-001
-// layer 3 / security sprint) — checked before the transition check, per
-// Accept's rationale.
+// AdvanceStatus moves an order through the kitchen stages preparing → ready
+// → delivered, validating the move against the order status machine.
+//
+// Only domain.IsKitchenAdvanceTarget statuses are accepted, checked before
+// any database work. accepted/rejected/cancelled are refused with
+// ErrUseDedicatedEndpoint rather than silently allowed: this endpoint is
+// gated by pos.order.advance, which kitchen/bar hold, and until 2026-09-19 it
+// let them accept, reject and cancel orders the policy forbids them to touch.
+//
+// Branch (403) and check (409 check_not_open) are verified in
+// lockOrderForTransition, before the transition check, per Accept's rationale.
 func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID uuid.UUID, status domain.OrderStatus) (domain.Order, error) {
-	if !status.Valid() {
-		return domain.Order{}, fmt.Errorf("pos/service/order: invalid status %q", status)
+	if !domain.IsKitchenAdvanceTarget(status) {
+		switch status {
+		case domain.OrderStatusAccepted, domain.OrderStatusRejected, domain.OrderStatusCancelled:
+			return domain.Order{}, fmt.Errorf("pos/service/order: advance to %q: %w", status, ErrUseDedicatedEndpoint)
+		default:
+			return domain.Order{}, fmt.Errorf("pos/service/order: advance to %q: %w", status, ErrInvalidOrderStatus)
+		}
 	}
+	o, err := s.transition(ctx, tenantID, principal, orderID, status, map[string]any{})
+	if err != nil {
+		return domain.Order{}, wrapErr(err, "pos/service/order: advance status: %w")
+	}
+	return o, nil
+}
+
+// Cancel cancels a single live order (pending/accepted/preparing/ready). It is
+// the counter-side replacement for advance {status:"cancelled"} and is gated
+// by the same permission as Reject, so kitchen/bar cannot reach it.
+func (s *OrderService) Cancel(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID, cancelledBy uuid.UUID) (domain.Order, error) {
+	o, err := s.transition(ctx, tenantID, principal, orderID, domain.OrderStatusCancelled, map[string]any{
+		"cancelled_by": cancelledBy,
+	})
+	if err != nil {
+		return domain.Order{}, wrapErr(err, "pos/service/order: cancel: %w")
+	}
+	return o, nil
+}
+
+// transition applies a plain status change (no accept/reject bookkeeping
+// columns) and records it as an order.status_changed event. extra is merged
+// into the event payload.
+func (s *OrderService) transition(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, orderID uuid.UUID, status domain.OrderStatus, extra map[string]any) (domain.Order, error) {
 	var o domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		current, err := s.orderRepo.GetForUpdate(ctx, tx, orderID)
+		current, err := s.lockOrderForTransition(ctx, tx, principal, orderID)
 		if err != nil {
-			return err
-		}
-		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
 		}
 		if err := domain.TransitionOrderStatus(current.Status, status); err != nil {
@@ -527,14 +565,42 @@ func (s *OrderService) AdvanceStatus(ctx context.Context, tenantID uuid.UUID, pr
 		if err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, tenantID, "order", orderID.String(), "order.status_changed", map[string]any{
+		payload := map[string]any{
 			"tenant_id": tenantID,
 			"order_id":  orderID,
 			"status":    status,
-		})
+		}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		return repo.InsertOutbox(ctx, tx, tenantID, "order", orderID.String(), "order.status_changed", payload)
 	})
+	return o, err
+}
+
+// lockOrderForTransition loads and row-locks an order about to change status,
+// after verifying the principal's branch and that the order's check (if any)
+// is still open.
+//
+// Lock order is check → order, the same as CheckService.Cancel (which locks
+// the check, then cancels its orders) and Place. Locking the order first and
+// the check second would deadlock a kitchen action against a concurrent check
+// cancel. The order is therefore first read WITHOUT a lock just to learn its
+// check_id and branch_id — both immutable after insert, so the unlocked read
+// cannot go stale in a way that matters.
+//
+// Branch is checked before the check status so a caller from another branch
+// gets 403 and learns nothing about the check (see assertCheckWritable).
+func (s *OrderService) lockOrderForTransition(ctx context.Context, tx pgx.Tx, principal auth.Principal, orderID uuid.UUID) (domain.Order, error) {
+	peek, err := s.orderRepo.GetHeader(ctx, tx, orderID)
 	if err != nil {
-		return domain.Order{}, wrapErr(err, "pos/service/order: advance status: %w")
+		return domain.Order{}, err
 	}
-	return o, nil
+	if err := requireBranch(ctx, principal, peek.BranchID); err != nil {
+		return domain.Order{}, err
+	}
+	if err := s.lockWritableCheck(ctx, tx, peek.CheckID, peek.BranchID); err != nil {
+		return domain.Order{}, err
+	}
+	return s.orderRepo.GetForUpdate(ctx, tx, orderID)
 }

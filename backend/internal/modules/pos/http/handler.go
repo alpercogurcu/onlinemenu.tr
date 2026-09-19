@@ -69,8 +69,7 @@ func (h *Handler) permit(action string) func(http.Handler) http.Handler {
 // ADR-SEC-003: order creation and check close require Idempotency-Key —
 // both are POST endpoints with side effects (kitchen ticket dispatch, fiscal
 // close) that must not be duplicated by client retries. Open/cancel/accept/
-// reject/advance are not idempotency-key-gated: cancel/accept/reject/advance
-// are already guarded by the status-transition machine (a retry lands on an
+// reject/advance/order-cancel are not idempotency-key-gated: they are already guarded by the status-transition machine (a retry lands on an
 // already-transitioned row and gets a 409, not a duplicate side effect), and
 // open-check has no equivalent natural dedup key from the client today.
 //
@@ -92,6 +91,10 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("pos.order.accept")).Post("/orders/{id}/accept", hwc.h.acceptOrder)
 		r.With(hwc.h.permit("pos.order.reject")).Post("/orders/{id}/reject", hwc.h.rejectOrder)
 		r.With(hwc.h.permit("pos.order.advance")).Post("/orders/{id}/advance", hwc.h.advanceOrder)
+		// Cancelling a live order is a counter decision of the same weight as
+		// rejecting it, so it reuses pos.order.reject: kitchen/bar (who hold
+		// only pos.order.advance) must not be able to cancel.
+		r.With(hwc.h.permit("pos.order.reject")).Post("/orders/{id}/cancel", hwc.h.cancelOrder)
 
 		// Table plan (Sprint-5 Wave 1): zone CRUD + table CRUD/status are
 		// manager/shift_manager only (pos.table.manage); reading the plan is
@@ -516,6 +519,24 @@ func (h *Handler) advanceOrder(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, toOrderResponse(o))
 }
 
+func (h *Handler) cancelOrder(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	o, err := h.orders.Cancel(r.Context(), p.TenantID, p, id, p.PersonID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toOrderResponse(o))
+}
+
 // ---------------------------------------------------------------------------
 // Table plan handlers (zones + tables)
 // ---------------------------------------------------------------------------
@@ -777,16 +798,17 @@ type orderItemResponse struct {
 }
 
 type orderResponse struct {
-	ID           uuid.UUID           `json:"id"`
-	TenantID     uuid.UUID           `json:"tenant_id"`
-	BranchID     uuid.UUID           `json:"branch_id"`
-	CheckID      *uuid.UUID          `json:"check_id"`
-	OrderChannel string              `json:"order_channel"`
-	Status       string              `json:"status"`
-	Note         string              `json:"note"`
-	Items        []orderItemResponse `json:"items"`
-	CreatedAt    time.Time           `json:"created_at"`
-	UpdatedAt    time.Time           `json:"updated_at"`
+	ID              uuid.UUID           `json:"id"`
+	TenantID        uuid.UUID           `json:"tenant_id"`
+	BranchID        uuid.UUID           `json:"branch_id"`
+	CheckID         *uuid.UUID          `json:"check_id"`
+	OrderChannel    string              `json:"order_channel"`
+	Status          string              `json:"status"`
+	RejectionReason string              `json:"rejection_reason"`
+	Note            string              `json:"note"`
+	Items           []orderItemResponse `json:"items"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
 }
 
 func toOrderResponse(o domain.Order) orderResponse {
@@ -802,16 +824,17 @@ func toOrderResponse(o domain.Order) orderResponse {
 		}
 	}
 	return orderResponse{
-		ID:           o.ID,
-		TenantID:     o.TenantID,
-		BranchID:     o.BranchID,
-		CheckID:      o.CheckID,
-		OrderChannel: string(o.OrderChannel),
-		Status:       string(o.Status),
-		Note:         o.Note,
-		Items:        items,
-		CreatedAt:    o.CreatedAt,
-		UpdatedAt:    o.UpdatedAt,
+		ID:              o.ID,
+		TenantID:        o.TenantID,
+		BranchID:        o.BranchID,
+		CheckID:         o.CheckID,
+		OrderChannel:    string(o.OrderChannel),
+		Status:          string(o.Status),
+		RejectionReason: o.RejectionReason,
+		Note:            o.Note,
+		Items:           items,
+		CreatedAt:       o.CreatedAt,
+		UpdatedAt:       o.UpdatedAt,
 	}
 }
 
@@ -935,6 +958,18 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		respondError(w, http.StatusConflict, codeInsufficientPayment, "payment insufficient to close check")
 		return
 	}
+	if errors.Is(err, service.ErrCheckHasPayments) {
+		respondError(w, http.StatusConflict, codeCheckHasPayments, "check has payments; void them before cancelling")
+		return
+	}
+	if errors.Is(err, service.ErrInvalidOrderStatus) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidStatus, "invalid order status")
+		return
+	}
+	if errors.Is(err, service.ErrUseDedicatedEndpoint) {
+		respondError(w, http.StatusUnprocessableEntity, codeUseDedicatedEndpoint, "use the accept, reject or cancel endpoint for this status")
+		return
+	}
 	if errors.Is(err, pub.ErrCheckNotOpen) {
 		respondError(w, http.StatusConflict, codeCheckNotOpen, "check is not open")
 		return
@@ -978,17 +1013,20 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 // body unconditionally: 409 alone is ambiguous here (a check can conflict
 // because it is already closed, underpaid, or awaiting a fiscal result).
 const (
-	codeFiscalPending       = "fiscal_pending"
-	codeInsufficientPayment = "insufficient_payment"
-	codeInvalidTransition   = "invalid_transition"
-	codeTableOccupied       = "table_occupied"
-	codeCheckNotOpen        = "check_not_open"
-	codeCheckBranchMismatch = "check_branch_mismatch"
-	codeInvalidBranchID     = "invalid_branch_id"
-	codeInvalidRange        = "invalid_range"
-	codeRangeTooLong        = "range_too_long"
-	codeInvalidTimezone     = "invalid_tz"
-	codeInvalidDateParams   = "invalid_date_params"
+	codeFiscalPending        = "fiscal_pending"
+	codeInsufficientPayment  = "insufficient_payment"
+	codeInvalidTransition    = "invalid_transition"
+	codeTableOccupied        = "table_occupied"
+	codeCheckNotOpen         = "check_not_open"
+	codeCheckBranchMismatch  = "check_branch_mismatch"
+	codeCheckHasPayments     = "check_has_payments"
+	codeInvalidStatus        = "invalid_status"
+	codeUseDedicatedEndpoint = "use_dedicated_endpoint"
+	codeInvalidBranchID      = "invalid_branch_id"
+	codeInvalidRange         = "invalid_range"
+	codeRangeTooLong         = "range_too_long"
+	codeInvalidTimezone      = "invalid_tz"
+	codeInvalidDateParams    = "invalid_date_params"
 )
 
 type errorResponse struct {

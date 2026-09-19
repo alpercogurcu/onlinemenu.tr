@@ -164,3 +164,38 @@ func TestTransitionTableStatus_RejectsUnknownTarget(t *testing.T) {
 	err := domain.TransitionTableStatus(domain.TableStatusEmpty, domain.TableStatus("dirty"))
 	assert.ErrorIs(t, err, domain.ErrInvalidTransition)
 }
+
+// TestIsKitchenAdvanceTarget pins the /advance endpoint's target whitelist.
+// accepted/rejected/cancelled are deliberately excluded: they have dedicated
+// endpoints gated by stricter permissions (pos.order.accept / pos.order.reject),
+// and letting /advance reach them was a privilege escalation for kitchen/bar.
+func TestIsKitchenAdvanceTarget(t *testing.T) {
+	tests := []struct {
+		status domain.OrderStatus
+		want   bool
+	}{
+		{domain.OrderStatusPreparing, true},
+		{domain.OrderStatusReady, true},
+		{domain.OrderStatusDelivered, true},
+		{domain.OrderStatusPending, false},
+		{domain.OrderStatusAccepted, false},
+		{domain.OrderStatusRejected, false},
+		{domain.OrderStatusCancelled, false},
+		{domain.OrderStatus("bogus"), false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			assert.Equal(t, tt.want, domain.IsKitchenAdvanceTarget(tt.status))
+		})
+	}
+}
+
+// TestTransitionOrderStatus_CancelledStillReachable guards against "fixing"
+// the /advance escalation by deleting the cancelled edges from the state
+// machine: the dedicated cancel endpoint and the check-cancel cascade both
+// depend on them.
+func TestTransitionOrderStatus_CancelledStillReachable(t *testing.T) {
+	for _, from := range domain.KitchenActiveOrderStatuses {
+		assert.NoErrorf(t, domain.TransitionOrderStatus(from, domain.OrderStatusCancelled), "%s -> cancelled", from)
+	}
+}

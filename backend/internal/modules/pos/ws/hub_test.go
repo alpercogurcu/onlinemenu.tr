@@ -312,7 +312,7 @@ func newTestEnvWithPool(t *testing.T, pool *db.Pool) *testEnv {
 	orderRepo := repo.NewOrderRepo()
 	checkRepo := repo.NewCheckRepo()
 	orders := service.NewOrderService(service.OrderParams{DB: pool, OrderRepo: orderRepo, CheckRepo: checkRepo, Logger: logger})
-	checks := service.NewCheckService(service.CheckParams{DB: pool, CheckRepo: checkRepo, SaleReader: zeroSaleReader{}, Logger: logger})
+	checks := service.NewCheckService(service.CheckParams{DB: pool, CheckRepo: checkRepo, OrderRepo: orderRepo, SaleReader: zeroSaleReader{}, Logger: logger})
 
 	lc := &fakeLifecycle{}
 	// Unique stream name per test, BUT JetStream also rejects a new stream

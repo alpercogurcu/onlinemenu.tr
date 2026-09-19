@@ -203,6 +203,7 @@ func newCheckService() *service.CheckService {
 		DB:         sharedPool,
 		CheckRepo:  repo.NewCheckRepo(),
 		TableRepo:  repo.NewTableRepo(),
+		OrderRepo:  repo.NewOrderRepo(),
 		SaleReader: zeroSaleReader{},
 		Logger:     zap.NewNop(),
 	})

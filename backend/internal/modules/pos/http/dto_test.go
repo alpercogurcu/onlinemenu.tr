@@ -66,3 +66,16 @@ func TestToCheckResponse_TotalSet_SerializesEvenWhenZero(t *testing.T) {
 	require.True(t, ok, "a genuinely-zero total must still be present in the JSON body")
 	assert.Equal(t, float64(0), total)
 }
+
+// TestToOrderResponse_CarriesRejectionReason: the counter shows why the
+// kitchen/cashier rejected a ticket; the field existed on domain.Order but was
+// never serialized.
+func TestToOrderResponse_CarriesRejectionReason(t *testing.T) {
+	resp := toOrderResponse(domain.Order{ID: uuid.New(), Status: domain.OrderStatusRejected, RejectionReason: "stok yok"})
+
+	body, err := json.Marshal(resp)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(body, &decoded))
+	assert.Equal(t, "stok yok", decoded["rejection_reason"])
+}

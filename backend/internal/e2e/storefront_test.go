@@ -123,6 +123,7 @@ func newStorefrontStack(t *testing.T) storefrontStack {
 		DB:         sharedPool,
 		CheckRepo:  posrepo.NewCheckRepo(),
 		TableRepo:  posrepo.NewTableRepo(),
+		OrderRepo:  posrepo.NewOrderRepo(),
 		SaleReader: &saleReaderAdapter{svc: payService},
 		Logger:     log,
 	})

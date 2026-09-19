@@ -86,6 +86,25 @@ func TestHandler_Error_MapsSentinels(t *testing.T) {
 			wantBodyCode: codeFiscalPending,
 		},
 		{
+			// advance {status:"bogus"} used to fall through to a 500.
+			name:         "invalid order status",
+			err:          fmt.Errorf("pos/service/order: advance status: %w", service.ErrInvalidOrderStatus),
+			wantCode:     http.StatusUnprocessableEntity,
+			wantBodyCode: codeInvalidStatus,
+		},
+		{
+			name:         "advance to a status owned by a dedicated endpoint",
+			err:          fmt.Errorf("pos/service/order: advance status: %w", service.ErrUseDedicatedEndpoint),
+			wantCode:     http.StatusUnprocessableEntity,
+			wantBodyCode: codeUseDedicatedEndpoint,
+		},
+		{
+			name:         "check has payments",
+			err:          fmt.Errorf("pos/service/check: cancel: %w", service.ErrCheckHasPayments),
+			wantCode:     http.StatusConflict,
+			wantBodyCode: codeCheckHasPayments,
+		},
+		{
 			name:     "unmapped error",
 			err:      fmt.Errorf("pos/service/check: some unexpected failure"),
 			wantCode: http.StatusInternalServerError,

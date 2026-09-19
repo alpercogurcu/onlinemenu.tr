@@ -38,11 +38,18 @@ var ErrInsufficientPayment = errors.New("pos/service/check: payment insufficient
 // payment needs operator intervention, not a POS-side retry.
 var ErrFiscalPending = errors.New("pos/service/check: fiscal registration pending for check")
 
+// ErrCheckHasPayments is returned when cancelling a check that already has
+// money collected against it (completed or awaiting a fiscal result).
+// Cancelling would leave a registered sale attached to a check that reports
+// nothing was sold; the payment must be voided first.
+var ErrCheckHasPayments = errors.New("pos/service/check: check has payments")
+
 // CheckService manages dine-in check (adisyon) lifecycle.
 type CheckService struct {
 	db         *db.Pool
 	checkRepo  *repo.CheckRepo
 	tableRepo  *repo.TableRepo
+	orderRepo  *repo.OrderRepo
 	saleReader paymentpub.SaleReader
 	logger     *zap.Logger
 }
@@ -54,6 +61,7 @@ type CheckParams struct {
 	DB         *db.Pool
 	CheckRepo  *repo.CheckRepo
 	TableRepo  *repo.TableRepo
+	OrderRepo  *repo.OrderRepo
 	SaleReader paymentpub.SaleReader
 	Logger     *zap.Logger
 }
@@ -63,6 +71,7 @@ func NewCheckService(p CheckParams) *CheckService {
 		db:         p.DB,
 		checkRepo:  p.CheckRepo,
 		tableRepo:  p.TableRepo,
+		orderRepo:  p.OrderRepo,
 		saleReader: p.SaleReader,
 		logger:     p.Logger,
 	}
@@ -422,9 +431,31 @@ func paymentCoversTotal(paid, pending, total int64) error {
 // The acting principal must belong to the check's branch (ADR-AUTH-001 layer
 // 3 / security sprint) — checked right after loading, before the
 // status/transition check (see Close for the 403-vs-409 rationale).
+//
+// A check with any collected money (completed or fiscal-pending) is refused
+// with ErrCheckHasPayments: the payment has to be voided first. The totals
+// are read before the write transaction for the same pool-starvation reason
+// Close gives, and carry the same documented TOCTOU window.
+//
+// The check's still-live orders (domain.KitchenActiveOrderStatuses) are
+// cancelled in the same transaction, one order.status_changed event each
+// (DATA-002: a new event per order, never a rewrite). Before 2026-09-19 they
+// stayed live and the kitchen could keep accepting and cooking tickets for a
+// check nobody would pay. Lock order is check → table → orders: check before
+// orders matches OrderService.lockOrderForTransition, and table before orders
+// matches the guest path (check → table → new order).
 func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, checkID, cancelledBy uuid.UUID) (domain.Check, error) {
+	paid, err := s.saleReader.TotalPaidForCheck(ctx, tenantID, checkID)
+	if err != nil {
+		return domain.Check{}, fmt.Errorf("pos/service/check: cancel: read payment total: %w", err)
+	}
+	pending, err := s.saleReader.PendingTotalForCheck(ctx, tenantID, checkID)
+	if err != nil {
+		return domain.Check{}, fmt.Errorf("pos/service/check: cancel: read pending payment total: %w", err)
+	}
+
 	var cancelled domain.Check
-	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := s.checkRepo.GetForUpdate(ctx, tx, checkID)
 		if err != nil {
 			return err
@@ -435,12 +466,18 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal
 		if current.Status != domain.CheckStatusOpen {
 			return repo.ErrInvalidTransition
 		}
+		if paid+pending > 0 {
+			return ErrCheckHasPayments
+		}
 
 		cancelled, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusCancelled, domain.CheckStatusOpen, &cancelledBy)
 		if err != nil {
 			return err
 		}
 		if err := s.releaseTableToCleaning(ctx, tx, current.TableID); err != nil {
+			return err
+		}
+		if err := s.cancelLiveOrders(ctx, tx, tenantID, checkID, cancelledBy); err != nil {
 			return err
 		}
 		return repo.InsertOutbox(ctx, tx, tenantID, "check", checkID.String(), "check.cancelled", map[string]any{
@@ -453,6 +490,32 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal
 		return domain.Check{}, wrapErr(err, "pos/service/check: cancel: %w")
 	}
 	return cancelled, nil
+}
+
+// cancelLiveOrders is Cancel's cascade; the event shape matches
+// OrderService.Cancel so the kitchen display drops the ticket through the
+// same order.status_changed path.
+func (s *CheckService) cancelLiveOrders(ctx context.Context, tx pgx.Tx, tenantID, checkID, cancelledBy uuid.UUID) error {
+	if s.orderRepo == nil {
+		return errors.New("pos/service/check: order repo not wired")
+	}
+	ids, err := s.orderRepo.CancelActiveByCheck(ctx, tx, checkID)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := repo.InsertOutbox(ctx, tx, tenantID, "order", id.String(), "order.status_changed", map[string]any{
+			"tenant_id":    tenantID,
+			"order_id":     id,
+			"check_id":     checkID,
+			"status":       domain.OrderStatusCancelled,
+			"cancelled_by": cancelledBy,
+			"reason":       "check_cancelled",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // releaseTableToCleaning moves a check's table to "cleaning" after the check

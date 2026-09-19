@@ -102,6 +102,22 @@ func (r *OrderRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domai
 	return o, nil
 }
 
+// GetHeader returns an order row without items and without a lock.
+func (r *OrderRepo) GetHeader(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Order, error) {
+	const q = `
+		SELECT ` + orderColumns + `
+		FROM orders WHERE id = $1`
+
+	o, err := scanOrder(tx.QueryRow(ctx, q, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Order{}, ErrNotFound
+		}
+		return domain.Order{}, fmt.Errorf("pos/repo/order: get header: %w", err)
+	}
+	return o, nil
+}
+
 // GetForUpdate locks the order row (without items) for the duration of the
 // caller's transaction, so a status-transition check-then-write sequence is
 // race-free against other transactions attempting the same transition.
@@ -275,7 +291,7 @@ func (r *OrderRepo) Accept(ctx context.Context, tx pgx.Tx, id uuid.UUID, accepte
 		}
 		return domain.Order{}, fmt.Errorf("pos/repo/order: accept: %w", err)
 	}
-	return o, nil
+	return r.withItems(ctx, tx, o)
 }
 
 // Reject transitions an order to rejected, guarded on its expected current status.
@@ -294,7 +310,7 @@ func (r *OrderRepo) Reject(ctx context.Context, tx pgx.Tx, id uuid.UUID, rejecte
 		}
 		return domain.Order{}, fmt.Errorf("pos/repo/order: reject: %w", err)
 	}
-	return o, nil
+	return r.withItems(ctx, tx, o)
 }
 
 // AdvanceStatus transitions order through preparing → ready → delivered,
@@ -312,6 +328,52 @@ func (r *OrderRepo) AdvanceStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, 
 		}
 		return domain.Order{}, fmt.Errorf("pos/repo/order: advance status: %w", err)
 	}
+	return r.withItems(ctx, tx, o)
+}
+
+// CancelActiveByCheck cancels every order of a check that is still live for
+// the kitchen (domain.KitchenActiveOrderStatuses) and returns the ids it
+// touched, so the caller can record one cancellation event per order.
+// Delivered orders are left alone: that food was served.
+func (r *OrderRepo) CancelActiveByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) ([]uuid.UUID, error) {
+	const q = `
+		UPDATE orders SET status = 'cancelled', updated_at = NOW()
+		WHERE check_id = $1 AND status = ANY($2)
+		RETURNING id`
+
+	statuses := make([]string, len(domain.KitchenActiveOrderStatuses))
+	for i, s := range domain.KitchenActiveOrderStatuses {
+		statuses[i] = string(s)
+	}
+
+	rows, err := tx.Query(ctx, q, checkID, statuses)
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: cancel active by check: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("pos/repo/order: cancel active by check scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pos/repo/order: cancel active by check: %w", err)
+	}
+	return ids, nil
+}
+
+// withItems attaches o's items so a transition's response carries the same
+// shape as GET /orders/{id}; the UPDATE ... RETURNING only yields the row.
+func (r *OrderRepo) withItems(ctx context.Context, tx pgx.Tx, o domain.Order) (domain.Order, error) {
+	items, err := r.loadItems(ctx, tx, o.ID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	o.Items = items
 	return o, nil
 }
 

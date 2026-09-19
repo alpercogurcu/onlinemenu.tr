@@ -75,6 +75,25 @@ func TransitionOrderStatus(from, to OrderStatus) error {
 	return fmt.Errorf("pos/domain: %s -> %s: %w", from, to, ErrInvalidTransition)
 }
 
+// kitchenAdvanceTargets are the only statuses POST /orders/{id}/advance may
+// move an order to. accepted, rejected and cancelled are reachable in the
+// state machine but each has its own endpoint behind a stricter permission
+// (pos.order.accept / pos.order.reject); letting /advance reach them handed
+// kitchen/bar — who hold only pos.order.advance — intake and cancellation
+// powers the policy deliberately withholds.
+var kitchenAdvanceTargets = []OrderStatus{OrderStatusPreparing, OrderStatusReady, OrderStatusDelivered}
+
+// IsKitchenAdvanceTarget reports whether s may be requested through the
+// generic advance endpoint.
+func IsKitchenAdvanceTarget(s OrderStatus) bool {
+	for _, t := range kitchenAdvanceTargets {
+		if t == s {
+			return true
+		}
+	}
+	return false
+}
+
 // InactiveOrderStatuses are order statuses whose line items must be excluded
 // from a check's payable total (pos/repo.CheckRepo.GetTotal): the order was
 // either rejected before ever reaching the kitchen or cancelled after being

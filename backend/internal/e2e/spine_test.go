@@ -269,6 +269,7 @@ func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.Pa
 	checkService := possvc.NewCheckService(possvc.CheckParams{
 		DB:         sharedPool,
 		CheckRepo:  checkRepo,
+		OrderRepo:  orderRepo,
 		SaleReader: reader,
 		Logger:     log,
 	})

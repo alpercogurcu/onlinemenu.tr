@@ -16,6 +16,7 @@ import (
 	"onlinemenu.tr/pos-desktop/internal/hardware"
 	"onlinemenu.tr/pos-desktop/internal/hardware/escpos"
 	"onlinemenu.tr/pos-desktop/internal/keycloakauth"
+	"onlinemenu.tr/pos-desktop/internal/printedids"
 	"onlinemenu.tr/pos-desktop/internal/receipt"
 	"onlinemenu.tr/pos-desktop/internal/tokenstore"
 )
@@ -28,6 +29,17 @@ const appDataDirName = "onlinemenu-pos-desktop"
 // hardwarePrinterEvent is the Wails event topic the frontend subscribes to
 // for printer connectivity updates (see runtime.EventsOn in the frontend).
 const hardwarePrinterEvent = "hardware:printer"
+
+// hardwareKitchenPrinterEvent is the same stream for the kitchen printer. It
+// is only ever emitted when the kitchen printer is a device of its own
+// (config.KitchenPrinterAddr set); a shop whose one printer serves both jobs
+// only has the hardwarePrinterEvent stream.
+const hardwareKitchenPrinterEvent = "hardware:kitchen-printer"
+
+// kitchenPrinterKind labels kitchen-printer events so the frontend can tell
+// them apart from receipt-printer events — both devices report Kind()
+// "printer".
+const kitchenPrinterKind = "kitchen_printer"
 
 // keycloakClientID is the "pos-desktop" public client registered in
 // deploy/keycloak/realm-onlinemenu.json (Authorization Code + PKCE S256,
@@ -59,6 +71,10 @@ type App struct {
 
 	hardwareCancel context.CancelFunc
 	printer        hardware.Printer
+
+	// kitchenPrinter receives kitchen tickets (PrintKitchenTicket). It is
+	// the same value as printer in a single-printer shop — see newPrinters.
+	kitchenPrinter hardware.Printer
 
 	// receiptConfig carries the station's business/branch name and paper
 	// width (from config.Config, set once in startup) into every
@@ -115,6 +131,25 @@ type App struct {
 	fiscalPoller   *branchFiscalPoller
 	fiscalBranchID string
 
+	// printedOrders remembers which orders already produced a kitchen ticket,
+	// so neither a reconnect's snapshot replay nor a restart prints one twice.
+	// Written by printKitchenTicket on every successful print, read by the
+	// kitchen dispatcher. Nil in a test App that does not exercise it.
+	printedOrders *printedids.Set
+
+	// logWarn writes a warning to the Wails log; nil in a test App (see
+	// emitEvent for why the runtime cannot be called directly there).
+	logWarn func(msg string)
+
+	// kitchenDispatchEnabled mirrors config.Config.KitchenDispatcherEnabled.
+	// kitchenMu guards the dispatcher's lifecycle fields for the same reason
+	// fiscalMu guards the poller's: they are driven from bound methods, each
+	// on its own goroutine.
+	kitchenDispatchEnabled bool
+	kitchenMu              sync.Mutex
+	kitchenDispatcher      *kitchenDispatcher
+	kitchenBranchID        string
+
 	// enableDevLogin mirrors config.Config.EnableDevLogin (POS_ENABLE_DEV_LOGIN)
 	// — exposed to the frontend via DevLoginEnabled so the dev-login form
 	// can hide itself outside dev/staging, the same way admin's
@@ -158,6 +193,9 @@ func (a *App) startup(ctx context.Context) {
 		ClientID: keycloakClientID,
 	})
 	a.enableDevLogin = cfg.EnableDevLogin
+	a.kitchenDispatchEnabled = cfg.KitchenDispatcherEnabled
+	a.logWarn = func(msg string) { runtime.LogWarning(ctx, msg) }
+	a.printedOrders = printedids.Open(dataDir, printedids.DefaultMax, warn)
 	a.openURL = func(url string) { runtime.BrowserOpenURL(a.ctx, url) }
 	a.emitEvent = func(topic string, data any) { runtime.EventsEmit(a.ctx, topic, data) }
 
@@ -182,13 +220,16 @@ func (a *App) DevLoginEnabled() bool {
 // both to fully exit — the station must never leave a background device
 // poller running past process shutdown.
 func (a *App) shutdown(_ context.Context) {
-	a.stopBranchFiscalPoller()
+	a.stopBranchWorkers()
 
 	if a.hardwareCancel != nil {
 		a.hardwareCancel()
 	}
 	if a.printer != nil {
 		a.printer.Wait()
+	}
+	if a.kitchenPrinter != nil && a.kitchenPrinter != a.printer {
+		a.kitchenPrinter.Wait()
 	}
 }
 
@@ -255,36 +296,60 @@ func (a *App) stopBranchFiscalPoller() {
 	a.fiscalBranchID = ""
 }
 
-// startHardware wires the printer's event loop to the frontend. Which
-// concrete hardware.Printer backs a.printer is the only thing that varies:
-// cfg.PrinterAddr set (a real "host:port") selects hardware.NetworkPrinter
-// (ESC/POS over TCP 9100); empty (the default — no printer configured for
-// this station, or local dev without hardware attached) selects
-// hardware.MockPrinter, preserving the pre-existing no-hardware-required
-// dev behavior. Either way the forwarding pattern (Go event channel ->
-// runtime.EventsEmit) is identical — see hardware.Printer's doc comment for
-// why app.go only ever depends on that interface, never a concrete type.
+// newPrinters picks the concrete printers for cfg. cfg.PrinterAddr set (a real
+// "host:port") selects hardware.NetworkPrinter (ESC/POS over TCP 9100); empty
+// (the default — no printer configured for this station, or local dev without
+// hardware attached) selects hardware.MockPrinter, preserving the pre-existing
+// no-hardware-required dev behavior.
+//
+// The kitchen printer is a separate NetworkPrinter only when
+// cfg.KitchenPrinterAddr is set. Otherwise it IS the receipt printer (same
+// value, not a second connection): a single-printer shop prints kitchen
+// tickets on the one device it has, and a dev station without hardware gets
+// one MockPrinter for both.
+func newPrinters(cfg config.Config) (receiptPrinter, kitchenPrinter hardware.Printer) {
+	if cfg.PrinterAddr != "" {
+		receiptPrinter = hardware.NewNetworkPrinter(cfg.PrinterAddr)
+	} else {
+		receiptPrinter = hardware.NewMockPrinter()
+	}
+	if cfg.KitchenPrinterAddr != "" {
+		return receiptPrinter, hardware.NewNetworkPrinter(cfg.KitchenPrinterAddr)
+	}
+	return receiptPrinter, receiptPrinter
+}
+
+// startHardware starts the printers' event loops and wires them to the
+// frontend. The forwarding pattern (Go event channel -> runtime.EventsEmit) is
+// identical for every printer — see hardware.Printer's doc comment for why
+// app.go only ever depends on that interface, never a concrete type. A shared
+// kitchen/receipt printer is started (and forwarded) once.
 func (a *App) startHardware(ctx context.Context, cfg config.Config) {
 	hwCtx, cancel := context.WithCancel(ctx)
 	a.hardwareCancel = cancel
 
-	if cfg.PrinterAddr != "" {
-		a.printer = hardware.NewNetworkPrinter(cfg.PrinterAddr)
-	} else {
-		a.printer = hardware.NewMockPrinter()
-	}
-	a.printer.Start(hwCtx)
+	a.printer, a.kitchenPrinter = newPrinters(cfg)
 
+	a.printer.Start(hwCtx)
+	forwardPrinterEvents(ctx, a.printer, hardwarePrinterEvent, a.printer.Kind())
+
+	if a.kitchenPrinter != a.printer {
+		a.kitchenPrinter.Start(hwCtx)
+		forwardPrinterEvents(ctx, a.kitchenPrinter, hardwareKitchenPrinterEvent, kitchenPrinterKind)
+	}
+}
+
+func forwardPrinterEvents(ctx context.Context, p hardware.Printer, topic, kind string) {
 	go func() {
-		for evt := range a.printer.Events() {
+		for evt := range p.Events() {
 			dto := hardwareEventDTO{
-				Kind:   a.printer.Kind(),
+				Kind:   kind,
 				Status: evt.Status.String(),
 			}
 			if evt.Err != nil {
 				dto.Error = evt.Err.Error()
 			}
-			runtime.EventsEmit(ctx, hardwarePrinterEvent, dto)
+			runtime.EventsEmit(ctx, topic, dto)
 		}
 	}()
 }
@@ -322,7 +387,7 @@ func (a *App) Login(email string) (SessionDTO, error) {
 	if err != nil {
 		return SessionDTO{}, err
 	}
-	a.syncBranchFiscalPoller()
+	a.syncBranchWorkers()
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,
@@ -349,7 +414,7 @@ func (a *App) WhoAmI() (SessionDTO, error) {
 		}
 		return SessionDTO{}, err
 	}
-	a.syncBranchFiscalPoller()
+	a.syncBranchWorkers()
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,
@@ -372,7 +437,7 @@ func (a *App) Logout() error {
 	// racing the logout would otherwise fire an unauthenticated request and,
 	// worse, emit another branch snapshot into a frontend that has already
 	// returned to the login screen.
-	a.stopBranchFiscalPoller()
+	a.stopBranchWorkers()
 
 	_, loadErr := keycloakauth.LoadSessionState(a.kcStore)
 	hadKeycloakSession := loadErr == nil
@@ -627,7 +692,7 @@ func (a *App) completeContextSelection(accessToken, membershipID string) (Sessio
 	// branch-fiscal poller against the newly selected branch. This is also
 	// the branch-SWITCH path: a cashier picking a different membership from
 	// the context picker must not keep receiving the old branch's snapshots.
-	a.syncBranchFiscalPoller()
+	a.syncBranchWorkers()
 	return SessionDTO{
 		Authenticated: true,
 		TenantID:      session.TenantID,

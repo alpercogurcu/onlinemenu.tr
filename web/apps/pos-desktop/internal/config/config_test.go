@@ -232,3 +232,87 @@ func TestLoad_InvalidPrinterWidthFallsBackToDefault(t *testing.T) {
 		t.Fatalf("PrinterWidth = %d, want fallback to default 48 (40 is not a supported width)", cfg.PrinterWidth)
 	}
 }
+
+func TestLoad_KitchenPrinterAddr(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileContent string
+		envValue    string
+		want        string
+	}{
+		{name: "absent means empty (falls back to the receipt printer)", want: ""},
+		{
+			name:        "config.json sets it",
+			fileContent: `{"kitchen_printer_addr":"192.168.1.60:9100"}`,
+			want:        "192.168.1.60:9100",
+		},
+		{
+			name:        "env overrides config.json",
+			fileContent: `{"kitchen_printer_addr":"192.168.1.60:9100"}`,
+			envValue:    "10.0.0.9:9100",
+			want:        "10.0.0.9:9100",
+		},
+		{
+			name:        "kitchen address is independent of printer_addr",
+			fileContent: `{"printer_addr":"192.168.1.50:9100"}`,
+			want:        "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.fileContent != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(tt.fileContent), 0o600); err != nil {
+					t.Fatalf("write config.json: %v", err)
+				}
+			}
+			if tt.envValue != "" {
+				t.Setenv("POS_KITCHEN_PRINTER_ADDR", tt.envValue)
+			}
+			cfg, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.KitchenPrinterAddr != tt.want {
+				t.Fatalf("KitchenPrinterAddr = %q, want %q", cfg.KitchenPrinterAddr, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_KitchenDispatcherEnabled(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileContent string
+		env         *string
+		want        bool
+	}{
+		{name: "default is on", want: true},
+		{name: "config.json can turn it off", fileContent: `{"kitchen_dispatcher_enabled":false}`, want: false},
+		{name: "absent from config.json keeps the default", fileContent: `{"api_base_url":"https://x.example.com"}`, want: true},
+		{name: "env false overrides a true file", fileContent: `{"kitchen_dispatcher_enabled":true}`, env: ptr("false"), want: false},
+		{name: "env true overrides a false file", fileContent: `{"kitchen_dispatcher_enabled":false}`, env: ptr("true"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.fileContent != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(tt.fileContent), 0o600); err != nil {
+					t.Fatalf("write config.json: %v", err)
+				}
+			}
+			if tt.env != nil {
+				t.Setenv("POS_KITCHEN_DISPATCHER", *tt.env)
+			}
+			cfg, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.KitchenDispatcherEnabled != tt.want {
+				t.Fatalf("KitchenDispatcherEnabled = %v, want %v", cfg.KitchenDispatcherEnabled, tt.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

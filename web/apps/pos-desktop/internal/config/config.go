@@ -44,6 +44,20 @@ type Config struct {
 	// preserving the pre-existing no-hardware-required dev behavior.
 	PrinterAddr string `json:"printer_addr"`
 
+	// KitchenPrinterAddr is the kitchen ticket printer's "host:port" address
+	// (same ESC/POS TCP 9100 protocol as PrinterAddr). Empty (the default)
+	// means the kitchen shares the receipt printer — the single-printer
+	// shop — so app.go reuses whatever backs PrinterAddr (a real printer, or
+	// hardware.MockPrinter when that is empty too).
+	KitchenPrinterAddr string `json:"kitchen_printer_addr"`
+
+	// KitchenDispatcherEnabled turns on automatic kitchen tickets for orders
+	// that do not pass through this station's own PlaceOrder (QR
+	// self-orders — see kitchen_dispatcher.go). Defaults to true. A branch
+	// with several tills sharing one kitchen printer must leave it on for
+	// exactly ONE of them, or each QR order prints once per till.
+	KitchenDispatcherEnabled bool `json:"kitchen_dispatcher_enabled"`
+
 	// PrinterWidth is the printer's paper width in character columns — 32
 	// or 48 are the two widths internal/receipt supports. Any other value
 	// (including 0, config.json's zero value) falls back to 48.
@@ -70,12 +84,13 @@ const defaultPrinterWidth = 48
 // `task compose:up` + `task backend:dev`.
 func defaultConfig() Config {
 	return Config{
-		APIBaseURL:     "http://localhost:8080",
-		KeycloakURL:    "http://localhost:8090",
-		KeycloakRealm:  "onlinemenu",
-		EnableDevLogin: true,
-		PrinterAddr:    "",
-		PrinterWidth:   defaultPrinterWidth,
+		APIBaseURL:               "http://localhost:8080",
+		KeycloakURL:              "http://localhost:8090",
+		KeycloakRealm:            "onlinemenu",
+		EnableDevLogin:           true,
+		KitchenDispatcherEnabled: true,
+		PrinterAddr:              "",
+		PrinterWidth:             defaultPrinterWidth,
 	}
 }
 
@@ -84,14 +99,16 @@ func defaultConfig() Config {
 // file" (leave the default true) apart from "field explicitly false in the
 // file" (Config's zero value for bool would make that ambiguous).
 type fileConfig struct {
-	APIBaseURL     string `json:"api_base_url"`
-	KeycloakURL    string `json:"keycloak_url"`
-	KeycloakRealm  string `json:"keycloak_realm"`
-	EnableDevLogin *bool  `json:"enable_dev_login"`
-	PrinterAddr    string `json:"printer_addr"`
-	PrinterWidth   int    `json:"printer_width"`
-	BusinessName   string `json:"business_name"`
-	BranchName     string `json:"branch_name"`
+	APIBaseURL               string `json:"api_base_url"`
+	KeycloakURL              string `json:"keycloak_url"`
+	KeycloakRealm            string `json:"keycloak_realm"`
+	EnableDevLogin           *bool  `json:"enable_dev_login"`
+	PrinterAddr              string `json:"printer_addr"`
+	KitchenPrinterAddr       string `json:"kitchen_printer_addr"`
+	KitchenDispatcherEnabled *bool  `json:"kitchen_dispatcher_enabled"`
+	PrinterWidth             int    `json:"printer_width"`
+	BusinessName             string `json:"business_name"`
+	BranchName               string `json:"branch_name"`
 }
 
 // Load resolves the effective configuration in this precedence order, per
@@ -129,6 +146,12 @@ func Load(configDir string) (Config, error) {
 		if fileCfg.PrinterAddr != "" {
 			cfg.PrinterAddr = fileCfg.PrinterAddr
 		}
+		if fileCfg.KitchenPrinterAddr != "" {
+			cfg.KitchenPrinterAddr = fileCfg.KitchenPrinterAddr
+		}
+		if fileCfg.KitchenDispatcherEnabled != nil {
+			cfg.KitchenDispatcherEnabled = *fileCfg.KitchenDispatcherEnabled
+		}
 		if fileCfg.PrinterWidth != 0 {
 			cfg.PrinterWidth = fileCfg.PrinterWidth
 		}
@@ -156,6 +179,12 @@ func Load(configDir string) (Config, error) {
 	}
 	if v := os.Getenv("POS_PRINTER_ADDR"); v != "" {
 		cfg.PrinterAddr = v
+	}
+	if v := os.Getenv("POS_KITCHEN_PRINTER_ADDR"); v != "" {
+		cfg.KitchenPrinterAddr = v
+	}
+	if v, ok := os.LookupEnv("POS_KITCHEN_DISPATCHER"); ok {
+		cfg.KitchenDispatcherEnabled = v != "false"
 	}
 	if v := os.Getenv("POS_PRINTER_WIDTH"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

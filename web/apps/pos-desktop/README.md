@@ -101,6 +101,77 @@ yazıcının anlık bağlantı durumunu döner (frontend mount'ta bir kez
 poll edilir — bkz. `App.tsx`, çünkü event'ler yalnızca durum GEÇİŞİNDE
 gönderilir, önceki bir geçiş "replay" edilmez).
 
+### Mutfak fişi (mutfak yazıcısı)
+
+Mutfakta ekran yerine yazıcı kullanan işletmeler için: sipariş verildiği anda
+(`PlaceOrder` başarılı olunca) mutfağa ayrı bir fiş basılır. Fişte büyük
+"MUTFAK" başlığı, iri harfli masa etiketi, saat, sipariş kısa no'su (UUID'nin
+ilk 8 karakteri), her kalem için `2x  Adana Kebap` satırı (kalın) ve varsa
+kalem notu (`    > acısız`) bulunur. **Fiyat/tutar yoktur.** Uzun ürün adı ve
+notlar kesilmez, girintili devam satırlarına sarılır (alerji notu gibi bilgi
+kaybolmasın diye); metinlerdeki kontrol karakterleri temizlenir, böylece
+müşterinin yazdığı bir not yazıcıya komut sokamaz.
+
+Yapılandırma (env > config.json > varsayılan, diğer yazıcı alanlarıyla aynı):
+
+| Alan | Env | Anlamı |
+|---|---|---|
+| `kitchen_printer_addr` | `POS_KITCHEN_PRINTER_ADDR` | Mutfak yazıcısının `host:port` adresi (ör. `192.168.1.60:9100`) |
+
+- **Alan doluysa:** mutfak fişi bu adresteki ayrı bir `NetworkPrinter`'a gider.
+  Kağıt genişliği (`printer_width`) her iki yazıcı için ortaktır.
+- **Alan boşsa (tek yazıcılı dükkân):** mutfak fişi müşteri fişi yazıcısına
+  (`printer_addr`) basılır — ikinci bir bağlantı açılmaz.
+- **İkisi de boşsa (dev):** tek bir `MockPrinter` her iki işi de karşılar.
+
+Örnek `config.json`:
+
+```json
+{
+  "printer_addr": "192.168.1.50:9100",
+  "kitchen_printer_addr": "192.168.1.60:9100",
+  "printer_width": 48
+}
+```
+
+`App.PrintKitchenTicket(orderID)` siparişi backend'den (`GET
+/api/v1/pos/orders/{id}` + masa etiketi için adisyon) yeniden okuyup basar;
+hem otomatik baskı hem de adisyondaki "Mutfak fişi" düğmesiyle yeniden baskı
+bu binding'i kullanır. Baskı hatası siparişi **geri almaz**: üstte amber bir
+uyarı ("Mutfak fişi yazdırılamadı …") çıkar ve "Yeniden yazdır" / "Yoksay"
+seçenekleri sunar — kasiyer görmeden yemeğin unutulmaması için uyarı biri
+seçilene kadar kalır. Ayrı bir mutfak yazıcısı kopuk/hatalıysa başlıkta
+"Mutfak yazıcısı hata/bağlı değil" rozeti görünür (`hardware:kitchen-printer`
+event'i + `PrinterStatus().kitchen_status`).
+
+#### QR siparişleri için otomatik mutfak fişi (kitchen dispatcher)
+
+Müşterinin QR menüden verdiği sipariş POS'un `PlaceOrder`'ından geçmez;
+kasada kimse görmez. Bu yüzden istasyon, oturum açıldığında şubenin mutfak
+WebSocket'ine (`GET /api/v1/pos/ws/kitchen?branch_id=…`, Bearer header) bağlanır
+ve `online_qr` kaynaklı, henüz pişirilmeye başlamamış (`pending`/`accepted`)
+siparişler için otomatik mutfak fişi basar. Oturum/şube değişince yeniden
+başlar, çıkışta durur (`fiscal_poller` ile aynı yaşam döngüsü). Bağlantı
+kopunca 1 sn'den 15 sn'ye üstel geri çekilmeyle yeniden bağlanır.
+
+- **Tekrar basmama:** basılan sipariş ID'leri bellekte tutulur ve config
+  dizinindeki `printed-kitchen-orders.json` dosyasına (son 500 ID) yazılır.
+  Yeniden bağlanınca ya da POS yeniden açılınca snapshot'taki zaten basılmış
+  siparişler atlanır; POS kapalıyken gelen siparişler oturum açılınca basılır.
+  POS'un kendi `PlaceOrder`'ı sonrası basılan fiş de aynı hafızaya yazılır.
+- **POS kaynaklı siparişler basılmaz:** onları zaten siparişi veren istasyon
+  basar; burada da basılsa her fiş iki kez çıkardı.
+- **Baskı hatası akışı durdurmaz:** hata `hardware:kitchen-print` olayıyla
+  arayüze düşer (üstteki amber "Mutfak fişi yazdırılamadı" şeridi, "Yeniden
+  yazdır" ile). Başarısız sipariş kayda geçmez; aynı siparişin sonraki olayı ya
+  da yeniden bağlanma anındaki snapshot onu otomatik yeniden dener.
+- **Birden çok kasa:** aynı şubede ve aynı mutfak yazıcısında birden fazla POS
+  varsa dispatcher **yalnız birinde** açık olmalıdır; diğerlerinde
+  `"kitchen_dispatcher_enabled": false` (env: `POS_KITCHEN_DISPATCHER=false`)
+  verin, yoksa her QR siparişi kasa sayısı kadar basılır. Varsayılan: açık.
+- **Yetki:** oturumun `pos.order.read` yetkisi yoksa (403) dispatcher bir
+  uyarı loglayıp kendini kapatır; sonraki girişte yeniden denenir.
+
 ## Devtools / Inspector — yalnızca dev build
 
 `main.go`'daki `Debug.OpenInspectorOnStartup` alanı `devtools_dev.go`
@@ -126,7 +197,10 @@ Yazıcı/işletme alanları (Sprint-7, aynı env > config.json > default
 önceliği): `POS_PRINTER_ADDR` (`"printer_addr"`, boş = `MockPrinter`),
 `POS_PRINTER_WIDTH` (`"printer_width"`, `32` veya `48`, geçersiz/eksik
 değer `48`'e düşer), `POS_BUSINESS_NAME` (`"business_name"`),
-`POS_BRANCH_NAME` (`"branch_name"`).
+`POS_BRANCH_NAME` (`"branch_name"`), `POS_KITCHEN_PRINTER_ADDR`
+(`"kitchen_printer_addr"`, boş = müşteri fişi yazıcısı — bkz. "Mutfak fişi"),
+`POS_KITCHEN_DISPATCHER` (`"kitchen_dispatcher_enabled"`, varsayılan `true` —
+bkz. "QR siparişleri için otomatik mutfak fişi").
 
 ## Backend'e bağlanma (dev)
 
@@ -218,7 +292,8 @@ env > config.json > default önceliğini izler.
 | `TryRestoreSession` | `() => Promise<SessionDTO>` | Açılışta sessiz oturum geri yükleme (Keycloak → dev-login sırayla) |
 | `DevLoginEnabled` | `() => Promise<boolean>` | `POS_ENABLE_DEV_LOGIN`'i frontend'e yansıtır |
 | `PrintReceipt` | `(checkID: string, receivedAmount: number) => Promise<void>` | Bilgi fişini basar (kapanışta otomatik + "yeniden yazdır") |
-| `PrinterStatus` | `() => Promise<PrinterStatusDTO>` | Yazıcının anlık bağlantı durumunu döner (mount'ta bir kez poll edilir) |
+| `PrintKitchenTicket` | `(orderID: string) => Promise<void>` | Siparişin mutfak fişini mutfak yazıcısına basar (sipariş sonrası otomatik + "yeniden yazdır") |
+| `PrinterStatus` | `() => Promise<PrinterStatusDTO>` | Yazıcıların (fiş + mutfak) anlık bağlantı durumunu döner (mount'ta bir kez poll edilir) |
 
 Bu tablo kasiyer akışının (`ListOpenChecks`, `OpenCheck`, `PlaceOrder`,
 `RegisterCashPayment`, `CloseCheck` vb. — bkz. `pos.go`) tamamını

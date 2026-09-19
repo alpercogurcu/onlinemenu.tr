@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import type { PendingLine } from '../lib/cart'
 import { pendingLineTotal } from '../lib/cart'
 import type { RemoteCompletedRow, RemotePendingFiscal, TrackedPayment } from '../lib/fiscalStatus'
 import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
+import { shortOrderId } from '../lib/kitchenPrint'
 import { changeDue as computeChangeDue, clampToRemaining, splitSuggestion } from '../lib/payment'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
@@ -32,6 +33,9 @@ type ReceiptProps = {
   pendingLines: PendingLine[]
   onRemovePendingLine: (clientId: string) => void
   onSendOrder: () => Promise<void>
+  /** Reprints one order's kitchen ticket; resolves true when it was printed.
+   * A failure is reported by the parent's banner, not here. */
+  onReprintKitchenTicket: (orderId: string) => Promise<boolean>
   sendingOrder: boolean
   confirmedTotal: number
   pendingTotal: number
@@ -93,6 +97,7 @@ export function Receipt({
   pendingLines,
   onRemovePendingLine,
   onSendOrder,
+  onReprintKitchenTicket,
   sendingOrder,
   confirmedTotal,
   pendingTotal,
@@ -178,17 +183,20 @@ export function Receipt({
               <p className="py-6 text-center text-ink-dim">Adisyon boş — ürün ekleyin.</p>
             )}
 
-            {confirmedOrders.map((order) =>
-              order.items.map((item) => (
-                <div key={item.id} className="receipt-line-enter flex justify-between gap-2 py-1">
-                  <span className="qty text-ink-dim">{item.quantity}×</span>
-                  <span className="flex-1 truncate">{item.product_name}</span>
-                  <span className="money tabular-nums">
-                    {formatMoney(item.quantity * item.unit_price_amount)}
-                  </span>
-                </div>
-              )),
-            )}
+            {confirmedOrders.map((order) => (
+              <div key={order.id}>
+                {order.items.map((item) => (
+                  <div key={item.id} className="receipt-line-enter flex justify-between gap-2 py-1">
+                    <span className="qty text-ink-dim">{item.quantity}×</span>
+                    <span className="flex-1 truncate">{item.product_name}</span>
+                    <span className="money tabular-nums">
+                      {formatMoney(item.quantity * item.unit_price_amount)}
+                    </span>
+                  </div>
+                ))}
+                <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />
+              </div>
+            ))}
 
             {pendingLines.map((line) => (
               <div
@@ -493,5 +501,49 @@ function PaymentStatusList({
         </li>
       ))}
     </ul>
+  )
+}
+
+const KITCHEN_DONE_FLASH_MS = 2500
+
+/**
+ * Small per-order "Mutfak fişi" reprint control under a sent order's lines.
+ * Deliberately quiet (text-xs, no fill): the cashier reaches for it rarely —
+ * after a failed auto-print the App-level banner is the loud path. It only
+ * confirms success itself ("Yazdırıldı"); failures are reported by that banner.
+ */
+function KitchenTicketButton({
+  orderId,
+  onReprint,
+}: {
+  orderId: string
+  onReprint: (orderId: string) => Promise<boolean>
+}) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle')
+
+  useEffect(() => {
+    if (state !== 'done') return
+    const timer = setTimeout(() => setState('idle'), KITCHEN_DONE_FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [state])
+
+  async function handleClick() {
+    setState('busy')
+    const printed = await onReprint(orderId)
+    setState(printed ? 'done' : 'idle')
+  }
+
+  return (
+    <div className="flex justify-end pb-1">
+      <button
+        type="button"
+        disabled={state === 'busy'}
+        onClick={handleClick}
+        title={`Sipariş #${shortOrderId(orderId)} için mutfak fişini yeniden yazdır`}
+        className="min-h-8 rounded px-2 font-sans text-xs text-ink-dim underline-offset-2 hover:underline disabled:opacity-50"
+      >
+        {state === 'busy' ? 'Yazdırılıyor…' : state === 'done' ? 'Yazdırıldı' : 'Mutfak fişi'}
+      </button>
+    </div>
   )
 }

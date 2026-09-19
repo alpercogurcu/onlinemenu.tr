@@ -578,3 +578,59 @@ func TestClient_ListCheckPayments_SumMatchesMultipleInstallments(t *testing.T) {
 		t.Fatalf("remaining = %d, want 0 once every installment is accounted for", remaining)
 	}
 }
+
+func TestClient_GetOrder_DecodesOrderWithItemNotes(t *testing.T) {
+	checkID := "check-1"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/pos/orders/order-1" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Order{
+			ID:      "order-1",
+			CheckID: &checkID,
+			Items:   []OrderItem{{ID: "i1", ProductName: "Adana Kebap", Quantity: 2, Note: "acısız"}},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	order, err := c.GetOrder(t.Context(), "order-1")
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if order.ID != "order-1" || order.CheckID == nil || *order.CheckID != checkID {
+		t.Fatalf("unexpected order: %+v", order)
+	}
+	if len(order.Items) != 1 || order.Items[0].Note != "acısız" || order.Items[0].Quantity != 2 {
+		t.Fatalf("unexpected items: %+v", order.Items)
+	}
+}
+
+func TestClient_GetOrder_RejectsEmptyIDBeforeCallingServer(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	if _, err := c.GetOrder(t.Context(), ""); err == nil {
+		t.Fatal("GetOrder(\"\"): want error, got nil")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("server called %d times, want 0", calls.Load())
+	}
+}
+
+func TestClient_GetOrder_NotFoundIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	if _, err := c.GetOrder(t.Context(), "missing"); err == nil {
+		t.Fatal("GetOrder on 404: want error, got nil")
+	}
+}

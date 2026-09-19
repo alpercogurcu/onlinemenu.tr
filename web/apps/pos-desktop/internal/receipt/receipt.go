@@ -82,10 +82,7 @@ const (
 // where the original received amount is no longer known) — the totals line
 // alone is still a complete, correct receipt.
 func Build(cfg Config, tableLabel string, openedAt time.Time, items []Item, receivedAmount int64) []byte {
-	width := cfg.Width
-	if width != escpos.Width32 && width != escpos.Width48 {
-		width = escpos.Width48
-	}
+	width := normalizeWidth(cfg.Width)
 	cols := int(width)
 
 	b := escpos.NewBuilder(width).Init()

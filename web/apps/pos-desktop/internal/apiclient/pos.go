@@ -261,6 +261,20 @@ func (c *Client) ListCheckOrders(ctx context.Context, checkID string) ([]Order, 
 	return out, nil
 }
 
+// GetOrder calls GET /api/v1/pos/orders/{id}. Used to rebuild a kitchen ticket
+// for an order that was already placed (auto-print after PlaceOrder, or a
+// reprint from the adisyon) without trusting whatever the UI still holds.
+func (c *Client) GetOrder(ctx context.Context, orderID string) (Order, error) {
+	if orderID == "" {
+		return Order{}, fmt.Errorf("apiclient: get order: order id is required")
+	}
+	var out Order
+	if err := c.do(ctx, http.MethodGet, "/api/v1/pos/orders/"+url.PathEscape(orderID), nil, &out); err != nil {
+		return Order{}, fmt.Errorf("apiclient: get order: %w", err)
+	}
+	return out, nil
+}
+
 // OrderItemInput is one line of a PlaceOrder request — a snapshot of the
 // product data at order time (pos/http orderItemInput / domain.OrderItem).
 type OrderItemInput struct {

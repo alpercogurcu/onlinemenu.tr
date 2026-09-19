@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"onlinemenu.tr/pos-desktop/internal/apiclient"
@@ -472,14 +473,28 @@ func (a *App) CloseCheck(checkID string) (CheckDTO, error) {
 // printer connected/errored before the frontend finished mounting would
 // otherwise show "bekleniyor…" forever, since events are pushed only on
 // transition, not replayed).
+//
+// Kind/Status describe the receipt printer. KitchenStatus is the kitchen
+// printer's state; KitchenSeparate says whether that is a device of its own
+// (kitchen_printer_addr configured) or just the receipt printer again — the
+// frontend only surfaces a kitchen fault badge for a separate device, since a
+// shared one is already covered by the receipt printer's badge.
 type PrinterStatusDTO struct {
-	Kind   string `json:"kind"`
-	Status string `json:"status"`
+	Kind            string `json:"kind"`
+	Status          string `json:"status"`
+	KitchenStatus   string `json:"kitchen_status"`
+	KitchenSeparate bool   `json:"kitchen_separate"`
 }
 
-// PrinterStatus returns the receipt printer's current connectivity state.
+// PrinterStatus returns the receipt and kitchen printers' current
+// connectivity state.
 func (a *App) PrinterStatus() PrinterStatusDTO {
-	return PrinterStatusDTO{Kind: a.printer.Kind(), Status: a.printer.Status().String()}
+	dto := PrinterStatusDTO{Kind: a.printer.Kind(), Status: a.printer.Status().String()}
+	if a.kitchenPrinter != nil {
+		dto.KitchenStatus = a.kitchenPrinter.Status().String()
+		dto.KitchenSeparate = a.kitchenPrinter != a.printer
+	}
+	return dto
 }
 
 // PrintReceipt builds and prints the "bilgi fişi" (informational receipt —
@@ -528,6 +543,73 @@ func (a *App) PrintReceipt(checkID string, receivedAmount int64) error {
 	job := receipt.Build(a.receiptConfig, check.TableLabel, check.OpenedAt, items, receivedAmount)
 	if err := a.printer.Print(job); err != nil {
 		return fmt.Errorf("print receipt: %w", err)
+	}
+	return nil
+}
+
+// PrintKitchenTicket prints the production slip for an already-placed order on
+// the kitchen printer: table, time, short order number and each item with its
+// note — no prices (see receipt.BuildKitchenTicket).
+//
+// The order is re-read from the backend rather than passed in by the UI so a
+// reprint from the adisyon prints exactly what the kitchen was owed, whatever
+// the screen currently shows. GetOrder needs pos.order.read, which the cashier
+// role has. The table label comes from the order's check; an order with no
+// check prints the generic label instead of failing — an unlabeled ticket is
+// better than food that never gets cooked.
+//
+// The frontend calls this best-effort right after PlaceOrder succeeded: a
+// failure here must never undo or hide the order (see App.tsx), only surface
+// as an error the cashier can retry — the returned error is that signal
+// (hardware.Printer also emits a StatusError Event in parallel).
+func (a *App) PrintKitchenTicket(orderID string) error {
+	return a.printKitchenTicket(a.ctx, orderID)
+}
+
+// printKitchenTicket is PrintKitchenTicket with an explicit context, so the
+// kitchen dispatcher can abort an in-flight print when it is stopped. On
+// success the order is recorded as printed (printedOrders) — every path that
+// puts a ticket on paper (auto-print after PlaceOrder, manual reprint,
+// dispatcher) funnels through here, which is what keeps the dispatcher from
+// printing the same order again.
+func (a *App) printKitchenTicket(ctx context.Context, orderID string) error {
+	if a.kitchenPrinter == nil {
+		return fmt.Errorf("print kitchen ticket: no kitchen printer available")
+	}
+	order, err := a.api.GetOrder(ctx, orderID)
+	if err != nil {
+		return fmt.Errorf("print kitchen ticket: %w", err)
+	}
+	if len(order.Items) == 0 {
+		return fmt.Errorf("print kitchen ticket: order %s has no items", receipt.ShortOrderID(order.ID))
+	}
+
+	var tableLabel string
+	if order.CheckID != nil {
+		check, err := a.api.GetCheck(ctx, *order.CheckID)
+		if err != nil {
+			return fmt.Errorf("print kitchen ticket: %w", err)
+		}
+		tableLabel = check.TableLabel
+	}
+
+	items := make([]receipt.KitchenItem, len(order.Items))
+	for i, it := range order.Items {
+		items[i] = receipt.KitchenItem{ProductName: it.ProductName, Quantity: it.Quantity, Note: it.Note}
+	}
+
+	job := receipt.BuildKitchenTicket(a.receiptConfig, tableLabel, receipt.ShortOrderID(order.ID), order.CreatedAt, items)
+	if err := a.kitchenPrinter.Print(job); err != nil {
+		return fmt.Errorf("print kitchen ticket: %w", err)
+	}
+
+	// The ticket is already on paper: a failure to remember that must not be
+	// reported as a failed print (the cashier would reprint a duplicate). It
+	// only means a restart may forget this id.
+	if a.printedOrders != nil {
+		if err := a.printedOrders.Add(order.ID); err != nil {
+			a.warn("kitchen ticket printed but not remembered: " + err.Error())
+		}
 	}
 	return nil
 }

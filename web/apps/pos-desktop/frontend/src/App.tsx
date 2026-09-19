@@ -15,6 +15,7 @@ import {
   OpenCheck,
   PlaceOrder,
   PrinterStatus,
+  PrintKitchenTicket,
   PrintReceipt,
   RegisterCashPayment,
   SelectKeycloakContext,
@@ -60,6 +61,14 @@ import {
   type PendingLine,
 } from './lib/cart'
 import { describeError } from './lib/errors'
+import {
+  addKitchenFailure,
+  applyKitchenPrintResult,
+  describeKitchenFailure,
+  removeKitchenFailure,
+  type KitchenPrintFailure,
+  type KitchenPrintResultEvent,
+} from './lib/kitchenPrint'
 
 type PrinterEvent = {
   kind: string
@@ -120,6 +129,11 @@ function App() {
   const [receiptError, setReceiptError] = useState('')
 
   const [printer, setPrinter] = useState<PrinterEvent | null>(null)
+  // Only set when the kitchen printer is a device of its own
+  // (kitchen_printer_addr configured); a shared printer is already covered by
+  // `printer` above.
+  const [kitchenPrinter, setKitchenPrinter] = useState<PrinterEvent | null>(null)
+  const [kitchenFailures, setKitchenFailures] = useState<KitchenPrintFailure[]>([])
 
   // Cash handed over for the check that was just closed, captured at close time
   // (trackedPayments is cleared by then) so "Fişi yeniden yazdır" still prints
@@ -194,11 +208,29 @@ function App() {
     // finished mounting would otherwise leave the header showing
     // "bekleniyor…" forever.
     PrinterStatus()
-      .then((s) => setPrinter({ kind: s.kind, status: s.status as PrinterEvent['status'] }))
+      .then((s) => {
+        setPrinter({ kind: s.kind, status: s.status as PrinterEvent['status'] })
+        if (s.kitchen_separate) {
+          setKitchenPrinter({ kind: 'kitchen_printer', status: s.kitchen_status as PrinterEvent['status'] })
+        }
+      })
       .catch(() => {})
 
     const unsubscribe = EventsOn('hardware:printer', (evt: PrinterEvent) => setPrinter(evt))
-    return () => unsubscribe()
+    const unsubscribeKitchen = EventsOn('hardware:kitchen-printer', (evt: PrinterEvent) => setKitchenPrinter(evt))
+    // Kitchen tickets the station printed on its own for orders that never
+    // went through PlaceOrder here (QR self-orders). Failures join the same
+    // banner list as a failed post-PlaceOrder print; a success clears one.
+    const unsubscribeKitchenPrint = EventsOn('hardware:kitchen-print', (evt: KitchenPrintResultEvent) =>
+      setKitchenFailures((prev) =>
+        applyKitchenPrintResult(prev, { ...evt, error: evt.error ? describeError(evt.error) : undefined }),
+      ),
+    )
+    return () => {
+      unsubscribe()
+      unsubscribeKitchen()
+      unsubscribeKitchenPrint()
+    }
   }, [])
 
   useEffect(() => {
@@ -663,6 +695,10 @@ function App() {
       const order = await PlaceOrder(session.branch_id, selectedCheck.id, toOrderItemInputs(pendingLines))
       setConfirmedOrders((orders) => [...orders, order])
       setPendingLines([])
+      // Not awaited: the ticket is best-effort and must not keep the
+      // "Gönderiliyor…" state up while a slow printer times out.
+      // printKitchenTicketFor never rejects.
+      void printKitchenTicketFor(order.id, selectedCheck.table_label)
     } catch (err) {
       setReceiptError(describeError(err))
     } finally {
@@ -752,6 +788,21 @@ function App() {
     await printReceiptFor(printRetryCheckId, printReceivedAmount)
   }
 
+  // Kitchen tickets are best-effort like the customer receipt: the order is
+  // already placed, so a printer fault only records a failure the cashier can
+  // retry (banner) — it never throws back to its caller or undoes the order.
+  // Resolves true when the ticket was printed.
+  async function printKitchenTicketFor(orderId: string, tableLabel: string): Promise<boolean> {
+    try {
+      await PrintKitchenTicket(orderId)
+      setKitchenFailures((prev) => removeKitchenFailure(prev, orderId))
+      return true
+    } catch (err) {
+      setKitchenFailures((prev) => addKitchenFailure(prev, { orderId, tableLabel, message: describeError(err) }))
+      return false
+    }
+  }
+
   async function handleCloseCheck() {
     if (!selectedCheck) return
     // Requirement 4 — belt and braces. The button is already hidden while a
@@ -826,6 +877,14 @@ function App() {
             ui-designer bu rengin "para/ana aksiyon" anlamıyla çakışıp
             çakışmadığını gözden geçirebilir (bkz. rapor).
           */}
+          {kitchenPrinter && kitchenPrinter.status !== 'connected' && (
+            <span
+              className="rounded-full bg-amber/20 px-2 py-0.5 text-xs font-semibold text-ink"
+              title={kitchenPrinter.error ?? ''}
+            >
+              Mutfak yazıcısı {kitchenPrinter.status === 'error' ? 'hata' : 'bağlı değil'}
+            </span>
+          )}
           {printer && printer.status !== 'connected' && (
             <span
               className="rounded-full bg-amber/20 px-2 py-0.5 text-xs font-semibold text-ink"
@@ -872,6 +931,39 @@ function App() {
           </button>
         </div>
       )}
+
+      {/*
+        Mutfak fişi hatası — sipariş verildi ama fişi mutfağa ulaşmadı: yemek
+        yapılmayacak demektir, bu yüzden "Yeniden yazdır" ya da bilinçli
+        "Yoksay" (mutfağa sözlü iletildi) seçilene kadar görünür kalır. Sipariş
+        kendisi başarılıdır; hata onu geri almaz. Amber, kırmızı değil (bkz.
+        ErrorBanner: kırmızı yalnız void/iptal içindir).
+      */}
+      {kitchenFailures.map((failure) => (
+        <div
+          key={failure.orderId}
+          role="alert"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink"
+        >
+          <span>{describeKitchenFailure(failure)}</span>
+          <span className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => printKitchenTicketFor(failure.orderId, failure.tableLabel)}
+              className="min-h-8 rounded bg-amber px-3 font-semibold text-amber-ink"
+            >
+              Yeniden yazdır
+            </button>
+            <button
+              type="button"
+              onClick={() => setKitchenFailures((prev) => removeKitchenFailure(prev, failure.orderId))}
+              className="min-h-8 rounded px-2 text-ink-dim"
+            >
+              Yoksay
+            </button>
+          </span>
+        </div>
+      ))}
 
       {/*
         Mali kayıt hatası — fişi kesilemeyen bir ödeme (bu istasyonun kendi
@@ -932,6 +1024,7 @@ function App() {
           pendingLines={pendingLines}
           onRemovePendingLine={handleRemovePendingLine}
           onSendOrder={handleSendOrder}
+          onReprintKitchenTicket={(orderId) => printKitchenTicketFor(orderId, selectedCheck?.table_label ?? '')}
           sendingOrder={sendingOrder}
           confirmedTotal={confirmedTotal}
           pendingTotal={sumPendingTotal(pendingLines)}

@@ -150,5 +150,28 @@ test.describe("(d) masa ve adisyon işlemleri (İzmit)", () => {
     await expectStatus(await waiter.api.postNew(`/api/v1/pos/checks/${check.id}/close`, {}), 403)
     await expectStatus(await waiter.api.postNew(`/api/v1/pos/checks/${check.id}/cancel`, {}), 403)
     await expectStatus(await waiter.api.postNew("/api/v1/payments", {}), 403)
+
+    // Para tarafı bütünüyle kapalı: garson kendi açtığı adisyonun tahsilat
+    // özetini de, şubenin ödeme listesini de, kasa oturumunu da göremez.
+    await expectStatus(await waiter.api.get(`/api/v1/payments/checks/${check.id}/settlement`), 403)
+    await expectStatus(await waiter.api.get(`/api/v1/payments?branch_id=${branchId}`), 403)
+    await expectStatus(await waiter.api.get(`/api/v1/payments/cash-sessions/active?branch_id=${branchId}`), 403)
+
+    // Şube sınırı (SEC-005): yeni katalog/sipariş yetkileri garsonu kendi
+    // şubesinin DIŞINA taşımaz — şube parametreli her uç reddedilir.
+    const serdivan = await principal(shared, ACCOUNTS.cashierSerdivan())
+    const foreign = serdivan.ctx.branch_id as string
+    expect(foreign).not.toBe(branchId)
+    for (const path of [
+      `/api/v1/pos/tables?branch_id=${foreign}`,
+      `/api/v1/pos/checks?branch_id=${foreign}`,
+      `/api/v1/catalog/products?branch_id=${foreign}`,
+    ]) {
+      await expectStatus(await waiter.api.get(path), 403)
+    }
+    await expectStatus(
+      await waiter.api.post("/api/v1/pos/checks", { branch_id: foreign, table_label: `${RUN}-d-garson-capraz`, pax: 1 }),
+      403,
+    )
   })
 })

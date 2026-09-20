@@ -544,17 +544,20 @@ E2E_PROD=1 npx playwright test -c e2e-prod/playwright.config.ts
 
 ### 12.5 Senaryo sonuçları
 
-Tam paket canlı prod'a karşı koşuldu: **24/24 geçti** (2026-09-20, api `5fa45c7`,
-B1/B2/B3 düzeltmeleri ve "Ana Menü" devrede; ~27 sn). Tüm senaryolar kendi
-verisini temizler; koşu sonunda prod'da açık adisyon, açık kasa oturumu, kirli
-masa veya artık seçenek grubu kalmadı (DB ile doğrulandı).
+Tam paket canlı prod'a karşı koşuldu: **24/24 geçti** (2026-09-20, api `6d0d27e`,
+identity migration 19 uygulanmış; B1/B2/B3/B7 düzeltmeleri, "Ana Menü" ve yeni
+garson yetkileri devrede; ~29 sn). Tüm senaryolar kendi verisini temizler; koşu
+sonunda prod'da açık adisyon, açık kasa oturumu, kirli masa veya artık seçenek
+grubu kalmadı (DB ile doğrulandı).
+
+Önceki turlar: 23/23 (`ee271a2`, B1–B3 açıkken) ve 24/24 (`5fa45c7`, B7 açıkken).
 
 | # | Senaryo | Sonuç |
 |---|---|---|
-| a | İzmit kasiyeri American Smash'i 490 TL görür; o fiyatla sipariş **201**, 470 TL ile **422 `price_mismatch`**; Serdivan 470 TL; İzmit/Kırkpınar 10'ar override, Adapazarı/Serdivan 0. **+B3 doğrulaması:** `branch_id` GÖNDERİLMEDEN de İzmit kasiyeri **49000 kuruş** (`branch_price_overridden: true`), Serdivan kasiyeri 47000, zincir geneli yönetici 47000 (kapsam `tenant` → eski davranış korunuyor). **+Garson katalog okuması:** `/catalog/{categories,products,menus}` → **403** | **GEÇTİ** |
+| a | İzmit kasiyeri American Smash'i 490 TL görür; o fiyatla sipariş **201**, 470 TL ile **422 `price_mismatch`**; Serdivan 470 TL; İzmit/Kırkpınar 10'ar override, Adapazarı/Serdivan 0. **+B3 doğrulaması:** `branch_id` GÖNDERİLMEDEN de İzmit kasiyeri **49000 kuruş** (`branch_price_overridden: true`), Serdivan kasiyeri 47000, zincir geneli yönetici 47000 (kapsam `tenant` → eski davranış korunuyor). **+B7 doğrulaması:** garson `/catalog/{categories,products,menus}` → **200**, `branch_id`'siz listede kendi şubesinin fiyatını görür, `POST /catalog/products` → **403** (yazma kapalı) | **GEÇTİ** |
 | b | İzmit kasiyeri Serdivan adisyonunu tekil okumada **404**, Serdivan listesinde **403**, kendi listesinde göremiyor, çapraz ödeme reddediliyor | **GEÇTİ** |
 | c | Kasa aç (ikinci açış 409, negatif 422) → masaya adisyon → seçeneksiz + seçenekli sipariş → KDS arayüzünden hazırla/hazır → kalem bazlı + kalan nakit (idempotent; anahtarsız 422; eksik ödemeyle kapanış 409) → mock ÖKC fişi → kapanış (kapalı adisyona sipariş 409) → masa `cleaning`→`empty` (kasiyer) → sayım farkı −25,00 TL → kasa kapanış → gün sonu raporu (şube kapsamlı) | **GEÇTİ** |
-| d | Masa taşıma, adisyon birleştirme (`merged`, tutar hedefe), kalem taşıma, garson yetki sınırı | **GEÇTİ** |
+| d | Masa taşıma, adisyon birleştirme (`merged`, tutar hedefe), kalem taşıma. **+B7 doğrulaması:** garson masayı okur, adisyon açar (**201**), sipariş verir (**201**), adisyon/siparişi okur (200); accept/reject/cancel/close/check-cancel/ödeme → **403**; settlement, ödeme listesi, kasa oturumu → **403**; başka şubenin masa/adisyon/katalog uçları ve adisyon açma → **403** (SEC-005 sınırı yeni yetkilerle delinmiyor) | **GEÇTİ** |
 | e | İzmit QR menüsü 490 TL, Serdivan 470 TL; misafir siparişi 201 ve tutarı sunucu belirliyor | **GEÇTİ** (artık kalıcı "Ana Menü" ile; geçici menü kurulmadı — B1 kapandı) |
 | f | Test yöneticisi Keycloak SSO ile panele giriyor; Şube Fiyatları'nda İzmit **10** "Şube fiyatı" rozeti / Serdivan **0**; Kullanıcılar sayfasında 8 `PRODTEST` personeli şube etiketiyle; Şubeler listesi **5** | **GEÇTİ** |
 | g | `cost*` anahtarı hiçbir yanıtta yok (7 uç + kasiyer projeksiyonu) | **GEÇTİ** (sınırlı — bkz. bulgu B5) |
@@ -562,8 +565,9 @@ masa veya artık seçenek grubu kalmadı (DB ile doğrulandı).
 ### 12.6 Bulgular
 
 İlk turda (2026-09-20 öğlen) hiçbiri düzeltilmedi, yalnız raporlandı. **B1/B2/B3
-aynı gün giderildi** (api `5fa45c7`) ve ikinci turda prod'da doğrulandı; her
-maddenin sonundaki "Durum" satırına bakın. B4–B7 hâlâ açık ve karar bekliyor.
+aynı gün giderildi** (api `5fa45c7`), **B7 de aynı gün kapandı** (api `6d0d27e`);
+her ikisi de prod'da doğrulandı — maddelerin sonundaki "Durum" satırlarına bakın.
+**B4, B5 ve B6 hâlâ açık** ve karar bekliyor.
 
 **B1 — Misafir QR menüsü prod'da boş; `docs/b2b-import-plan.md` §5 hatalı.**
 Storefront menü read model'i `menu_items`'tan beslenir:
@@ -679,14 +683,18 @@ girmesi beklenecekse rego (`catalog_read_actions`'a `waiter` eklemek) ve seed
 (`catalog:read` izni) **birlikte** güncellenmeli; yalnız birini değiştirmek
 ADR-SEC-005'in uyardığı "ölü grant" durumunu yaratır. Kabul paketi mevcut
 davranışı sabitliyor (`a-branch-pricing.spec.ts` "garson katalog okuyamaz").
-**Durum (2026-09-20): kod hazır, prod deploy'u bekliyor.** Ürün kararı: garson sipariş
-alır. `authz.rego`: `catalog_read_actions`'a `waiter` + yeni `pos_waiter_actions`
+**Durum (2026-09-20): ÇÖZÜLDÜ, prod'da doğrulandı (api `6d0d27e`).** Ürün kararı: garson
+sipariş alır. `authz.rego`: `catalog_read_actions`'a `waiter` + yeni `pos_waiter_actions`
 (`pos.check.read/open`, `pos.order.read/place`); seed: `identity/000019_waiter_order_permissions`
 (`checks:read+create`, `orders:read+create`, `catalog:read`; mevcut tenant klonlarına backfill).
 Garson HÂLÂ yapamaz: kabul/ret/iptal/advance, adisyon kapatma/iptal/taşıma/birleştirme,
 ödeme, kasa, rapor, QR, katalog yazma. Kabul paketindeki iki test (`a-branch-pricing`
-garson katalog, `d-table-ops` garson adisyon) yeni davranışa çevrildi — prod'a
-migration + rego deploy edildikten sonra koşulmalı.
+garson katalog, `d-table-ops` garson adisyon) yeni davranışa çevrildi ve prod'da
+geçti. Ölçülen: katalog 200 / katalog yazma 403; adisyon açma ve sipariş 201;
+accept/reject/cancel/close/check-cancel/ödeme 403; settlement + ödeme listesi +
+kasa oturumu 403; çapraz şube (masa/adisyon/katalog/adisyon açma) 403. Garson
+rolünün prod'daki izin kümesi: `catalog:read`, `checks:read+create`,
+`orders:read+create`, `tables:read`.
 
 ### 12.7 Bu turda prod'a eklenenler ve geri alma
 

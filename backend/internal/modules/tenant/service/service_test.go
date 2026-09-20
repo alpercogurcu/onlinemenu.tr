@@ -174,3 +174,46 @@ func TestApplyDefaultModules(t *testing.T) {
 		})
 	}
 }
+
+func validBranchFixture() pub.Branch {
+	return pub.Branch{
+		Name:          "Merkez Şube",
+		OwnershipType: pub.OwnershipSube,
+		OperationType: pub.OperationRestoran,
+		IdentityType:  pub.IdentityKurumsal,
+	}
+}
+
+func TestValidateBranch(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(b pub.Branch) pub.Branch
+		wantErr error
+	}{
+		{"valid branch passes", func(b pub.Branch) pub.Branch { return b }, nil},
+		{"whitespace-only name rejected", func(b pub.Branch) pub.Branch { b.Name = "  "; return b }, pub.ErrInvalid},
+		{"missing identity_type rejected", func(b pub.Branch) pub.Branch { b.IdentityType = ""; return b }, pub.ErrInvalid},
+		{"unknown identity_type rejected", func(b pub.Branch) pub.Branch { b.IdentityType = "anonim"; return b }, pub.ErrInvalid},
+		{"bireysel identity_type accepted", func(b pub.Branch) pub.Branch { b.IdentityType = pub.IdentityBireysel; return b }, nil},
+		{"missing ownership_type rejected", func(b pub.Branch) pub.Branch { b.OwnershipType = ""; return b }, pub.ErrInvalid},
+		{"lisansli ownership_type rejected", func(b pub.Branch) pub.Branch { b.OwnershipType = "lisansli"; return b }, pub.ErrInvalid},
+		{"franchise ownership_type accepted", func(b pub.Branch) pub.Branch { b.OwnershipType = pub.OwnershipFranchise; return b }, nil},
+		{"missing operation_type rejected", func(b pub.Branch) pub.Branch { b.OperationType = ""; return b }, pub.ErrInvalid},
+		{"legacy fastfood spelling rejected", func(b pub.Branch) pub.Branch { b.OperationType = "fastfood"; return b }, pub.ErrInvalid},
+		{"kafe accepted", func(b pub.Branch) pub.Branch { b.OperationType = pub.OperationKafe; return b }, nil},
+		{"fast_food accepted", func(b pub.Branch) pub.Branch { b.OperationType = pub.OperationFastFood; return b }, nil},
+		{"bulut_mutfak accepted", func(b pub.Branch) pub.Branch { b.OperationType = pub.OperationBulutMutfak; return b }, nil},
+		{"depo accepted", func(b pub.Branch) pub.Branch { b.OperationType = pub.OperationDepo; return b }, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBranch(tt.mutate(validBranchFixture()))
+			if tt.wantErr == nil {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}

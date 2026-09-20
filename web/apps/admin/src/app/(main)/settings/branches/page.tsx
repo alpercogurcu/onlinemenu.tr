@@ -20,22 +20,31 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useBranches, useTenant } from "@/hooks/use-tenant"
+import { branchesQueryKey, useBranches, useTenant } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import api from "@/lib/api"
+import {
+  IDENTITY_TYPES,
+  OPERATION_TYPES,
+  OWNERSHIP_TYPES,
+  operationLabel,
+  ownershipLabel,
+} from "@/lib/branch-options"
 import type { Branch } from "@/types"
 
 interface FormState {
   name: string
   operation_type: string
   ownership_type: string
+  identity_type: string
 }
 
 const defaultForm: FormState = {
   name: "",
   operation_type: "restoran",
   ownership_type: "sube",
+  identity_type: "kurumsal",
 }
 
 function useCreateBranch(tenantId: string) {
@@ -44,7 +53,7 @@ function useCreateBranch(tenantId: string) {
     mutationFn: (body: Partial<Branch>) =>
       api.post<Branch>(`/tenants/${tenantId}/branches/`, body),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["branches", tenantId] })
+      void qc.invalidateQueries({ queryKey: branchesQueryKey(tenantId) })
     },
   })
 }
@@ -68,6 +77,7 @@ export default function BranchesPage() {
         name: form.name.trim(),
         operation_type: form.operation_type,
         ownership_type: form.ownership_type,
+        identity_type: form.identity_type,
         is_active: true,
       })
       toast.success("Şube eklendi")
@@ -127,8 +137,8 @@ export default function BranchesPage() {
                 {branches.map((branch) => (
                   <TableRow key={branch.id}>
                     <TableCell className="font-medium">{branch.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{branch.operation_type || "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{branch.ownership_type || "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{operationLabel(branch.operation_type)}</TableCell>
+                    <TableCell className="text-muted-foreground">{ownershipLabel(branch.ownership_type)}</TableCell>
                     <TableCell>
                       <Badge
                         variant="outline"
@@ -184,10 +194,11 @@ export default function BranchesPage() {
                 value={form.operation_type}
                 onChange={(e) => setForm((f) => ({ ...f, operation_type: e.target.value }))}
               >
-                <option value="restoran">Restoran</option>
-                <option value="kafe">Kafe</option>
-                <option value="fastfood">Fast Food</option>
-                <option value="bulut_mutfak">Bulut Mutfak</option>
+                {OPERATION_TYPES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
               </Select>
             </div>
             <div className="space-y-2">
@@ -197,11 +208,27 @@ export default function BranchesPage() {
                 value={form.ownership_type}
                 onChange={(e) => setForm((f) => ({ ...f, ownership_type: e.target.value }))}
               >
-                <option value="sube">Şube</option>
-                <option value="franchise">Franchise</option>
-                <option value="lisansli">Lisanslı</option>
+                {OWNERSHIP_TYPES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
               </Select>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="identity-type">Kimlik Tipi</Label>
+            <Select
+              id="identity-type"
+              value={form.identity_type}
+              onChange={(e) => setForm((f) => ({ ...f, identity_type: e.target.value }))}
+            >
+              {IDENTITY_TYPES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
           </div>
         </form>
       </FormDialog>

@@ -85,7 +85,7 @@ func (r *BranchRepo) CreateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 			phone, address, city, district, postal_code,
 			iban, legal_name, identity_type, tax_no, tax_office, is_active
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
+			$1, $2, NULLIF($3, ''), $4, $5, $6,
 			$7, $8, $9, $10, $11,
 			$12, $13, $14, NULLIF($15, ''), $16, $17
 		)
@@ -113,7 +113,7 @@ func (r *BranchRepo) UpdateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 
 	const q = `
 		UPDATE branches SET
-			name = $1, slug = $2, ownership_type = $3, operation_type = $4,
+			name = $1, slug = NULLIF($2, ''), ownership_type = $3, operation_type = $4,
 			supply_rules = $5, phone = $6, address = $7, city = $8,
 			district = $9, postal_code = $10, iban = $11, legal_name = $12,
 			identity_type = $13, tax_no = NULLIF($14, ''), tax_office = $15, is_active = $16,

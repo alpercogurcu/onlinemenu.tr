@@ -433,6 +433,7 @@ export interface Branch {
   slug?: string
   ownership_type?: string
   operation_type?: string
+  identity_type?: string
   phone?: string
   legal_name?: string
   tax_no?: string

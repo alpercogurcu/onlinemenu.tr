@@ -206,3 +206,64 @@ func TestBranchRepo_CrossTenantUpdate_ChildID(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+// TestBranchRepo_OperationTypes_MatchCheckConstraint pins the Go enum to the
+// branches_operation_type_check constraint (tenant/000008): every value the
+// service accepts must insert, and the legacy spelling the admin form used to
+// send must still be refused by the database itself.
+func TestBranchRepo_OperationTypes_MatchCheckConstraint(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewBranchRepo()
+	tenant := createTenant(t, ctx)
+
+	create := func(op pub.OperationType) error {
+		return sharedPool.WithTenantTx(ctx, tenant.ID, func(tx pgx.Tx) error {
+			_, err := r.CreateBranch(ctx, tx, pub.Branch{
+				TenantID: tenant.ID, Name: "Tür " + string(op), Slug: "op-" + string(op) + "-" + uniqueSuffix(),
+				OwnershipType: pub.OwnershipSube, OperationType: op,
+				IdentityType: pub.IdentityKurumsal, IsActive: true,
+			})
+			return err
+		})
+	}
+
+	for _, op := range []pub.OperationType{
+		pub.OperationRestoran, pub.OperationKafe, pub.OperationFastFood, pub.OperationBulutMutfak,
+		pub.OperationBar, pub.OperationMarket, pub.OperationFoodTruck, pub.OperationImalat, pub.OperationDepo,
+	} {
+		require.True(t, op.Valid(), op)
+		require.NoError(t, create(op), "operation_type %q must satisfy the CHECK constraint", op)
+	}
+
+	require.Error(t, create("fastfood"), "unknown operation_type must be refused by the database")
+}
+
+// TestBranchRepo_SecondBranchWithoutSlug_Allowed: the admin form sends no
+// slug. An empty string used to be stored as ” and the second slug-less
+// branch of a tenant collided on branches_tenant_slug_idx (partial index,
+// WHERE slug IS NOT NULL — so ” counted). Slug is now NULLIF'd like tax_no.
+func TestBranchRepo_SecondBranchWithoutSlug_Allowed(t *testing.T) {
+	ctx := context.Background()
+	r := repo.NewBranchRepo()
+	tenant := createTenant(t, ctx)
+
+	mk := func(name string) (pub.Branch, error) {
+		var created pub.Branch
+		err := sharedPool.WithTenantTx(ctx, tenant.ID, func(tx pgx.Tx) error {
+			var err error
+			created, err = r.CreateBranch(ctx, tx, pub.Branch{
+				TenantID: tenant.ID, Name: name,
+				OwnershipType: pub.OwnershipSube, OperationType: pub.OperationRestoran,
+				IdentityType: pub.IdentityKurumsal, IsActive: true,
+			})
+			return err
+		})
+		return created, err
+	}
+
+	first, err := mk("Slug'sız 1")
+	require.NoError(t, err)
+	require.Empty(t, first.Slug)
+	_, err = mk("Slug'sız 2")
+	require.NoError(t, err, "a second branch with no slug must be able to onboard")
+}

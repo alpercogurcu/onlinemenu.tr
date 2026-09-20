@@ -44,9 +44,10 @@ erDiagram
         uuid id PK
         uuid tenant_id FK
         text name
-        text slug
+        text slug "NULL olabilir; tenant içinde tekil (boş slug NULL saklanır)"
         text ownership_type "sube|franchise"
-        text operation_type "restoran|bar|market|food_truck|imalat|depo"
+        text operation_type "restoran|kafe|fast_food|bulut_mutfak|bar|market|food_truck|imalat|depo (tenant/000008)"
+        text identity_type "kurumsal|bireysel"
         jsonb supply_rules
         bool is_active
     }

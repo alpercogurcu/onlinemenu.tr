@@ -57,6 +57,17 @@ BEGIN
     JOIN persons p ON p.email = r.email
     ON CONFLICT (person_id, tenant_id, branch_id, role_id) DO NOTHING;
 
+    -- İkinci şube (çoklu şube e2e, web/apps/admin/e2e/branches.spec.ts): yalnız
+    -- KİŞİLER seed'lenir. Şubenin kendisi ve üyelikler spec içinde API ile
+    -- kurulur — dev'de Keycloak yapılandırılmadığı için POST /staff çalışmaz ve
+    -- POST /persons kapalı olduğundan, kişi satırı ancak buradan gelebilir.
+    INSERT INTO persons (id, keycloak_sub, email, full_name)
+    VALUES
+        ('ffffffff-0000-0000-0000-000000000011', 'dev-kasiyer-b-sub', 'kasiyer.b@dev.onlinemenu.tr', 'Bora Kasa'),
+        ('ffffffff-0000-0000-0000-000000000012', 'dev-garson-b-sub',  'garson.b@dev.onlinemenu.tr',  'Bahar Garson'),
+        ('ffffffff-0000-0000-0000-000000000013', 'dev-mutfak-b-sub',  'mutfak.b@dev.onlinemenu.tr',  'Barış Mutfak')
+    ON CONFLICT DO NOTHING;
+
     RAISE NOTICE 'Dev seed OK — admin@onlinemenu.tr (+ shift/kasiyer/garson/mutfak@dev.onlinemenu.tr) | tenant: %', v_tenant_id;
 END$$;
 

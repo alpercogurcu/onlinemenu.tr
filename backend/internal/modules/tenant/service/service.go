@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -229,6 +230,9 @@ func (s *Service) ListBranches(ctx context.Context, tenantID uuid.UUID) ([]pub.B
 }
 
 func (s *Service) CreateBranch(ctx context.Context, b pub.Branch) (pub.Branch, error) {
+	if err := validateBranch(b); err != nil {
+		return pub.Branch{}, err
+	}
 	var created pub.Branch
 	err := s.db.WithTenantTx(ctx, b.TenantID, func(tx pgx.Tx) error {
 		var err error
@@ -250,6 +254,9 @@ func (s *Service) CreateBranch(ctx context.Context, b pub.Branch) (pub.Branch, e
 }
 
 func (s *Service) UpdateBranch(ctx context.Context, b pub.Branch) (pub.Branch, error) {
+	if err := validateBranch(b); err != nil {
+		return pub.Branch{}, err
+	}
 	var updated pub.Branch
 	err := s.db.WithTenantTx(ctx, b.TenantID, func(tx pgx.Tx) error {
 		var err error
@@ -535,6 +542,26 @@ var allowedMIMETypes = map[string]bool{
 	"image/jpeg":      true,
 	"image/png":       true,
 	"image/webp":      true,
+}
+
+// validateBranch rejects a branch whose enumerated fields the branches CHECK
+// constraints would refuse. Without it a missing or unknown identity_type,
+// ownership_type or operation_type reached the INSERT and surfaced as a 500
+// (23514) instead of a 422 the caller can act on.
+func validateBranch(b pub.Branch) error {
+	if strings.TrimSpace(b.Name) == "" {
+		return fmt.Errorf("%w: name is required", pub.ErrInvalid)
+	}
+	if !b.OwnershipType.Valid() {
+		return fmt.Errorf("%w: ownership_type %q", pub.ErrInvalid, b.OwnershipType)
+	}
+	if !b.OperationType.Valid() {
+		return fmt.Errorf("%w: operation_type %q", pub.ErrInvalid, b.OperationType)
+	}
+	if !b.IdentityType.Valid() {
+		return fmt.Errorf("%w: identity_type %q", pub.ErrInvalid, b.IdentityType)
+	}
+	return nil
 }
 
 func validateDocument(doc pub.Document) error {

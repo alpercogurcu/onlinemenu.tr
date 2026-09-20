@@ -12,7 +12,7 @@ Türkiye pazarı için modüler, çok-kiracılı (multi-tenant) bir POS & işlet
 İşletme (Tenant)
 └── Şube
     ├── Sahiplik Tipi: şube | franchise
-    └── İşleyiş Tipi: restoran | bar | market | food_truck | imalat | depo
+    └── İşleyiş Tipi: restoran | kafe | fast_food | bulut_mutfak | bar | market | food_truck | imalat | depo
 ```
 
 - Her işletme bir tenant oluşturur (tek veya zincir).

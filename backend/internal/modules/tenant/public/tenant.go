@@ -28,6 +28,11 @@ const (
 	IdentityBireysel IdentityType = "bireysel"
 )
 
+// Valid reports whether t is one of the identity types the branches CHECK accepts.
+func (t IdentityType) Valid() bool {
+	return t == IdentityKurumsal || t == IdentityBireysel
+}
+
 // OwnershipType classifies the relationship between a branch and the tenant.
 type OwnershipType string
 
@@ -36,17 +41,36 @@ const (
 	OwnershipFranchise OwnershipType = "franchise"
 )
 
+// Valid reports whether t is one of the ownership types the branches CHECK accepts.
+func (t OwnershipType) Valid() bool {
+	return t == OwnershipSube || t == OwnershipFranchise
+}
+
 // OperationType describes the primary business activity of a branch.
 type OperationType string
 
 const (
-	OperationRestoran  OperationType = "restoran"
-	OperationBar       OperationType = "bar"
-	OperationMarket    OperationType = "market"
-	OperationFoodTruck OperationType = "food_truck"
-	OperationImalat    OperationType = "imalat"
-	OperationDepo      OperationType = "depo"
+	OperationRestoran    OperationType = "restoran"
+	OperationKafe        OperationType = "kafe"
+	OperationFastFood    OperationType = "fast_food"
+	OperationBulutMutfak OperationType = "bulut_mutfak"
+	OperationBar         OperationType = "bar"
+	OperationMarket      OperationType = "market"
+	OperationFoodTruck   OperationType = "food_truck"
+	OperationImalat      OperationType = "imalat"
+	OperationDepo        OperationType = "depo"
 )
+
+// Valid reports whether t is one of the operation types the branches CHECK
+// accepts (tenant/000008). Keep this list and that constraint in step.
+func (t OperationType) Valid() bool {
+	switch t {
+	case OperationRestoran, OperationKafe, OperationFastFood, OperationBulutMutfak,
+		OperationBar, OperationMarket, OperationFoodTruck, OperationImalat, OperationDepo:
+		return true
+	}
+	return false
+}
 
 // DocumentType enumerates the categories of legal documents a tenant may upload.
 type DocumentType string

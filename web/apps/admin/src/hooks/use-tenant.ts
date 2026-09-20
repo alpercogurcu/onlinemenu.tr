@@ -3,9 +3,13 @@ import { useQuery } from "@tanstack/react-query"
 import api from "@/lib/api"
 import type { Branch, Tenant } from "@/types"
 
+// Shared with mutations that must refresh the list (the branch form used a
+// different literal key, so a created branch never showed up until a reload).
+export const branchesQueryKey = (tenantId: string) => ["tenants", tenantId, "branches"] as const
+
 export function useBranches(tenantId: string) {
   return useQuery({
-    queryKey: ["tenants", tenantId, "branches"],
+    queryKey: branchesQueryKey(tenantId),
     queryFn: async () => {
       const { data } = await api.get<Branch[]>(`/tenants/${tenantId}/branches/`)
       return data ?? []

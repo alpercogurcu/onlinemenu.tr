@@ -168,7 +168,7 @@ func (s *OrderService) repriceItems(ctx context.Context, tenantID uuid.UUID, ite
 		lines[i] = catalogpub.StaffCartLine{
 			ProductID:   it.ProductID,
 			Quantity:    it.Quantity,
-			ModifierIDs: it.SelectedModifierIDs,
+			ModifierIDs: it.ModifierIDs,
 		}
 	}
 
@@ -371,6 +371,7 @@ func guestOrderItems(lines []pub.GuestOrderLine) []domain.OrderItem {
 			Quantity:           l.Quantity,
 			UnitPriceAmount:    l.UnitPriceAmount,
 			Note:               l.Note,
+			ModifierIDs:        l.ModifierIDs,
 		}
 	}
 	return items

@@ -106,3 +106,74 @@ func TestOrderService_Place_RejectsBeforeTouchingTheDatabase(t *testing.T) {
 	assert.Equal(t, 0, orderCount)
 	assert.Equal(t, 0, eventCount)
 }
+
+// TestOrderService_Place_PersistsModifierIDs is the POS↔backend contract for
+// §3a: the options a line was ordered with must survive as ids, not only as
+// the readable text in note. A note cannot be grouped by, reprinted at the
+// right price, or told apart from a renamed option.
+func TestOrderService_Place_PersistsModifierIDs(t *testing.T) {
+	ctx := context.Background()
+	checks := newCheckService()
+	orders := newOrderService()
+	c := openTestCheck(t, ctx, checks)
+
+	product := testProduct("Lahmacun", 9000)
+	spicy := testModifier(product, 0)
+	lavas := testModifier(product, 500)
+
+	placed, err := orders.Place(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Order{
+		BranchID:     branchA,
+		CheckID:      &c.ID,
+		OrderChannel: domain.OrderChannelDineIn,
+		Items: []domain.OrderItem{{
+			ProductID:       product,
+			Quantity:        2,
+			UnitPriceAmount: 9500, // 9000 + 0 + 500
+			Note:            "Acılı | Lavaş(+5)",
+			ModifierIDs:     []uuid.UUID{spicy, lavas},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, placed.Items, 1)
+	assert.Equal(t, []uuid.UUID{spicy, lavas}, placed.Items[0].ModifierIDs)
+	assert.Equal(t, "Acılı | Lavaş(+5)", placed.Items[0].Note, "note is stored verbatim, never parsed")
+
+	// Read back through a fresh transaction: the ids are a column, not a
+	// field the insert happened to echo.
+	reread, err := orders.GetByID(ctx, tenantA, placed.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{spicy, lavas}, reread.Items[0].ModifierIDs)
+
+	// A line with no options round-trips as empty, not as a phantom entry.
+	plain, err := placeWithPrice(t, ctx, orders, c.ID, testProduct("Ayran", 4000), 4000)
+	require.NoError(t, err)
+	assert.Empty(t, plain.Items[0].ModifierIDs)
+
+	// The base price alone is wrong once an option with a delta is selected.
+	_, err = orders.Place(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Order{
+		BranchID:     branchA,
+		CheckID:      &c.ID,
+		OrderChannel: domain.OrderChannelDineIn,
+		Items: []domain.OrderItem{{
+			ProductID:       product,
+			Quantity:        1,
+			UnitPriceAmount: 9000,
+			ModifierIDs:     []uuid.UUID{lavas},
+		}},
+	})
+	assert.ErrorIs(t, err, service.ErrPriceMismatch)
+
+	// An option belonging to another product cannot price this line.
+	_, err = orders.Place(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), domain.Order{
+		BranchID:     branchA,
+		CheckID:      &c.ID,
+		OrderChannel: domain.OrderChannelDineIn,
+		Items: []domain.OrderItem{{
+			ProductID:       product,
+			Quantity:        1,
+			UnitPriceAmount: 9000,
+			ModifierIDs:     []uuid.UUID{testModifier(testProduct("Başka Ürün", 1000), 0)},
+		}},
+	})
+	assert.ErrorIs(t, err, service.ErrInvalidOrderLine)
+}

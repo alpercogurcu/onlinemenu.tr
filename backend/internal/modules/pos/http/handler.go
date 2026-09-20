@@ -437,15 +437,15 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 	items := make([]domain.OrderItem, len(req.Items))
 	for i, it := range req.Items {
 		items[i] = domain.OrderItem{
-			ProductID:           it.ProductID,
-			ProductName:         it.ProductName,
-			ProductPriceAmount:  it.ProductPriceAmount,
-			ProductCurrency:     it.ProductCurrency,
-			TaxRateBPS:          it.TaxRateBPS,
-			Quantity:            it.Quantity,
-			UnitPriceAmount:     it.UnitPriceAmount,
-			Note:                it.Note,
-			SelectedModifierIDs: it.ModifierIDs,
+			ProductID:          it.ProductID,
+			ProductName:        it.ProductName,
+			ProductPriceAmount: it.ProductPriceAmount,
+			ProductCurrency:    it.ProductCurrency,
+			TaxRateBPS:         it.TaxRateBPS,
+			Quantity:           it.Quantity,
+			UnitPriceAmount:    it.UnitPriceAmount,
+			Note:               it.Note,
+			ModifierIDs:        it.ModifierIDs,
 		}
 		if items[i].ProductCurrency == "" {
 			items[i].ProductCurrency = "TRY"
@@ -909,13 +909,18 @@ func toCheckResponse(c domain.Check) checkResponse {
 	}
 }
 
+// orderItemResponse.ModifierIDs are the options the line was ordered with
+// (docs/pos-ux-spec.md §3a). It is always present, as [] when there are none,
+// so a client never has to distinguish "no options" from "field missing".
+// Note carries the same selection as readable text for the kitchen receipt.
 type orderItemResponse struct {
-	ID              uuid.UUID `json:"id"`
-	ProductID       uuid.UUID `json:"product_id"`
-	ProductName     string    `json:"product_name"`
-	Quantity        int       `json:"quantity"`
-	UnitPriceAmount int64     `json:"unit_price_amount"`
-	Note            string    `json:"note"`
+	ID              uuid.UUID   `json:"id"`
+	ProductID       uuid.UUID   `json:"product_id"`
+	ProductName     string      `json:"product_name"`
+	Quantity        int         `json:"quantity"`
+	UnitPriceAmount int64       `json:"unit_price_amount"`
+	Note            string      `json:"note"`
+	ModifierIDs     []uuid.UUID `json:"modifier_ids"`
 }
 
 type orderResponse struct {
@@ -935,6 +940,10 @@ type orderResponse struct {
 func toOrderResponse(o domain.Order) orderResponse {
 	items := make([]orderItemResponse, len(o.Items))
 	for i, it := range o.Items {
+		modifierIDs := it.ModifierIDs
+		if modifierIDs == nil {
+			modifierIDs = []uuid.UUID{}
+		}
 		items[i] = orderItemResponse{
 			ID:              it.ID,
 			ProductID:       it.ProductID,
@@ -942,6 +951,7 @@ func toOrderResponse(o domain.Order) orderResponse {
 			Quantity:        it.Quantity,
 			UnitPriceAmount: it.UnitPriceAmount,
 			Note:            it.Note,
+			ModifierIDs:     modifierIDs,
 		}
 	}
 	return orderResponse{

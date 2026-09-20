@@ -22,6 +22,9 @@ describe("status-badge mappings", () => {
     ["open", "warning"],
     ["closed", "success"],
     ["cancelled", "neutral"],
+    // A merged adisyon is neither a sale nor a failure: its money is billed
+    // on the check that absorbed it (docs/pos-ux-spec.md §3c).
+    ["merged", "info"],
   ] as const)("checkStatusVariant(%s) → %s", (status, variant) => {
     expect(checkStatusVariant(status)).toBe(variant)
   })

@@ -141,6 +141,7 @@ func (s *OrderService) Place(ctx context.Context, guest auth.GuestSession, cart 
 			TaxRateBPS:      p.TaxRateBPS,
 			Quantity:        p.Quantity,
 			Note:            lineNote(p, cart.Lines[i].Note),
+			ModifierIDs:     pricedModifierIDs(p.Modifiers),
 		}
 		total += p.UnitPriceAmount * int64(p.Quantity)
 	}
@@ -296,4 +297,19 @@ func toGuestOrderStatus(view pospub.GuestOrderView) GuestOrderStatus {
 		CreatedAt: view.CreatedAt,
 		UpdatedAt: view.UpdatedAt,
 	}
+}
+
+// pricedModifierIDs projects the ids out of the server's own re-pricing, not
+// out of the submitted cart: the two agree today only because PriceCart
+// rejects anything else, and reading the client's list here would quietly
+// make that no longer true.
+func pricedModifierIDs(modifiers []catalogpub.PricedModifier) []uuid.UUID {
+	if len(modifiers) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(modifiers))
+	for i, m := range modifiers {
+		ids[i] = m.ID
+	}
+	return ids
 }

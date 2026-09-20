@@ -103,6 +103,11 @@ type GuestOrderLine struct {
 	TaxRateBPS      int
 	Quantity        int
 	Note            string
+	// ModifierIDs are the options the diner chose, as re-derived by the
+	// caller's own pricing (never from the cart it received). pos stores them
+	// on the line (pos/000009) so a QR order's options are as answerable as a
+	// counter order's — Note carries the same selection as readable text.
+	ModifierIDs []uuid.UUID
 }
 
 // GuestOrderRequest is a complete anonymous order placement.

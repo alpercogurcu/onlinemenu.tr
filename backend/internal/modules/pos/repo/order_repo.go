@@ -27,9 +27,13 @@ const orderColumns = `id, tenant_id, branch_id, check_id, order_channel, source,
 
 // orderItemColumns plays the same role as orderColumns for order_items, in
 // the exact order scanOrderItem reads them.
+// modifier_ids is projected as text[] rather than uuid[] because every pool
+// here runs under pgx.QueryExecModeSimpleProtocol (see uuidStrings): the
+// driver cannot resolve a uuid[] element OID without a round-trip, so the
+// array travels as text both ways and scanOrderItem parses it.
 const orderItemColumns = `id, tenant_id, order_id, product_id, product_name,
 		          product_price_amount, product_currency, tax_rate_bps,
-		          quantity, unit_price_amount, note, created_at`
+		          quantity, unit_price_amount, note, modifier_ids::text[], created_at`
 
 // uuidStrings renders ids for an `= ANY($n::uuid[])` parameter. They travel
 // as []string rather than []uuid.UUID because every pool here runs under
@@ -382,24 +386,20 @@ func (r *OrderRepo) insertItems(ctx context.Context, tx pgx.Tx, orderID, tenantI
 	const q = `
 		INSERT INTO order_items
 		    (tenant_id, order_id, product_id, product_name, product_price_amount,
-		     product_currency, tax_rate_bps, quantity, unit_price_amount, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING id, tenant_id, order_id, product_id, product_name,
-		          product_price_amount, product_currency, tax_rate_bps,
-		          quantity, unit_price_amount, note, created_at`
+		     product_currency, tax_rate_bps, quantity, unit_price_amount, note,
+		     modifier_ids)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::uuid[])
+		RETURNING ` + orderItemColumns
 
 	out := make([]domain.OrderItem, 0, len(items))
 	for _, item := range items {
-		var oi domain.OrderItem
-		err := tx.QueryRow(ctx, q,
+		row := tx.QueryRow(ctx, q,
 			tenantID, orderID, item.ProductID, item.ProductName,
 			item.ProductPriceAmount, item.ProductCurrency, item.TaxRateBPS,
 			item.Quantity, item.UnitPriceAmount, item.Note,
-		).Scan(
-			&oi.ID, &oi.TenantID, &oi.OrderID, &oi.ProductID,
-			&oi.ProductName, &oi.ProductPriceAmount, &oi.ProductCurrency,
-			&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.Note, &oi.CreatedAt,
+			uuidStrings(item.ModifierIDs),
 		)
+		oi, err := scanOrderItem(row)
 		if err != nil {
 			return nil, fmt.Errorf("pos/repo/order: insert item: %w", err)
 		}
@@ -465,12 +465,23 @@ func scanOrderItem(s interface {
 	Scan(...any) error
 }) (domain.OrderItem, error) {
 	var oi domain.OrderItem
+	var modifierIDs []string
 	if err := s.Scan(
 		&oi.ID, &oi.TenantID, &oi.OrderID, &oi.ProductID,
 		&oi.ProductName, &oi.ProductPriceAmount, &oi.ProductCurrency,
-		&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.Note, &oi.CreatedAt,
+		&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.Note,
+		&modifierIDs, &oi.CreatedAt,
 	); err != nil {
 		return domain.OrderItem{}, err
+	}
+	for _, raw := range modifierIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			// The column is uuid[]; a value that does not parse means the
+			// projection drifted, not that a client sent junk.
+			return domain.OrderItem{}, fmt.Errorf("pos/repo/order: scan modifier id %q: %w", raw, err)
+		}
+		oi.ModifierIDs = append(oi.ModifierIDs, id)
 	}
 	return oi, nil
 }

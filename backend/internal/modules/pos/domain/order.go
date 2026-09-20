@@ -128,14 +128,17 @@ type OrderItem struct {
 	UnitPriceAmount    int64
 	Note               string
 	CreatedAt          time.Time
-	// SelectedModifierIDs is REQUEST-ONLY: it is what the cashier picked in
-	// the varyant dialog, and OrderService.Place re-prices the line against
-	// it (docs/pos-ux-spec.md bulgu #14). Nothing persists it — order_items
-	// has no such column, and by design: the chosen options are rendered into
-	// Note as readable text ("Acılı | Lavaş(+5)"), which is what the kitchen
-	// receipt already prints (§3a "Veri saklama kararı"). It is therefore
-	// always empty on anything read back out of the database.
-	SelectedModifierIDs []uuid.UUID
+	// ModifierIDs are the options this line was ordered with
+	// (docs/pos-ux-spec.md §3a). It is both the input OrderService.Place
+	// re-prices the line against — unit_price_amount must equal the product's
+	// catalog price plus these modifiers' deltas (bulgu #14) — and a
+	// persisted snapshot column (pos/000009).
+	//
+	// Note carries the same selection as readable text ("Acılı | Lavaş(+5)")
+	// for the kitchen receipt; that text is never parsed or validated. These
+	// ids are the machine-readable form the KDS and a receipt reprint can
+	// actually act on.
+	ModifierIDs []uuid.UUID
 }
 
 // Order is a kitchen ticket for one fulfillment event (one channel, one round).

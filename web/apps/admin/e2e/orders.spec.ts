@@ -17,7 +17,13 @@ type Check = {
   table_label: string
   merged_into_check_id?: string
 }
-type OrderItem = { id: string; product_name: string; unit_price_amount: number }
+type OrderItem = {
+  id: string
+  product_name: string
+  unit_price_amount: number
+  note: string
+  modifier_ids: string[]
+}
 type Order = { id: string; status: string; check_id: string | null; items: OrderItem[] }
 type PosTable = { id: string; name: string; status: string }
 
@@ -583,6 +589,20 @@ test.describe("sunucu tarafı fiyat doğrulaması", () => {
       })
       expect(ok.status(), await ok.text()).toBe(201)
       expect((await getCheck(request, headers, checkId)).total).toBe(2 * (UNIT_PRICE + EXTRA_SAUCE_DELTA))
+
+      // The selection survives as ids, not only as the readable note: the KDS
+      // cannot group by "Ekstra sos" and a reprint cannot re-derive the price
+      // from free text (docs/pos-ux-spec.md §3a).
+      const placed = (await ok.json()) as Order
+      const reread = await request.get(`${POS}/orders/${placed.id}`, { headers })
+      expect(reread.status()).toBe(200)
+      const stored = ((await reread.json()) as Order).items[0]
+      expect(stored.modifier_ids).toEqual([MODIFIER_EXTRA_SAUCE])
+      expect(stored.note).toBe("Ekstra sos")
+
+      // A line with no options answers [] rather than omitting the field.
+      const plain = await placeOrderFull(request, headers, checkId, [1])
+      expect(plain.items[0].modifier_ids).toEqual([])
     } finally {
       await cleanup(request, headers, checkId)
     }

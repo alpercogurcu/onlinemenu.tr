@@ -544,21 +544,26 @@ E2E_PROD=1 npx playwright test -c e2e-prod/playwright.config.ts
 
 ### 12.5 Senaryo sonuçları
 
-Tam paket canlı prod'a karşı koşuldu: **23/23 geçti** (2026-09-20, ~22 sn).
-Tüm senaryolar kendi verisini temizler; koşu sonunda prod'da açık adisyon,
-açık kasa oturumu, kirli masa veya artık seçenek grubu kalmadı (DB ile doğrulandı).
+Tam paket canlı prod'a karşı koşuldu: **24/24 geçti** (2026-09-20, api `5fa45c7`,
+B1/B2/B3 düzeltmeleri ve "Ana Menü" devrede; ~27 sn). Tüm senaryolar kendi
+verisini temizler; koşu sonunda prod'da açık adisyon, açık kasa oturumu, kirli
+masa veya artık seçenek grubu kalmadı (DB ile doğrulandı).
 
 | # | Senaryo | Sonuç |
 |---|---|---|
-| a | İzmit kasiyeri American Smash'i 490 TL görür; o fiyatla sipariş **201**, 470 TL ile **422 `price_mismatch`**; Serdivan 470 TL; İzmit/Kırkpınar 10'ar override, Adapazarı/Serdivan 0 | **GEÇTİ** |
+| a | İzmit kasiyeri American Smash'i 490 TL görür; o fiyatla sipariş **201**, 470 TL ile **422 `price_mismatch`**; Serdivan 470 TL; İzmit/Kırkpınar 10'ar override, Adapazarı/Serdivan 0. **+B3 doğrulaması:** `branch_id` GÖNDERİLMEDEN de İzmit kasiyeri **49000 kuruş** (`branch_price_overridden: true`), Serdivan kasiyeri 47000, zincir geneli yönetici 47000 (kapsam `tenant` → eski davranış korunuyor). **+Garson katalog okuması:** `/catalog/{categories,products,menus}` → **403** | **GEÇTİ** |
 | b | İzmit kasiyeri Serdivan adisyonunu tekil okumada **404**, Serdivan listesinde **403**, kendi listesinde göremiyor, çapraz ödeme reddediliyor | **GEÇTİ** |
 | c | Kasa aç (ikinci açış 409, negatif 422) → masaya adisyon → seçeneksiz + seçenekli sipariş → KDS arayüzünden hazırla/hazır → kalem bazlı + kalan nakit (idempotent; anahtarsız 422; eksik ödemeyle kapanış 409) → mock ÖKC fişi → kapanış (kapalı adisyona sipariş 409) → masa `cleaning`→`empty` (kasiyer) → sayım farkı −25,00 TL → kasa kapanış → gün sonu raporu (şube kapsamlı) | **GEÇTİ** |
 | d | Masa taşıma, adisyon birleştirme (`merged`, tutar hedefe), kalem taşıma, garson yetki sınırı | **GEÇTİ** |
-| e | İzmit QR menüsü 490 TL, Serdivan 470 TL; misafir siparişi 201 ve tutarı sunucu belirliyor | **GEÇTİ** (geçici menü ile — bkz. bulgu B1) |
+| e | İzmit QR menüsü 490 TL, Serdivan 470 TL; misafir siparişi 201 ve tutarı sunucu belirliyor | **GEÇTİ** (artık kalıcı "Ana Menü" ile; geçici menü kurulmadı — B1 kapandı) |
 | f | Test yöneticisi Keycloak SSO ile panele giriyor; Şube Fiyatları'nda İzmit **10** "Şube fiyatı" rozeti / Serdivan **0**; Kullanıcılar sayfasında 8 `PRODTEST` personeli şube etiketiyle; Şubeler listesi **5** | **GEÇTİ** |
 | g | `cost*` anahtarı hiçbir yanıtta yok (7 uç + kasiyer projeksiyonu) | **GEÇTİ** (sınırlı — bkz. bulgu B5) |
 
-### 12.6 Bulgular (düzeltilmedi, yalnız raporlanıyor)
+### 12.6 Bulgular
+
+İlk turda (2026-09-20 öğlen) hiçbiri düzeltilmedi, yalnız raporlandı. **B1/B2/B3
+aynı gün giderildi** (api `5fa45c7`) ve ikinci turda prod'da doğrulandı; her
+maddenin sonundaki "Durum" satırına bakın. B4–B7 hâlâ açık ve karar bekliyor.
 
 **B1 — Misafir QR menüsü prod'da boş; `docs/b2b-import-plan.md` §5 hatalı.**
 Storefront menü read model'i `menu_items`'tan beslenir:
@@ -590,7 +595,14 @@ test için `lastName` elle dolduruldu. Öneri: ad/soyadı `full_name`'den ayır�
 son boşluktan böler (`keycloak-harden.sh` ile aynı: "Ahmet Can Yılmaz" → ad "Ahmet Can",
 soyad "Yılmaz"); tek kelimeli/boş ad için realm kuralını karşılamak üzere eksik yarı `-`
 yazılır. Test: `client_test.go` `TestClient_CreateUser_SplitsFullNameIntoFirstAndLastName`.
-Prod'a deploy'a kadar yeni davetler etkilenir.
+**Prod'da doğrulandı (api `5fa45c7`):**
+geçici bir garson daveti (`admin+b2check.izmit@…`, `full_name` "PRODTEST B2 Kontrol")
+Keycloak'ta `firstName="PRODTEST B2"`, `lastName="Kontrol"`, `requiredActions: []`
+olarak doğdu; yanlış parolayla direct grant artık `"Account is not fully set up"`
+değil `"Invalid user credentials"` diyor — yani profil tam. Kontrol hesabı
+(Keycloak kullanıcısı + `persons`/`memberships` satırları) doğrulamadan sonra silindi.
+**Not:** turun başındaki 8 test hesabı hâlâ elle doldurulmuş soyadlarını taşıyor;
+düzeltme yalnız yeni davetleri etkiler, mevcut kayıtları geriye dönük onarmaz.
 
 **B3 — Katalog listesinde `branch_id` opsiyonel; şube kapsamlı kullanıcıya tenant fiyatı dönüyor.**
 `backend/internal/modules/catalog/http/branch_override_handler.go:145-154`:
@@ -606,6 +618,12 @@ siparişi geçiremez. Öneri: şube kapsamlı principal için varsayılanı kend
 yoksa OPA scope'u `tenant` olmayan (kasiyer/garson/mutfak/…) staff principal için
 varsayılan kendi şubesi; zincir yöneticisi ve şubesiz principal eski davranışta
 (tenant fiyatı). Test: `branch_default_test.go`.
+**Prod'da doğrulandı (api `5fa45c7`):** `branch_id` göndermeden
+`GET /api/v1/catalog/products` → İzmit kasiyeri **49000** kuruş
+(`branch_price_overridden: true`), Serdivan kasiyeri 47000 (override'ı yok),
+zincir geneli yönetici 47000. Kabul paketinde kalıcı test:
+`e2e-prod/a-branch-pricing.spec.ts` "branch_id verilmezse şube kapsamlı kasiyer
+KENDİ şube fiyatını görür (B3)".
 
 **B4 — Ters proxy hız sınırı tek IP başına 10 r/s ve 429 değil 503 dönüyor.**
 Direktif repoda: `deploy/nginx/diverserver.conf:152`
@@ -643,6 +661,25 @@ Kapanış/iptal yanıtı 200 döndükten hemen sonra masayı `empty` yapmak, dur
 plan gerçekten `empty` okuyana kadar tekrar deniyor; ürün tarafında POS
 arayüzünün de aynı yarışa açık olup olmadığı incelenmeli.
 
+**B7 — Garson (waiter) rolü katalog okuyamıyor; menü/ürün ekranları ona kapalı.**
+Serdivan garsonuyla ölçüldü (2026-09-20, api `5fa45c7`):
+`/api/v1/catalog/categories`, `/api/v1/catalog/products`, `/api/v1/catalog/menus`
+→ hepsi **403**; `/api/v1/pos/tables` → 200. Ölçülen yalnız bu HTTP sonucudur;
+aşağıdaki iki neden kod okumasından çıkarıldı (hangi katmanın reddettiği ayrıca
+ölçülmedi, ama ikisi de aynı yönde):
+- OPA: `catalog_read_actions` yalnız `{cashier, shift_manager, kitchen, bar}`
+  içindir (`backend/configs/opa/bundles/authz.rego:86-98`) — waiter listede yok.
+- Seed: garson rolünün tek izni `tables:read`
+  (`backend/migrations/identity/000017_seed_waiter_role.up.sql`), bu bilinçli bir
+  karardır ("Permission set is deliberately EXACTLY what authz.rego enforces").
+
+Yani bu bir hata değil, **kasıtlı kapsam** — ama ürün açısından sorulacak soru şu:
+sipariş alan garsonun menüyü hiç görememesi isteniyor mu? Garsonun POS'ta sipariş
+girmesi beklenecekse rego (`catalog_read_actions`'a `waiter` eklemek) ve seed
+(`catalog:read` izni) **birlikte** güncellenmeli; yalnız birini değiştirmek
+ADR-SEC-005'in uyardığı "ölü grant" durumunu yaratır. Kabul paketi mevcut
+davranışı sabitliyor (`a-branch-pricing.spec.ts` "garson katalog okuyamaz").
+
 ### 12.7 Bu turda prod'a eklenenler ve geri alma
 
 Hiçbir gerçek veri silinmedi/değiştirilmedi; aşağıdakilerin **tamamı** bu kabul
@@ -657,9 +694,11 @@ turunda eklendi ve test bitince kaldırılabilir.
 | `PRODTEST Menü` (+1 menü kalemi) | `menus` / `menu_items` | **Durum: bkz. aşağıdaki not** |
 | `PRODTEST-*` adisyon/sipariş/ödeme/kasa oturumu kayıtları | POS/payment tabloları | Hepsi kapalı/iptal; `task deploy:reset-test-data` bu kümeyi sıfırlar |
 
-**`PRODTEST Menü` durumu:** (e) senaryosunun teardown'u menüyü **pasifleştirir**,
-yani QR menüsü bu turdan önceki hâline (boş) döner. Menü satırı pasif olarak
-kataloğda kalır — silme ucu yok (`catalog` yalnızca create/update sunar) ve
-tekrar koşuda yeniden kullanılır. Pilotun QR siparişini gerçekten açması için
-**kalıcı ve gerçek** bir menü kaydı gerekir (bulgu B1); bu ürün kararıdır,
-kabul testi bunu kendiliğinden yapmaz.
+**`PRODTEST Menü` durumu:** ilk turda (B1 açıkken) kurulmuş, **pasif** olarak
+kataloğda duruyor — silme ucu yok (`catalog` yalnızca create/update sunar).
+Artık kullanılmıyor: prod'da kalıcı **"Ana Menü"** aktif olduğu için (e)
+senaryosu kendi menüsünü hiç kurmuyor. Pasif satır zararsızdır; temizlik
+istenirse `menus`/`menu_items`'tan elle silinebilir.
+
+> **"Ana Menü" test verisi DEĞİLDİR** — B1'in kalıcı çözümüdür ve bu listeden
+> silinmemelidir; kaldırılırsa QR siparişi yeniden çalışmaz.

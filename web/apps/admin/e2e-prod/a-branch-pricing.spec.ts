@@ -58,16 +58,45 @@ test.describe("(a) şube fiyatı", () => {
     expect(product.branch_price_overridden).toBe(false)
   })
 
-  test("branch_id verilmezse tenant fiyatı döner — şube kapsamlı çağıran için de", async ({ request }) => {
-    // Kayıt: ?branch_id= opsiyoneldir (catalog/http/branch_override_handler.go:145
-    // "Absent means tenant default"). Şube kapsamlı bir kasiyerin şubesi
-    // CTX token'dan belliyken bile varsayılan tenant fiyatıdır; istemci
-    // parametreyi unutursa ekranda yanlış fiyat görünür. Sipariş ucu yine de
-    // 422 verdiği için yanlış tahsilat oluşmaz (bkz. yukarıdaki test).
+  test("branch_id verilmezse şube kapsamlı kasiyer KENDİ şube fiyatını görür (B3)", async ({ request }) => {
+    // `?branch_id=` hâlâ opsiyoneldir, ama artık "tenant varsayılanı" demek
+    // değil: OPA kapsamı "tenant" olmayan bir personel kendi şubesine düşer
+    // (catalog/http/branch_override_handler.go defaultBranchID). Parametreyi
+    // unutan bir POS istemcisi böylece ekranda 470 gösterip siparişte 422
+    // price_mismatch yemez.
     const izmit = await principal(request, ACCOUNTS.cashierIzmit())
     const withoutBranch = (await products(izmit.api)).find((p) => p.name === SMASH)
-    expect(withoutBranch?.price_amount).toBe(47_000)
-    expect(withoutBranch?.branch_price_overridden).toBe(false)
+    expect(withoutBranch?.price_amount, "İzmit kasiyeri parametresiz de 490 TL görmeli").toBe(49_000)
+    expect(withoutBranch?.branch_price_overridden).toBe(true)
+
+    // Override'ı olmayan şubede aynı çağrı tenant fiyatını verir (fark,
+    // varsayılanın değişmesi değil, şubenin override'ı olmaması).
+    const serdivan = await principal(request, ACCOUNTS.cashierSerdivan())
+    const serdivanDefault = (await products(serdivan.api)).find((p) => p.name === SMASH)
+    expect(serdivanDefault?.price_amount).toBe(47_000)
+    expect(serdivanDefault?.branch_price_overridden).toBe(false)
+
+    // Zincir geneli yönetici (kapsam "tenant") ADR-DATA-009 öncesindeki
+    // davranışta kalır: parametresiz çağrı tenant fiyatıdır.
+    const manager = await principal(request, ACCOUNTS.manager())
+    const managerDefault = (await products(manager.api)).find((p) => p.name === SMASH)
+    expect(managerDefault?.price_amount, "yönetici varsayılanı tenant fiyatı olmalı").toBe(47_000)
+    expect(managerDefault?.branch_price_overridden).toBe(false)
+  })
+
+  test("garson katalog okuyamaz (OPA catalog_read_actions garsonu kapsamaz)", async ({ request }) => {
+    // Kayıt: `catalog_read_actions` yalnız cashier/shift_manager/kitchen/bar
+    // içerir (backend/configs/opa/bundles/authz.rego:86-98) ve garsonun tek
+    // izni `tables:read`'tir (migrations/identity/000017). İki katman da aynı
+    // yönde reddediyor; bu test davranışı sabitler, doğru olduğunu iddia etmez
+    // — garsonun menü okuması gerekiyorsa bu bir rego + seed kararıdır.
+    const waiter = await principal(request, ACCOUNTS.waiterSerdivan())
+    for (const path of ["/api/v1/catalog/categories", "/api/v1/catalog/products", "/api/v1/catalog/menus"]) {
+      const res = await waiter.api.get(path)
+      expect(res.status(), `${path} garsona kapalı olmalı`).toBe(403)
+    }
+    // Kontrol grubu: masa planını okuyabiliyor.
+    expect((await waiter.api.get(`/api/v1/pos/tables?branch_id=${waiter.ctx.branch_id}`)).status()).toBe(200)
   })
 
   test("Kırkpınar'da 10, Adapazarı'nda 0 şube fiyatı vardır", async ({ request }) => {

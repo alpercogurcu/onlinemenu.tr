@@ -38,7 +38,8 @@
     "integrations": "Entegrasyonlar",
     "fiscalTerminals": "Fiscal Terminaller",
     "fiscalSections": "Kısım Eşleme",
-    "detail": "Detay"
+    "detail": "Detay",
+    "branchPricing": "Şube Fiyatları"
   },
   "posTables": {
     "title": "Masalar",
@@ -320,6 +321,10 @@
       "validation": {
         "nameRequired": "Ürün adı zorunludur",
         "priceRequired": "Fiyat zorunludur"
+      },
+      "branchOverrides": {
+        "summary": "Bu ürünün {count} şubede farklı fiyatı/durumu var",
+        "link": "Şube Fiyatları"
       }
     },
     "groups": {
@@ -418,6 +423,49 @@
       "loadFailed": "Yüklenemedi.",
       "cancel": "Vazgeç",
       "rowActions": "{name} için işlemler"
+    },
+    "branchPricing": {
+      "title": "Şube Fiyatları",
+      "subtitle": "Her şubenin hangi ürünü, hangi fiyattan sattığını yönetin. Boş bırakılan şube fiyatı, tenant fiyatı anlamına gelir.",
+      "count": "{count} ürün · {overridden} şubeye özel",
+      "branch": "Şube",
+      "branchInactive": "{name} (pasif)",
+      "search": "Ürün ara",
+      "onlyOverridden": "Yalnız şubeye özel olanlar",
+      "columns": {
+        "product": "Ürün",
+        "category": "Kategori",
+        "tenantPrice": "Genel fiyat",
+        "branchPrice": "Şube fiyatı",
+        "available": "Satışta",
+        "state": "Durum"
+      },
+      "state": {
+        "tenant": "Genel fiyat",
+        "branch": "Şube fiyatı",
+        "closed": "Kapalı"
+      },
+      "uncategorized": "Kategorisiz",
+      "productInactive": "Ürün pasif",
+      "priceLabel": "{name} şube fiyatı",
+      "priceHint": "Genel fiyat kullanılıyor",
+      "availableLabel": "{name} bu şubede satışta",
+      "resetLabel": "{name} için varsayılana dön",
+      "reset": "Varsayılana dön",
+      "empty": {
+        "allTenant": "Bu şubede tüm ürünler genel fiyatla satılıyor",
+        "noMatch": "Aramanızla eşleşen ürün yok",
+        "noProducts": "Katalogda henüz ürün yok",
+        "noBranches": "Tanımlı şube yok"
+      },
+      "forbidden": {
+        "title": "Bu sayfaya erişim yetkiniz yok",
+        "body": "Şube fiyatlarını yalnızca işletme sahibi yönetebilir."
+      },
+      "toast": {
+        "error": "İşlem tamamlanamadı, değişiklik geri alındı",
+        "invalidPrice": "Geçerli bir tutar girin (örn. 125,50)"
+      }
     }
   },
   "storefront": {

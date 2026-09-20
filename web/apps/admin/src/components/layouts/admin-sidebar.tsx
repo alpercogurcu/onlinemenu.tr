@@ -11,6 +11,7 @@ import {
   SidebarHeader,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { useCan } from "@/hooks/use-can"
 import { useEnabledModules } from "@/lib/modules"
 import { useAuthStore } from "@/store/auth-store"
 
@@ -24,10 +25,11 @@ export default function AdminSidebar({
   const t = useTranslations()
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const enabledModules = useEnabledModules(tenantId)
+  const canManageBranchPricing = useCan("catalog.branch_override.manage")
 
   const tFn = (key: string) => t(key as Parameters<typeof t>[0])
 
-  const sections = getSidebarSections(tFn).filter(
+  const sections = getSidebarSections(tFn, { canManageBranchPricing }).filter(
     (section) => !section.module || enabledModules.includes(section.module),
   )
 

@@ -3,6 +3,7 @@
 import { useQueries } from "@tanstack/react-query"
 import axios from "axios"
 import { useTranslations } from "next-intl"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
@@ -20,6 +21,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useBreadcrumbLabel } from "@/components/layouts/dynamic-breadcrumb"
+import { useCan } from "@/hooks/use-can"
+import { useProductBranchOverrideBranches } from "@/hooks/use-branch-overrides"
 import {
   useCategories,
   useCreateProduct,
@@ -29,8 +32,10 @@ import {
   useProductModifierGroupIds,
   useUpdateProduct,
 } from "@/hooks/use-catalog"
+import { useBranches } from "@/hooks/use-tenant"
 import api from "@/lib/api"
 import { formatKurus } from "@/lib/money"
+import { useAuthStore } from "@/store/auth-store"
 import { TAX_RATE_OPTIONS, UNIT_OPTIONS, type MenuItem, type Product } from "@/types"
 
 // Route params are free-form strings — a stray/malformed /catalog/products/{id}
@@ -149,6 +154,19 @@ export function ProductEditor({ productId }: ProductEditorProps) {
     const items = menuItemsResults[i]?.data ?? []
     if (items.some((item) => item.product_id === productId)) menuIdsWithProduct.add(menu.id)
   })
+
+  // ADR-DATA-009: which branches sell this product differently. Manager-only —
+  // every other role would just collect 403s from the per-branch reads, so the
+  // fan-out stays off for them (and for an unsaved product).
+  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
+  const canManageBranchOverrides = useCan("catalog.branch_override.manage")
+  const branchOverridesEnabled = canManageBranchOverrides && !isNew && !invalidId
+  const { data: branchesData } = useBranches(branchOverridesEnabled ? tenantId : "")
+  const { branchIds: overriddenBranchIds } = useProductBranchOverrideBranches(
+    productId ?? "",
+    branchesData ?? [],
+    branchOverridesEnabled,
+  )
 
   const createProduct = useCreateProduct()
   const updateProduct = useUpdateProduct()
@@ -346,6 +364,20 @@ export function ProductEditor({ productId }: ProductEditorProps) {
             ) : null}
           </div>
           {!isNew ? <p className="text-sm text-muted-foreground">{summary}</p> : null}
+          {overriddenBranchIds.length > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("branchOverrides.summary", { count: overriddenBranchIds.length })} →{" "}
+              <Link
+                href={`/catalog/branch-pricing?${new URLSearchParams({
+                  branch: overriddenBranchIds[0],
+                  q: product?.name ?? values.name,
+                }).toString()}`}
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {t("branchOverrides.link")}
+              </Link>
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           {!isNew ? (

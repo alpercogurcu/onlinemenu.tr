@@ -1066,4 +1066,102 @@ test.describe("çoklu şube", () => {
     })
     expect(find(restored, PRODUCTS.lahmacun)).toBeDefined()
   })
+
+  test("Şube Fiyatları ekranı: yönetici şube B'yi seçer, ürüne şube fiyatı yazar, birini kapatır, rozetler görünür, varsayılana döner (ADR-DATA-009)", async ({ page }) => {
+    // Distinct from OVERRIDE_PRICE (31_000): a leftover row from the API test
+    // above can never satisfy an assertion here by accident.
+    const SCREEN_PRICE = 29_900
+    const priced = PRODUCTS.tavuk
+    const closed = PRODUCTS.lahmacun
+    const overridePath = (productId: string) => `/api/v1/catalog/branches/${branchB}/products/${productId}/override`
+    const isOverrideCall = (method: string, productId: string) => (res: { url: () => string; request: () => { method: () => string } }) =>
+      res.url().endsWith(overridePath(productId)) && res.request().method() === method
+    const overridesOf = async () =>
+      json<{ product_id: string; is_available: boolean; price_amount: number | null }[]>(
+        await manager.get(`/api/v1/catalog/branches/${branchB}/product-overrides`),
+        200,
+      )
+    const rowFor = (product: SeededProduct) => page.getByTestId(`branch-pricing-row-${product.id}`)
+
+    await clearOverride(manager, branchB, priced.id)
+    await clearOverride(manager, branchB, closed.id)
+
+    try {
+      await loginAs(page, USERS.manager)
+      await expect(page.getByRole("link", { name: "Şube Fiyatları" })).toBeVisible()
+      await gotoSpa(page, "/catalog/branch-pricing")
+
+      await page.getByRole("combobox", { name: "Şube" }).selectOption({ label: BRANCH_B_NAME })
+      await expect(rowFor(priced)).toBeVisible()
+
+      // Untouched: tenant price everywhere, nothing "şubeye özel".
+      await expect(rowFor(priced)).toContainText("Genel fiyat")
+      await expect(rowFor(priced).getByLabel(`${priced.name} şube fiyatı`)).toHaveValue("")
+      await page.getByRole("button", { name: "Yalnız şubeye özel olanlar" }).click()
+      await expect(page.getByText("Bu şubede tüm ürünler genel fiyatla satılıyor")).toBeVisible()
+      await page.getByRole("button", { name: "Yalnız şubeye özel olanlar" }).click()
+
+      // Branch price: typed in lira, committed with Enter, stored in kuruş.
+      const priceSaved = page.waitForResponse(isOverrideCall("PUT", priced.id))
+      await rowFor(priced).getByLabel(`${priced.name} şube fiyatı`).fill("299")
+      await page.keyboard.press("Enter")
+      expect((await priceSaved).status()).toBe(200)
+      await expect(rowFor(priced)).toContainText("Şube fiyatı")
+      await expect(rowFor(priced).getByLabel(`${priced.name} şube fiyatı`)).toHaveValue("299,00")
+
+      // Close another product on this branch.
+      const closeSaved = page.waitForResponse(isOverrideCall("PUT", closed.id))
+      // Click the visible track (the input itself is sr-only); uncheck() would
+      // fail because the controlled switch only flips once the optimistic
+      // write lands, after Playwright has already looked at it.
+      await rowFor(closed).locator("label").click()
+      expect((await closeSaved).status()).toBe(200)
+      await expect(rowFor(closed)).toContainText("Kapalı")
+      await expect(errorToast(page)).toHaveCount(0)
+
+      // The API agrees — and the closed product's price stayed empty, the
+      // priced one stayed available (both fields travel on every save).
+      const stored = await overridesOf()
+      expect(stored.find((o) => o.product_id === priced.id)).toMatchObject({ price_amount: SCREEN_PRICE, is_available: true })
+      expect(stored.find((o) => o.product_id === closed.id)).toMatchObject({ price_amount: null, is_available: false })
+
+      // Only the two changed products are "şubeye özel".
+      await page.getByRole("button", { name: "Yalnız şubeye özel olanlar" }).click()
+      await expect(rowFor(priced)).toBeVisible()
+      await expect(rowFor(closed)).toBeVisible()
+      await expect(rowFor(PRODUCTS.adana)).toHaveCount(0)
+      await page.getByRole("button", { name: "Yalnız şubeye özel olanlar" }).click()
+
+      // The branch's own cashier now sells at the screen price.
+      const listed = await json<{ id: string; price_amount: number; branch_price_overridden: boolean }[]>(
+        await cashierB.get(`/api/v1/catalog/categories/${SEEDED_CATEGORY_ID}/products?branch_id=${branchB}`),
+        200,
+      )
+      expect(listed.find((p) => p.id === priced.id)).toMatchObject({ price_amount: SCREEN_PRICE, branch_price_overridden: true })
+      expect(listed.find((p) => p.id === closed.id)).toBeUndefined()
+
+      // Varsayılana dön: both rows disappear server-side and the badges fall back.
+      for (const product of [priced, closed]) {
+        const deleted = page.waitForResponse(isOverrideCall("DELETE", product.id))
+        await rowFor(product).getByRole("button", { name: `${product.name} için varsayılana dön` }).click()
+        expect((await deleted).status()).toBe(204)
+        await expect(rowFor(product)).toContainText("Genel fiyat")
+      }
+      await expect(rowFor(closed).getByRole("switch")).toBeChecked()
+      expect((await overridesOf()).filter((o) => ([priced.id, closed.id] as string[]).includes(o.product_id))).toEqual([])
+      await expect(errorToast(page)).toHaveCount(0)
+    } finally {
+      await clearOverride(manager, branchB, priced.id)
+      await clearOverride(manager, branchB, closed.id)
+    }
+  })
+
+  test("Şube Fiyatları ekranı: şube kapsamlı kasiyer menüde bağlantıyı görmez, sayfaya gidince erişim uyarısı alır", async ({ page }) => {
+    await loginAs(page, USERS.cashier)
+    await expect(page.getByRole("link", { name: "Şube Fiyatları" })).toHaveCount(0)
+
+    await gotoSpa(page, "/catalog/branch-pricing")
+    await expect(page.getByText("Bu sayfaya erişim yetkiniz yok")).toBeVisible()
+    await expect(page.getByTestId(/^branch-pricing-row-/)).toHaveCount(0)
+  })
 })

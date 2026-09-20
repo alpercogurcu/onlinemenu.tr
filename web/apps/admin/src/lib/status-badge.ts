@@ -60,3 +60,19 @@ export function membershipStatusVariant(status: string): StatusBadgeVariant {
       return "neutral"
   }
 }
+
+// How a product sells on one branch (ADR-DATA-009): at the tenant price,
+// at the branch's own price, or not at all. "closed" outranks a price — a
+// product that is off the menu has no meaningful "selling price" to flag.
+export type BranchSaleState = "tenant" | "branch" | "closed"
+
+export function branchSaleStateVariant(state: BranchSaleState): StatusBadgeVariant {
+  switch (state) {
+    case "tenant":
+      return "neutral"
+    case "branch":
+      return "info"
+    case "closed":
+      return "warning"
+  }
+}

@@ -4,10 +4,11 @@
 import { render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import AdminSidebar from "@/components/layouts/admin-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { clearAccessToken, setAccessToken } from "@/lib/api"
 import { MOUNTED_MODULES, resolveEnabledModules } from "@/lib/modules"
 import messages from "@/messages/tr.json"
 import { useAuthStore } from "@/store/auth-store"
@@ -116,5 +117,51 @@ describe("AdminSidebar", () => {
     render(<AdminSidebar />, { wrapper: Wrapper })
 
     expect(groupLabels()).toEqual(["Genel", "POS", "Katalog", "Stok", "Ödeme", "İşletme"])
+  })
+})
+
+// ADR-DATA-009: "Şube Fiyatları" sits in the Katalog group but only the
+// manager (tenant owner) may open it, so every other role must not see a link
+// that leads to an access-denied page.
+describe("AdminSidebar branch pricing item", () => {
+  const ROLE = {
+    manager: "00000001-0000-0000-0000-000000000006",
+    cashier: "00000001-0000-0000-0000-000000000001",
+  }
+
+  function signIn(roleId: string) {
+    const enc = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url")
+    setAccessToken(`${enc({ alg: "HS256", typ: "CTX" })}.${enc({ rids: [roleId] })}.sig`)
+    useAuthStore.setState({ user: { id: "u1", name: "U", email: "u@x" }, tenantId: "tenant-1" })
+  }
+
+  beforeEach(() => {
+    tenantModules.value = undefined
+    tenantModules.isError = false
+  })
+
+  afterEach(() => {
+    clearAccessToken()
+    useAuthStore.setState({ user: null, tenantId: null })
+  })
+
+  it("shows it to the manager, linking to the pricing screen", () => {
+    signIn(ROLE.manager)
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(screen.getByRole("link", { name: "Şube Fiyatları" })).toHaveAttribute("href", "/catalog/branch-pricing")
+  })
+
+  it("hides it from any other role, and keeps the group labels unchanged", () => {
+    signIn(ROLE.cashier)
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(screen.queryByText("Şube Fiyatları")).not.toBeInTheDocument()
+    expect(groupLabels()).toEqual(["Genel", "POS", "Katalog", "Stok", "Ödeme", "İşletme"])
+  })
+
+  it("hides it when nobody is signed in", () => {
+    render(<AdminSidebar />, { wrapper: Wrapper })
+    expect(screen.queryByText("Şube Fiyatları")).not.toBeInTheDocument()
   })
 })

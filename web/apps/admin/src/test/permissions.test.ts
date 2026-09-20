@@ -100,3 +100,31 @@ describe("can (pos.order.accept)", () => {
     expect(can("pos.order.accept")).toBe(true)
   })
 })
+
+// ADR-DATA-009 §6: the action is granted to no named role, only to the manager
+// wildcard. It must have an (empty) ACTION_ROLES entry — an absent entry
+// defaults to "allowed" and would show every role a screen the API 403s.
+describe("can (catalog.branch_override.manage)", () => {
+  afterEach(() => {
+    clearAccessToken()
+  })
+
+  it("allows the manager wildcard role", () => {
+    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.manager]))
+    expect(can("catalog.branch_override.manage")).toBe(true)
+  })
+
+  it.each([
+    ["cashier", SYSTEM_ROLE_IDS.cashier],
+    ["shift_manager", SYSTEM_ROLE_IDS.shiftManager],
+    ["kitchen", "00000001-0000-0000-0000-000000000004"],
+    ["waiter", "00000001-0000-0000-0000-000000000008"],
+  ])("denies the %s role", (_name, roleId) => {
+    setAccessToken(ctxToken([roleId]))
+    expect(can("catalog.branch_override.manage")).toBe(false)
+  })
+
+  it("denies without a session", () => {
+    expect(can("catalog.branch_override.manage")).toBe(false)
+  })
+})

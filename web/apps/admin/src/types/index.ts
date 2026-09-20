@@ -32,6 +32,16 @@ export interface Product {
   created_at: string
   updated_at: string
 }
+// One row of GET /catalog/branches/{branchID}/product-overrides (ADR-DATA-009).
+// A product without a row sells at the tenant price on every branch.
+export interface BranchProductOverride {
+  branch_id: string
+  product_id: string
+  is_available: boolean
+  // Kuruş (int64); null means "use the tenant price".
+  price_amount: number | null
+  updated_at: string
+}
 export interface Category {
   id: string
   tenant_id: string

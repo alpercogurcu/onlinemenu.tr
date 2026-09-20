@@ -96,6 +96,7 @@ export default function DynamicBreadcrumb() {
     categories: t("categories"),
     modifiers: t("modifiers"),
     menus: t("menus"),
+    "branch-pricing": t("branchPricing"),
     inventory: t("inventory"),
     warehouses: t("warehouses"),
     "stock-items": t("stockItems"),

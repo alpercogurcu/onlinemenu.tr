@@ -14,6 +14,7 @@ import {
   Settings,
   ShieldCheck,
   ShoppingBag,
+  Store,
   Table2,
   Tag,
   Users,
@@ -64,7 +65,14 @@ export function getPOSMenuConfig(t: (key: string) => string): MenuItem[] {
   ]
 }
 
-export function getCatalogMenuConfig(t: (key: string) => string): MenuItem[] {
+// `canManageBranchPricing` is resolved by the caller (AdminSidebar, via
+// useCan) because this config is plain data — it cannot call a hook. The item
+// is hidden rather than disabled: a role that can never open it has no use
+// for a dead link.
+export function getCatalogMenuConfig(
+  t: (key: string) => string,
+  canManageBranchPricing = false,
+): MenuItem[] {
   return [
     {
       title: t("navigation.products"),
@@ -86,6 +94,15 @@ export function getCatalogMenuConfig(t: (key: string) => string): MenuItem[] {
       url: "/catalog/menus",
       icon: FileText,
     },
+    ...(canManageBranchPricing
+      ? [
+          {
+            title: t("navigation.branchPricing"),
+            url: "/catalog/branch-pricing",
+            icon: Store,
+          },
+        ]
+      : []),
   ]
 }
 
@@ -213,11 +230,14 @@ export function getSettingsMenuConfig(
   ]
 }
 
-export function getSidebarSections(t: (key: string) => string): SidebarSection[] {
+export function getSidebarSections(
+  t: (key: string) => string,
+  options: { canManageBranchPricing?: boolean } = {},
+): SidebarSection[] {
   return [
     { label: t("navigation.general"), items: getOverviewMenuConfig(t) },
     { label: t("navigation.pos"), module: "pos", items: getPOSMenuConfig(t) },
-    { label: t("navigation.catalog"), module: "catalog", items: getCatalogMenuConfig(t) },
+    { label: t("navigation.catalog"), module: "catalog", items: getCatalogMenuConfig(t, options.canManageBranchPricing) },
     { label: t("navigation.inventory"), module: "inventory", items: getInventoryMenuConfig(t) },
     { label: t("navigation.parties"), module: "party", items: getPartyMenuConfig(t) },
     // Payments are served by the pos module (payment/public is consumed

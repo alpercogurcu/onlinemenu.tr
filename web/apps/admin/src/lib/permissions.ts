@@ -114,6 +114,12 @@ const ACTION_ROLES: Record<string, ReadonlySet<string>> = {
   // Et" to them — the backend 403s it and the ticket would sit there with a
   // button that never works.
   "pos.order.accept": new Set(["cashier", "shift_manager"]),
+  // authz.rego catalog.branch_override.manage (ADR-DATA-009 §6): setting a
+  // branch's own product price / availability is the chain owner's call. The
+  // empty set is deliberate — the action is granted to no named role, only to
+  // the manager wildcard. Without this entry `can()` would default to allowed
+  // and every role would see a screen the backend answers 403 for.
+  "catalog.branch_override.manage": new Set(),
 }
 
 /**

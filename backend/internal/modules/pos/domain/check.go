@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,42 @@ func (s CheckStatus) Valid() bool {
 		return true
 	}
 	return false
+}
+
+// allowedCheckTransitions is the single source of truth for the check status
+// machine, matching allowedOrderTransitions (order.go) and
+// allowedTableTransitions (table.go) — docs/lessons-from-b2b.md item 2: the
+// transition rules live in ONE map, not in an if-chain per call site.
+//
+// "open" is the only non-terminal state. closed/cancelled/merged are all
+// terminal: a closed adisyon must never reopen (it has already been paid and
+// counted into a business day, ADR-DATA-003), a cancelled one must not be
+// resurrected into a sale, and a merged one's orders now hang off another
+// check (docs/pos-ux-spec.md §3c) so re-closing it would double-count.
+var allowedCheckTransitions = map[CheckStatus][]CheckStatus{
+	CheckStatusOpen: {CheckStatusClosed, CheckStatusCancelled, CheckStatusMerged},
+}
+
+// TransitionCheckStatus validates a proposed check status transition and
+// returns ErrInvalidTransition (the shared pos/domain sentinel declared in
+// order.go) if it is not allowed from the current status.
+//
+// The repo's guarded UPDATEs (CheckRepo.UpdateStatus / MarkMerged) call this
+// before touching the row, so the only two writers of checks.status both pass
+// through here — the "tek Transition() fonksiyonu" requirement. The SQL
+// `WHERE status = $expected` clause remains as the concurrency guard; this
+// function is the semantic one, and it fails the same way (ErrInvalidTransition)
+// whether the row moved under us or the requested edge simply does not exist.
+func TransitionCheckStatus(from, to CheckStatus) error {
+	if !to.Valid() {
+		return fmt.Errorf("pos/domain: invalid target check status %q: %w", to, ErrInvalidTransition)
+	}
+	for _, next := range allowedCheckTransitions[from] {
+		if next == to {
+			return nil
+		}
+	}
+	return fmt.Errorf("pos/domain: check %s -> %s: %w", from, to, ErrInvalidTransition)
 }
 
 // OpenedByKind discriminates who opened a check. It exists because

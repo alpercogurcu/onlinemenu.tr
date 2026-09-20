@@ -295,6 +295,14 @@ func (r *CheckRepo) TotalsByCheckIDs(ctx context.Context, tx pgx.Tx, checkIDs []
 // concurrent Close/Cancel calls serialize (only one observes "open"), while
 // this guard is a defense-in-depth check against the expected status.
 func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, status, expectedStatus domain.CheckStatus, closedBy *uuid.UUID) (domain.Check, error) {
+	// Semantic guard first: the SQL WHERE below only proves the row has not
+	// moved, not that the requested edge exists in the state machine. Both
+	// writers of checks.status route through domain.TransitionCheckStatus so
+	// the machine has a single chokepoint (docs/lessons-from-b2b.md item 2).
+	if err := domain.TransitionCheckStatus(expectedStatus, status); err != nil {
+		return domain.Check{}, fmt.Errorf("pos/repo/check: %s -> %s rejected by the check status machine: %w", expectedStatus, status, ErrInvalidTransition)
+	}
+
 	const q = `
 		UPDATE checks SET status = $2, closed_by = $4,
 		                  closed_at = CASE WHEN $2 IN ('closed','cancelled') THEN NOW() ELSE closed_at END,
@@ -374,6 +382,10 @@ func (r *CheckRepo) UpdateTable(ctx context.Context, tx pgx.Tx, id uuid.UUID, ta
 // that could set one without the other would only ever produce a constraint
 // violation. closed_at is deliberately left NULL — see pos/000008.
 func (r *CheckRepo) MarkMerged(ctx context.Context, tx pgx.Tx, id, targetCheckID uuid.UUID, expectedStatus domain.CheckStatus) (domain.Check, error) {
+	if err := domain.TransitionCheckStatus(expectedStatus, domain.CheckStatusMerged); err != nil {
+		return domain.Check{}, fmt.Errorf("pos/repo/check: %s -> merged rejected by the check status machine: %w", expectedStatus, ErrInvalidTransition)
+	}
+
 	const q = `
 		UPDATE checks SET status = 'merged', merged_into_check_id = $2, updated_at = NOW()
 		WHERE id = $1 AND status = $3

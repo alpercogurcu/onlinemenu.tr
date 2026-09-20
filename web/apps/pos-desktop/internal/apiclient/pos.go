@@ -45,6 +45,11 @@ type Product struct {
 	Unit        string `json:"unit"`
 	TaxRateBPS  int    `json:"tax_rate_bps"`
 	SortOrder   int16  `json:"sort_order"`
+	// IsActive is false for a deactivated product. The category listing still
+	// returns those, and the server refuses to sell them (invalid_order_line),
+	// so the POS must not offer them (see sellableProducts in the pos-desktop
+	// package).
+	IsActive bool `json:"is_active"`
 }
 
 // ListCategories calls GET /api/v1/catalog/categories.

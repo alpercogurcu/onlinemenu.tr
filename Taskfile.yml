@@ -134,6 +134,8 @@ tasks:
     cmds:
       - go build ./...
       - go vet ./...
+      # live_smoke_test.go is behind the `live` tag; vet it here so it cannot rot unnoticed.
+      - go vet -tags live ./...
       - go test -race -cover ./...
 
   pos:test:web:
@@ -141,6 +143,12 @@ tasks:
     dir: web
     cmds:
       - pnpm --filter @onlinemenu/pos-desktop test:run
+
+  pos:test:live:
+    desc: "POS desktop Go katmanı canlı smoke (çalışan dev API; POS_LIVE_API_URL, varsayılan http://localhost:8081). Dev DB'ye SMOKE-* kayıtları yazar — prod'a yöneltme"
+    dir: web/apps/pos-desktop
+    cmds:
+      - POS_LIVE_API_URL="${POS_LIVE_API_URL:-http://localhost:8081}" go test -tags live -run TestLiveSmoke -count=1 -v .
 
   pos:typecheck:
     desc: "POS desktop frontend tip denetimi (tsc --noEmit)"

@@ -170,6 +170,7 @@ func (a *App) ListProducts(categoryID string) ([]ProductDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+	products = sellableProducts(products)
 	out := make([]ProductDTO, len(products))
 	for i, p := range products {
 		out[i] = ProductDTO{

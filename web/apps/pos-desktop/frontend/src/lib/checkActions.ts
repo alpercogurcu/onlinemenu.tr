@@ -11,6 +11,9 @@ export type PlanTable = {
   active_check_id?: string
 }
 
+/** The backend's name for a free table (pos/domain.TableStatusEmpty) — NOT "available". */
+const FREE_TABLE_STATUS = 'empty'
+
 function holdsAnotherCheck(table: PlanTable, currentCheckId: string): boolean {
   return table.status === 'occupied' && Boolean(table.active_check_id) && table.active_check_id !== currentCheckId
 }
@@ -28,11 +31,11 @@ function holdsAnotherCheck(table: PlanTable, currentCheckId: string): boolean {
 export function canPickTable(kind: TargetKind, table: PlanTable, currentCheckId: string): boolean {
   switch (kind) {
     case 'transfer':
-      return table.status === 'available'
+      return table.status === FREE_TABLE_STATUS
     case 'merge':
       return holdsAnotherCheck(table, currentCheckId)
     case 'move-items':
-      return holdsAnotherCheck(table, currentCheckId) || table.status === 'available'
+      return holdsAnotherCheck(table, currentCheckId) || table.status === FREE_TABLE_STATUS
   }
 }
 

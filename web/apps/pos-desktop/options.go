@@ -311,3 +311,17 @@ func (a *App) optionsResolver() *optionsResolver {
 	a.optionsOnce.Do(func() { a.options = newOptionsResolver(a.api) })
 	return a.options
 }
+
+// sellableProducts drops deactivated products. GET /catalog/categories/{id}/products
+// returns them too, while POST /pos/orders refuses to sell them
+// (invalid_order_line) — without this filter the product grid offers tiles that
+// can only fail. Found by the live smoke (task pos:test:live).
+func sellableProducts(products []apiclient.Product) []apiclient.Product {
+	out := make([]apiclient.Product, 0, len(products))
+	for _, p := range products {
+		if p.IsActive {
+			out = append(out, p)
+		}
+	}
+	return out
+}

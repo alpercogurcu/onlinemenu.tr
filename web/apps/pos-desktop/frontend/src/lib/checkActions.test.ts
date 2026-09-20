@@ -4,12 +4,12 @@ import { canPickTable, confirmMerge, moveNotice, targetPrompt, type PlanTable } 
 const CURRENT = 'check-current'
 
 function table(overrides: Partial<PlanTable>): PlanTable {
-  return { name: 'Masa 1', status: 'available', ...overrides }
+  return { name: 'Masa 1', status: 'empty', ...overrides }
 }
 
 describe('canPickTable — transfer', () => {
   it('accepts only a free table', () => {
-    expect(canPickTable('transfer', table({ status: 'available' }), CURRENT)).toBe(true)
+    expect(canPickTable('transfer', table({ status: 'empty' }), CURRENT)).toBe(true)
     expect(canPickTable('transfer', table({ status: 'occupied', active_check_id: 'other' }), CURRENT)).toBe(false)
     expect(canPickTable('transfer', table({ status: 'reserved' }), CURRENT)).toBe(false)
     expect(canPickTable('transfer', table({ status: 'cleaning' }), CURRENT)).toBe(false)
@@ -26,7 +26,7 @@ describe('canPickTable — merge', () => {
   })
 
   it('refuses free tables and an occupied table with no known adisyon', () => {
-    expect(canPickTable('merge', table({ status: 'available' }), CURRENT)).toBe(false)
+    expect(canPickTable('merge', table({ status: 'empty' }), CURRENT)).toBe(false)
     expect(canPickTable('merge', table({ status: 'occupied' }), CURRENT)).toBe(false)
   })
 })
@@ -34,7 +34,7 @@ describe('canPickTable — merge', () => {
 describe('canPickTable — move-items', () => {
   it('accepts another adisyon or a free table (a new adisyon is opened for it)', () => {
     expect(canPickTable('move-items', table({ status: 'occupied', active_check_id: 'other' }), CURRENT)).toBe(true)
-    expect(canPickTable('move-items', table({ status: 'available' }), CURRENT)).toBe(true)
+    expect(canPickTable('move-items', table({ status: 'empty' }), CURRENT)).toBe(true)
   })
 
   it('refuses the current adisyon and cleaning / reserved tables', () => {
@@ -62,5 +62,12 @@ describe('texts', () => {
   it('reports a move with the right count', () => {
     expect(moveNotice(1, 'Masa 7')).toBe('1 kalem Masa 7 adisyonuna taşındı.')
     expect(moveNotice(3, 'Masa 7')).toBe('3 kalem Masa 7 adisyonuna taşındı.')
+  })
+})
+
+describe('table status vocabulary', () => {
+  it("uses the backend's 'empty', so a real free table is offered (pos/domain.TableStatusEmpty)", () => {
+    expect(canPickTable('transfer', { name: 'Masa 1', status: 'empty' }, 'x')).toBe(true)
+    expect(canPickTable('transfer', { name: 'Masa 1', status: 'available' }, 'x')).toBe(false)
   })
 })

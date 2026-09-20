@@ -351,3 +351,17 @@ func TestOptionsResolver_ProductMeta_UnknownProductFails(t *testing.T) {
 		t.Fatal("expected an error for a product the catalog does not know")
 	}
 }
+
+func TestSellableProducts_DropsDeactivatedOnes(t *testing.T) {
+	got := sellableProducts([]apiclient.Product{
+		{ID: "a", Name: "Aktif", IsActive: true},
+		{ID: "b", Name: "Pasif", IsActive: false},
+		{ID: "c", Name: "Aktif 2", IsActive: true},
+	})
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "c" {
+		t.Fatalf("sellable = %+v, want the two active products in order", got)
+	}
+	if got := sellableProducts(nil); got == nil || len(got) != 0 {
+		t.Fatalf("no products must give an empty (non-nil) list, got %v", got)
+	}
+}

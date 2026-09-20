@@ -448,3 +448,206 @@ siparişlerini hâlâ ilerletebiliyor; Keycloak `KC_CACHE=local` olduğu için k
 yaratılınca tüm oturumlar düşer (kullanıcılar yeniden giriş yapar); admin Dockerfile `runtime`
 stage'i `API_CORE_ORIGIN` varsayılanı taşımıyor (compose sağlıyor).
 
+
+## 12. Prod test hesapları ve kabul turu (2026-09-20)
+
+**Bağlam / karar:** prod (`*.diverstreetfood.com`) şu an **test ortamı** olarak kullanılıyor.
+b2b’den aktarılan gerçek katalog ve şube verisi (5 şube, 21 ürün, 20 şube fiyatı — `docs/b2b-import-plan.md` §10)
+**duruyor**; hesaplar test hesabıdır. Gerçek personel davet edilmedi
+(`deploy/b2b-staff.local.commands.sh` çalıştırılmadı), gerçek yönetici
+`admin@diverstreetfood.com` hesabına **dokunulmadı**.
+
+### 12.1 Kabul testi Keycloak istemcisi
+
+`e2e-prod` — realm `onlinemenu`, **confidential**, yalnız **direct access grant**
+(standard/implicit/service-account kapalı), `defaultClientScopes = [basic, onlinemenu-audience]`,
+`optionalClientScopes = [onlinemenu-context-claims]`. Üretim kullanıcıları bu istemciyi kullanmaz;
+yalnız kabul testleri parola akışıyla token alır. Secret **`deploy/.env.diverserver.local`**
+(`E2E_PROD_CLIENT_SECRET`, git dışı).
+
+Doğrulandı: `iss = https://auth.diverstreetfood.com/realms/onlinemenu`,
+`aud = onlinemenu-backend` (API'nin `KEYCLOAK_AUDIENCE` değeriyle birebir), `azp = e2e-prod`.
+
+> Test turu bittikten sonra bu istemci **silinebilir** (kabul turu dışında ihtiyaç yok).
+
+### 12.2 Test hesapları
+
+Parolalar **yalnız** `deploy/.env.diverserver.local` → `TEST_ACCOUNTS` bloğunda (git dışı).
+
+> ⚠️ **Çevrimdışı kopya bayat:** §10'daki Google Drive `onlinemenu-secrets/`
+> klasöründeki `.env.diverserver.local` kopyası bu bloktan **önceki** hâldir.
+> Drive'dan geri yükleyen biri test hesaplarının parolalarını ve
+> `E2E_PROD_CLIENT_SECRET`'ı bulamaz. Kopya tazelenmeli.
+Tümü Keycloak `reset-password` ile **kalıcı** parolalıdır, required action yoktur
+(e-posta akışına bağımlı değil). `admin+…` adresleri artı-adresleme ile gerçek
+`admin@diverstreetfood.com` kutusuna düşer — davet postaları zararsızdır.
+
+| E-posta | Rol | Şube | Nasıl oluşturuldu |
+|---|---|---|---|
+| `test.yonetici@diverstreetfood.com` | Yönetici | zincir geneli (branch NULL) | Keycloak Admin API + `persons`/`memberships` SQL |
+| `admin+kasiyer.serdivan@diverstreetfood.com` | Kasiyer | Serdivan | `POST /v1/identity/{tid}/staff` |
+| `admin+garson.serdivan@diverstreetfood.com` | Garson | Serdivan | aynı |
+| `admin+mutfak.serdivan@diverstreetfood.com` | Mutfak | Serdivan | aynı |
+| `admin+kasiyer.izmit@diverstreetfood.com` | Kasiyer | İzmit | aynı |
+| `admin+garson.izmit@diverstreetfood.com` | Garson | İzmit | aynı |
+| `admin+mutfak.izmit@diverstreetfood.com` | Mutfak | İzmit | aynı |
+| `admin+kasiyer.adapazari@diverstreetfood.com` | Kasiyer | Adapazarı | aynı |
+| `admin+kasiyer.kirkpinar@diverstreetfood.com` | Kasiyer | Kırkpınar | aynı |
+
+Staff ucu 8/8 hesapta `201` döndü; `keycloak_user_created=true`, `notification_sent=true`
+(SMTP çalışıyor, `notification_error` boş).
+
+### 12.3 Şube kurulumu (test masaları)
+
+| Şube | Bölge | Masa | QR |
+|---|---|---|---|
+| Serdivan | Salon (mevcut) | 3 (mevcut, dokunulmadı) | 3 yeni |
+| İzmit | Salon (yeni) | Masa 1–6 (yeni) | 6 yeni |
+| Adapazarı | Salon (yeni) | Masa 1–6 (yeni) | 6 yeni |
+| Kırkpınar | Salon (yeni) | Masa 1–6 (yeni) | 6 yeni |
+| İmalat Merkezi | — | masa yok (bilinçli) | — |
+
+Hepsi POS/storefront REST uçlarıyla oluşturuldu (doğrudan SQL değil), yönetici CTX token'ıyla.
+QR token'ları yalnız oluşturma yanıtında döner (DB'de `token_hash`); kabul turu için geçici
+olarak saklandı, repoya yazılmadı.
+
+### 12.4 Kabul testi paketi — `web/apps/admin/e2e-prod/`
+
+Dev paketi (`web/apps/admin/e2e/`) **değiştirilmedi**. Prod için ayrı, kendi
+Playwright yapılandırması olan bir paket eklendi:
+
+```
+set -a; . deploy/.env.diverserver.local; set +a
+cd web/apps/admin
+E2E_PROD=1 npx playwright test -c e2e-prod/playwright.config.ts
+```
+
+- `E2E_PROD=1` verilmeden **çalışmaz**: `e2e-prod/global-setup.ts` tüm koşuyu
+  reddeder, `e2e-prod/fixtures/prod.ts` ayrıca import anında hata fırlatır
+  (bir spec import'u unutsa bile koşu durur).
+- Kimlik bilgileri yalnız ortamdan okunur; repoda hiçbir parola/QR token yok.
+- Adres/ortam değişkenleri: `E2E_PROD_API_URL`, `E2E_PROD_BASE_URL`,
+  `E2E_PROD_KEYCLOAK_URL`, `E2E_PROD_REALM`, `E2E_PROD_CLIENT_ID/SECRET`.
+- Şube/ürün kimlikleri **sabit yazılmadı**; canlı API'den slug/ad ile çözülür.
+- Ters proxy hız sınırı (bkz. bulgu B4) yüzünden her API çağrısı 503'te
+  geri çekilerek yeniden denenir.
+
+| Dosya | Senaryo |
+|---|---|
+| `a-branch-pricing.spec.ts` | (a) şube fiyat override'ı |
+| `b-cross-branch.spec.ts` | (b) çapraz şube erişimi |
+| `c-cash-day.spec.ts` | (c) Serdivan tam kasa günü (KDS arayüzü dahil) |
+| `d-table-ops.spec.ts` | (d) masa taşıma / birleştirme / kalem taşıma |
+| `e-guest-qr.spec.ts` | (e) misafir QR menüsü ve siparişi |
+| `f-admin-ui.spec.ts` | (f) yönetim paneli ekranları |
+| `g-cost-projection.spec.ts` | (g) maliyet alanı sızıntısı |
+
+### 12.5 Senaryo sonuçları
+
+Tam paket canlı prod'a karşı koşuldu: **23/23 geçti** (2026-09-20, ~22 sn).
+Tüm senaryolar kendi verisini temizler; koşu sonunda prod'da açık adisyon,
+açık kasa oturumu, kirli masa veya artık seçenek grubu kalmadı (DB ile doğrulandı).
+
+| # | Senaryo | Sonuç |
+|---|---|---|
+| a | İzmit kasiyeri American Smash'i 490 TL görür; o fiyatla sipariş **201**, 470 TL ile **422 `price_mismatch`**; Serdivan 470 TL; İzmit/Kırkpınar 10'ar override, Adapazarı/Serdivan 0 | **GEÇTİ** |
+| b | İzmit kasiyeri Serdivan adisyonunu tekil okumada **404**, Serdivan listesinde **403**, kendi listesinde göremiyor, çapraz ödeme reddediliyor | **GEÇTİ** |
+| c | Kasa aç (ikinci açış 409, negatif 422) → masaya adisyon → seçeneksiz + seçenekli sipariş → KDS arayüzünden hazırla/hazır → kalem bazlı + kalan nakit (idempotent; anahtarsız 422; eksik ödemeyle kapanış 409) → mock ÖKC fişi → kapanış (kapalı adisyona sipariş 409) → masa `cleaning`→`empty` (kasiyer) → sayım farkı −25,00 TL → kasa kapanış → gün sonu raporu (şube kapsamlı) | **GEÇTİ** |
+| d | Masa taşıma, adisyon birleştirme (`merged`, tutar hedefe), kalem taşıma, garson yetki sınırı | **GEÇTİ** |
+| e | İzmit QR menüsü 490 TL, Serdivan 470 TL; misafir siparişi 201 ve tutarı sunucu belirliyor | **GEÇTİ** (geçici menü ile — bkz. bulgu B1) |
+| f | Test yöneticisi Keycloak SSO ile panele giriyor; Şube Fiyatları'nda İzmit **10** "Şube fiyatı" rozeti / Serdivan **0**; Kullanıcılar sayfasında 8 `PRODTEST` personeli şube etiketiyle; Şubeler listesi **5** | **GEÇTİ** |
+| g | `cost*` anahtarı hiçbir yanıtta yok (7 uç + kasiyer projeksiyonu) | **GEÇTİ** (sınırlı — bkz. bulgu B5) |
+
+### 12.6 Bulgular (düzeltilmedi, yalnız raporlanıyor)
+
+**B1 — Misafir QR menüsü prod'da boş; `docs/b2b-import-plan.md` §5 hatalı.**
+Storefront menü read model'i `menu_items`'tan beslenir:
+`backend/internal/modules/catalog/repo/storefront_menu_repo.go:104-123`
+(`visible_items` CTE `FROM menu_items mi JOIN menus m …` ile başlar). Prod'da
+hiç `menus` kaydı yok, dolayısıyla QR okutulduğunda oturum açılıyor ama
+`GET /api/public/v1/menu` **`{"categories":[]}`** dönüyor (ampirik doğrulandı).
+`docs/b2b-import-plan.md` §5'teki "`menus`/`menu_items` aktarılmaz … QR menüsü
+menüsüz çözülür" satırı yanlıştır — şube fiyat override'ı menüyü ikame etmiyor,
+yalnız menüdeki fiyatı değiştiriyor. Kabul testi (e) bunu kanıtlayabilmek için
+geçici bir menü kurup sonunda pasifleştirir. **Karar gerekiyor:** pilot için
+kalıcı bir tenant-geneli menü açılmalı, yoksa QR siparişi hiç çalışmaz.
+
+**B2 — Personel daveti Keycloak'ta `lastName` yazmıyor; hesap "not fully set up" kalıyor.**
+`backend/internal/platform/keycloak/client.go:322` `FirstName: req.FullName`
+atıyor, `LastName` hiç set edilmiyor. Prod realm'inin kullanıcı profilinde
+`lastName` `user` rolü için **zorunlu** (`GET /admin/realms/onlinemenu/users/profile`).
+Sonuç: `POST /v1/identity/{tid}/staff` ile açılan her hesap eksik profilli
+doğuyor; parola akışı (direct grant) `invalid_grant · "Account is not fully set up"`
+ile reddediliyor, tarayıcı girişinde ise kullanıcı panele varmadan önce
+"Hesap bilgilerini güncelle" formuna düşüyor. 8/8 test hesabında görüldü;
+test için `lastName` elle dolduruldu. Öneri: ad/soyadı `full_name`'den ayırın
+(`seed`/`keycloak-harden.sh` zaten `rsplit(" ", 1)` yapıyor) ya da realm'de
+`lastName` zorunluluğunu kaldırın.
+
+**B3 — Katalog listesinde `branch_id` opsiyonel; şube kapsamlı kullanıcıya tenant fiyatı dönüyor.**
+`backend/internal/modules/catalog/http/branch_override_handler.go:145-154`:
+parametre yoksa "tenant default". İzmit kasiyerinin CTX token'ı şubesini
+kesin olarak taşıdığı hâlde `GET /api/v1/catalog/products` (parametresiz)
+American Smash'i **470 TL** (`branch_price_overridden:false`) döndürüyor;
+`?branch_id=<İzmit>` ile **490 TL**. Sipariş ucu katalogdan yeniden
+fiyatlandırdığı için yanlış tahsilat oluşmuyor (422 `price_mismatch`), ama
+parametreyi unutan bir POS/istemci ekranda yanlış fiyat gösterir ve kasiyer
+siparişi geçiremez. Öneri: şube kapsamlı principal için varsayılanı kendi
+şubesi yapmak.
+
+**B4 — Ters proxy hız sınırı tek IP başına 10 r/s ve 429 değil 503 dönüyor.**
+Direktif repoda: `deploy/nginx/diverserver.conf:152`
+`limit_req zone=api burst=40 nodelay;`. **Hızı belirleyen zone tanımı ise
+onlinemenu yığınında değil** — pilotun genel giriş kapısı kardeş b2b
+yığınının ters proxy'sidir (`b2b_nginx` konteyneri; onlinemenu'nün kendi
+nginx konteyneri **yok**) ve oran orada tanımlıdır:
+`b2b_nginx:/etc/nginx/nginx.conf:38`
+`limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s`.
+Yani bu sınırı değiştirmek **b2b'yi de etkiler**; değişiklik iki ürünün ortak
+kararıdır. Kabul turu
+sırasında ampirik olarak tetiklendi (nginx error log: `limiting requests,
+excess: 40.140 by zone "api"`), API konteyneri sağlıklıyken istemci
+`503 Service Temporarily Unavailable` aldı. İki sorun:
+1. **Ölçek riski:** bir şubenin tüm POS cihazları tek NAT IP'sinin arkasındadır;
+   gerçek bir servis saatinde 10 r/s şube başına değil **işletme başına**
+   bütçedir. §10'daki "rate-limit zone kararı" açık maddesi bununla doğrulandı.
+2. **Hatalı durum kodu:** 503 "arka uç çöktü" ile "hız sınırı" arasında ayrım
+   bırakmıyor; ADR-OPS-003 anlamında doğru cevap 429'dur
+   (menü uygulaması `rate_limited` kodunu zaten bekliyor,
+   `web/apps/menu/src/lib/api.ts`). Kabul paketi bu yüzden 503'te geri çekilip yeniden deniyor —
+   personel **ve** misafir uçlarında; tam paket koşusu ikisini de tetikledi.
+
+**B5 — (g) senaryosunun kanıt gücü sınırlı.**
+Yanıtlarda hiçbir `cost*` anahtarı yok (7 uç + kasiyer projeksiyonu denendi),
+ancak b2b aktarımında `cost_price_tl` bilerek dışarıda bırakıldığı için
+prod kataloğunda **hiç maliyet verisi yok**. Yani test "projeksiyon maliyeti
+süzüyor"u değil "ortada maliyet yok"u doğruluyor. Maliyet alanı bir gün
+kataloğa girerse bu testin yeniden koşulması gerekir.
+
+**B6 — Adisyon kapanışından sonra masa `cleaning`'e geçişi asenkron.**
+Kapanış/iptal yanıtı 200 döndükten hemen sonra masayı `empty` yapmak, durumu
+`cleaning`'e çeken olay yolunu yarıştırıp masayı kirli bırakabiliyor
+(2026-09-20 koşusunda İzmit "Masa 4" böyle kaldı). Kabul paketi teardown'da
+plan gerçekten `empty` okuyana kadar tekrar deniyor; ürün tarafında POS
+arayüzünün de aynı yarışa açık olup olmadığı incelenmeli.
+
+### 12.7 Bu turda prod'a eklenenler ve geri alma
+
+Hiçbir gerçek veri silinmedi/değiştirilmedi; aşağıdakilerin **tamamı** bu kabul
+turunda eklendi ve test bitince kaldırılabilir.
+
+| Ne | Nerede | Geri alma |
+|---|---|---|
+| `e2e-prod` Keycloak istemcisi | realm `onlinemenu` | Keycloak Admin API / konsol → client sil; `E2E_PROD_CLIENT_SECRET` satırını `.local`'dan çıkar |
+| 9 test kullanıcısı | Keycloak + `persons` + `memberships` | Keycloak'ta kullanıcıları sil; SQL'de `persons.email LIKE 'admin+%'` ve `test.yonetici@%` satırları (+ `memberships`) |
+| 3 bölge ("Salon") + 18 masa | İzmit/Adapazarı/Kırkpınar | `tables` → `table_zones` sırasıyla sil (FK `ON DELETE RESTRICT`) |
+| 21 QR kodu | `storefront_qr_codes` | `POST /api/v1/storefront/qr-codes/{id}/revoke` ya da satır silme |
+| `PRODTEST Menü` (+1 menü kalemi) | `menus` / `menu_items` | **Durum: bkz. aşağıdaki not** |
+| `PRODTEST-*` adisyon/sipariş/ödeme/kasa oturumu kayıtları | POS/payment tabloları | Hepsi kapalı/iptal; `task deploy:reset-test-data` bu kümeyi sıfırlar |
+
+**`PRODTEST Menü` durumu:** (e) senaryosunun teardown'u menüyü **pasifleştirir**,
+yani QR menüsü bu turdan önceki hâline (boş) döner. Menü satırı pasif olarak
+kataloğda kalır — silme ucu yok (`catalog` yalnızca create/update sunar) ve
+tekrar koşuda yeniden kullanılır. Pilotun QR siparişini gerçekten açması için
+**kalıcı ve gerçek** bir menü kaydı gerekir (bulgu B1); bu ürün kararıdır,
+kabul testi bunu kendiliğinden yapmaz.

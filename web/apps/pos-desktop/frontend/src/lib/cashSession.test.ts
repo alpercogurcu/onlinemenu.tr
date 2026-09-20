@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  cashSessionBannerKind,
   computeDifference,
   denominationTotal,
   emptyDenominationRows,
@@ -168,5 +169,23 @@ describe('isValidOpeningAmount', () => {
 
   it('rejects a negative amount', () => {
     expect(isValidOpeningAmount(-100)).toBe(false)
+  })
+})
+
+describe('cashSessionBannerKind', () => {
+  it('stays silent until the first status check has resolved', () => {
+    expect(cashSessionBannerKind(false, null, false)).toBeNull()
+  })
+
+  it('warns when there is no open session', () => {
+    expect(cashSessionBannerKind(true, null, false)).toBe('missing')
+  })
+
+  it('warns when the submitted count went stale', () => {
+    expect(cashSessionBannerKind(true, { id: 's' }, true)).toBe('stale')
+  })
+
+  it('needs no banner while an open session is on track', () => {
+    expect(cashSessionBannerKind(true, { id: 's' }, false)).toBeNull()
   })
 })

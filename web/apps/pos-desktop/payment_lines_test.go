@@ -106,3 +106,14 @@ func TestBuildFiscalLines_UncategorizedProductGoesWithoutACategory(t *testing.T)
 		t.Fatalf("lines=%+v err=%v", lines, err)
 	}
 }
+
+func TestToCheckDTO_CarriesTheRunningTotalForTheCheckRail(t *testing.T) {
+	total := int64(24000)
+	dto := toCheckDTO(apiclient.Check{ID: "c1", Status: "open", Total: &total})
+	if dto.Total == nil || *dto.Total != 24000 {
+		t.Fatalf("Total = %v, want 24000 — the open-checks rail shows it (bulgu #10)", dto.Total)
+	}
+	if toCheckDTO(apiclient.Check{ID: "c2"}).Total != nil {
+		t.Fatal("a check the backend sent no total for must stay nil, not show ₺0")
+	}
+}

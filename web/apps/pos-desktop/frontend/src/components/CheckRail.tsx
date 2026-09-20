@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
+import { formatMoney } from '../lib/format'
 import { PendingFiscalDot } from './PendingFiscalDot'
 
 type CheckRailProps = {
@@ -77,6 +78,9 @@ export function CheckRail({
                     </span>
                   </span>
                   {awaitingFiscalCheckIds.has(chk.id) && <PendingFiscalDot />}
+                  {chk.total !== undefined && chk.total !== null && (
+                    <span className="money shrink-0 font-semibold tabular-nums text-ink">{formatMoney(chk.total)}</span>
+                  )}
                 </button>
               </li>
             ))}

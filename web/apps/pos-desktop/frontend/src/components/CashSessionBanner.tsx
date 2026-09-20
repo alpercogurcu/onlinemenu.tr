@@ -2,71 +2,50 @@ import type { main } from '../../wailsjs/go/models'
 import { formatMoney } from '../lib/format'
 
 type CashSessionBannerProps = {
-  /** False until the first GetActiveCashSession call has resolved — renders
-   * nothing rather than flashing "kasa kapalı" before the app even knows. */
-  checked: boolean
-  session: main.CashSessionDTO | null
-  /** A submitted closing count has drifted from what it was counted against
-   * (see hooks/useCashSession.ts) — shown even when the modal is closed, so
-   * a cashier who walked away mid-kapanış is not surprised by it later. */
-  stale: boolean
+  kind: 'missing' | 'stale'
   onOpen: () => void
 }
 
 /**
- * Full-width banner, same visual slot as the printError/mali-kayıt-hatası
- * rows in App.tsx (right under the header) — a badge next to "Çıkış" would be
- * missable on a touchscreen, and ADR-DATA-008's task brief is explicit: "do
- * not silently allow selling as if nothing is missing". This does not BLOCK
- * selling (the backend does not gate RegisterCashPayment on cash session
- * state — see the report), it only makes the missing state impossible to miss.
+ * Warning row for a cash-session problem, same visual slot as the other
+ * banners under the header (a badge next to "Çıkış" would be missable on a
+ * touchscreen, and ADR-DATA-008's task brief is explicit: "do not silently
+ * allow selling as if nothing is missing"). It does not BLOCK selling (the
+ * backend does not gate RegisterPayment on card sales, and cash sales are
+ * refused server-side with a clear message), it only makes the missing state
+ * impossible to miss.
  *
- * Renders nothing once a session is open and not stale — an open, on-track
- * cash session needs no persistent chrome; the modal (opened via this same
- * banner turning into a compact status line) is where its figures live.
+ * Only the two warning states render here (see lib/cashSession's
+ * cashSessionBannerKind). An open, on-track session used to add a permanent
+ * status row; it is now CashSessionStatusButton in the header, so the banner
+ * area holds warnings only (bulgu #11).
  */
-export function CashSessionBanner({ checked, session, stale, onOpen }: CashSessionBannerProps) {
-  if (!checked) return null
-
-  if (!session) {
-    return (
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
-        <span>Bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı.</span>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
-        >
-          Kasa Aç
-        </button>
-      </div>
-    )
-  }
-
-  if (stale) {
-    return (
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
-        <span>Kasa sayımı bayatladı — kasa bakiyesi değişti, yeniden sayılmalı.</span>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
-        >
-          Kasayı Aç
-        </button>
-      </div>
-    )
-  }
-
+export function CashSessionBanner({ kind, onOpen }: CashSessionBannerProps) {
+  const missing = kind === 'missing'
   return (
-    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-0 text-xs text-ink-dim">
+    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
       <span>
-        Kasa açık — beklenen kapanış {formatMoney(session.expected_close)}
-        {session.status === 'closing_control' ? ' (sayım gönderildi)' : ''}
+        {missing
+          ? 'Bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı.'
+          : 'Kasa sayımı bayatladı — kasa bakiyesi değişti, yeniden sayılmalı.'}
       </span>
-      <button type="button" onClick={onOpen} className="min-h-12 shrink-0 rounded px-3 font-semibold text-ink">
-        Kasa
+      <button
+        type="button"
+        onClick={onOpen}
+        className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+      >
+        {missing ? 'Kasa Aç' : 'Kasayı Aç'}
       </button>
     </div>
+  )
+}
+
+/** Header button for an open, on-track cash session: the expected drawer total, one tap to the kasa screen. */
+export function CashSessionStatusButton({ session, onOpen }: { session: main.CashSessionDTO; onOpen: () => void }) {
+  return (
+    <button type="button" onClick={onOpen} className="min-h-12 rounded px-2 text-ink-dim">
+      Kasa açık · {formatMoney(session.expected_close)}
+      {session.status === 'closing_control' ? ' (sayım gönderildi)' : ''}
+    </button>
   )
 }

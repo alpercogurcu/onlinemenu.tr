@@ -149,6 +149,12 @@ type Check struct {
 	Note       string     `json:"note"`
 	OpenedAt   time.Time  `json:"opened_at"`
 	ClosedAt   *time.Time `json:"closed_at"`
+	// Total is in kuruş and only present on list/get responses (the backend
+	// leaves it out of open/close/cancel/transfer/merge answers).
+	Total *int64 `json:"total,omitempty"`
+	// MergedIntoCheckID names the adisyon that absorbed this one when its
+	// status is "merged".
+	MergedIntoCheckID *string `json:"merged_into_check_id,omitempty"`
 }
 
 // ListOpenChecks calls GET /api/v1/pos/checks and filters to status "open"
@@ -241,6 +247,60 @@ func (c *Client) CloseCheck(ctx context.Context, checkID string) (Check, error) 
 	path := fmt.Sprintf("/api/v1/pos/checks/%s/close", checkID)
 	if err := c.doIdempotent(ctx, http.MethodPost, path, nil, &out); err != nil {
 		return Check{}, fmt.Errorf("apiclient: close check: %w", err)
+	}
+	return out, nil
+}
+
+// TransferCheck calls POST /api/v1/pos/checks/{id}/transfer: moves an open
+// adisyon to another table. The backend flips both table statuses in the same
+// transaction (the client cannot — that route needs pos.table.manage, which a
+// cashier lacks). Idempotency-Key required (ADR-SEC-003); an identical retry
+// returns the same result rather than moving twice. A conflict answers 409 with
+// a machine-readable code ("table_occupied", "check_not_open", ...), which stays
+// in the returned error text for the frontend's Turkish mapping.
+func (c *Client) TransferCheck(ctx context.Context, checkID, tableID string) (Check, error) {
+	if checkID == "" || tableID == "" {
+		return Check{}, fmt.Errorf("apiclient: transfer check: check_id and table_id are required")
+	}
+	var out Check
+	path := fmt.Sprintf("/api/v1/pos/checks/%s/transfer", url.PathEscape(checkID))
+	if err := c.doIdempotent(ctx, http.MethodPost, path, map[string]string{"table_id": tableID}, &out); err != nil {
+		return Check{}, fmt.Errorf("apiclient: transfer check: %w", err)
+	}
+	return out, nil
+}
+
+// MergeChecks calls POST /api/v1/pos/checks/{targetCheckID}/merge: folds the
+// source adisyon into the target one. The path id is the SURVIVING check; the
+// source becomes "merged". A source with any payment is refused (409
+// "payments_present"). Idempotency-Key required.
+func (c *Client) MergeChecks(ctx context.Context, targetCheckID, sourceCheckID string) (Check, error) {
+	if targetCheckID == "" || sourceCheckID == "" {
+		return Check{}, fmt.Errorf("apiclient: merge checks: target and source check ids are required")
+	}
+	var out Check
+	path := fmt.Sprintf("/api/v1/pos/checks/%s/merge", url.PathEscape(targetCheckID))
+	if err := c.doIdempotent(ctx, http.MethodPost, path, map[string]string{"source_check_id": sourceCheckID}, &out); err != nil {
+		return Check{}, fmt.Errorf("apiclient: merge checks: %w", err)
+	}
+	return out, nil
+}
+
+// MoveCheckItems calls POST /api/v1/pos/checks/{sourceCheckID}/move-items: moves
+// the chosen order items onto the target adisyon and answers the TARGET check.
+// Idempotency-Key required.
+func (c *Client) MoveCheckItems(ctx context.Context, sourceCheckID, targetCheckID string, orderItemIDs []string) (Check, error) {
+	if sourceCheckID == "" || targetCheckID == "" {
+		return Check{}, fmt.Errorf("apiclient: move items: source and target check ids are required")
+	}
+	if len(orderItemIDs) == 0 {
+		return Check{}, fmt.Errorf("apiclient: move items: at least one order item is required")
+	}
+	var out Check
+	path := fmt.Sprintf("/api/v1/pos/checks/%s/move-items", url.PathEscape(sourceCheckID))
+	body := map[string]any{"target_check_id": targetCheckID, "order_item_ids": orderItemIDs}
+	if err := c.doIdempotent(ctx, http.MethodPost, path, body, &out); err != nil {
+		return Check{}, fmt.Errorf("apiclient: move items: %w", err)
 	}
 	return out, nil
 }

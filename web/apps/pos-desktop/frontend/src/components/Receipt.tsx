@@ -7,6 +7,7 @@ import { shortOrderId } from '../lib/kitchenPrint'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
 import { HoldButton } from './HoldButton'
+import { CheckActionsMenu, type CheckActionsDisabled } from './CheckActionsMenu'
 import { CheckIcon, ClockIcon } from './icons'
 import { PendingLineRow } from './PendingLineRow'
 
@@ -53,6 +54,24 @@ type ReceiptProps = {
   onStartPayment: () => void
   /** True while the payment screen is open — the rail then drops its own "Ödeme al". */
   paymentActive: boolean
+  /** The adisyon's ⋯ menu; null while no adisyon is open. */
+  actions: {
+    disabled: CheckActionsDisabled
+    onTransfer: () => void
+    onMerge: () => void
+    onMoveItems: () => void
+  } | null
+  /** The item-selection phase of "Kalem taşı": sent items become tickable. */
+  moveSelection: {
+    selectedIds: ReadonlySet<string>
+    onToggle: (itemId: string) => void
+    onPickTarget: () => void
+    onCancel: () => void
+  } | null
+  /** Items already covered by an item payment — they cannot be moved. */
+  paidItemIds: ReadonlySet<string>
+  /** Result of the last transfer/merge/move, shown briefly (empty when none). */
+  notice: string
   /** Requirement 3 — retry a failed payment: the parent drops it from the tracked
    * list (returning its amount to the collectable balance) and reopens the
    * payment screen on that amount and method. */
@@ -92,6 +111,10 @@ export function Receipt({
   remotePendingPayments,
   onStartPayment,
   paymentActive,
+  actions,
+  moveSelection,
+  paidItemIds,
+  notice,
   onRetryPayment,
   onCloseCheck,
   errorMessage,
@@ -106,30 +129,79 @@ export function Receipt({
 
   return (
     <aside className="flex h-full w-96 shrink-0 flex-col border-l border-line bg-panel">
-      <div className="border-b border-line p-4">
-        <h2 className="font-display text-lg font-bold text-ink">{tableLabel || 'Adisyon'}</h2>
+      <div className="flex items-center justify-between gap-2 border-b border-line p-4">
+        <h2 className="min-w-0 truncate font-display text-lg font-bold text-ink">{tableLabel || 'Adisyon'}</h2>
+        {actions && !moveSelection && (
+          <CheckActionsMenu
+            disabled={actions.disabled}
+            onTransfer={actions.onTransfer}
+            onMerge={actions.onMerge}
+            onMoveItems={actions.onMoveItems}
+          />
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-2 font-mono text-sm text-ink">
+        {notice && (
+          <p role="status" className="mb-2 rounded-md bg-teal/10 px-2 py-1 font-sans text-sm text-teal">
+            {notice}
+          </p>
+        )}
         {confirmedOrders.length === 0 && pendingLines.length === 0 && (
           <p className="py-6 text-center text-ink-dim">Adisyon boş — ürün ekleyin.</p>
         )}
 
         {confirmedOrders.map((order) => (
           <div key={order.id}>
-            {order.items.map((item) => (
-              <div key={item.id} className="receipt-line-enter py-1">
-                <div className="flex justify-between gap-2">
-                  <span className="qty text-ink-dim">{item.quantity}×</span>
-                  <span className="flex-1 truncate">{item.product_name}</span>
-                  <span className="money tabular-nums">
-                    {formatMoney(item.quantity * item.unit_price_amount)}
+            {order.items.map((item) => {
+              const line = (
+                <>
+                  <div className="flex justify-between gap-2">
+                    <span className="qty text-ink-dim">{item.quantity}×</span>
+                    <span className="flex-1 truncate">{item.product_name}</span>
+                    <span className="money tabular-nums">
+                      {formatMoney(item.quantity * item.unit_price_amount)}
+                    </span>
+                  </div>
+                  {item.note && <p className="break-words pl-7 text-xs text-ink-dim">{item.note}</p>}
+                </>
+              )
+              if (!moveSelection) {
+                return (
+                  <div key={item.id} className="receipt-line-enter py-1">
+                    {line}
+                  </div>
+                )
+              }
+              const paid = paidItemIds.has(item.id)
+              const selected = moveSelection.selectedIds.has(item.id)
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  disabled={paid}
+                  aria-pressed={selected}
+                  onClick={() => moveSelection.onToggle(item.id)}
+                  className={`mb-1 flex min-h-14 w-full items-center gap-3 rounded-md border px-2 py-1 text-left disabled:opacity-50 ${
+                    selected ? 'border-amber bg-amber/10' : 'border-line'
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border ${
+                      selected ? 'border-amber bg-amber text-amber-ink' : 'border-ink-dim'
+                    }`}
+                  >
+                    {selected && <CheckIcon size={16} />}
                   </span>
-                </div>
-                {item.note && <p className="break-words pl-7 text-xs text-ink-dim">{item.note}</p>}
-              </div>
-            ))}
-            <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />
+                  <span className="min-w-0 flex-1">
+                    {line}
+                    {paid && <span className="block text-xs text-teal">Ödendi — taşınamaz</span>}
+                  </span>
+                </button>
+              )
+            })}
+            {!moveSelection && <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />}
           </div>
         ))}
 
@@ -145,6 +217,31 @@ export function Receipt({
 
       <div className="receipt-tear" aria-hidden="true" />
 
+      {moveSelection ? (
+        <div className="space-y-2 p-4">
+          <ErrorBanner message={errorMessage} />
+          <p className="text-sm text-ink" role="status">
+            {moveSelection.selectedIds.size === 0
+              ? 'Taşınacak kalemleri seçin.'
+              : `${moveSelection.selectedIds.size} kalem seçildi.`}
+          </p>
+          <button
+            type="button"
+            disabled={moveSelection.selectedIds.size === 0}
+            onClick={moveSelection.onPickTarget}
+            className="min-h-14 w-full rounded-lg bg-amber px-4 font-display text-lg font-bold text-amber-ink disabled:opacity-40"
+          >
+            Hedef masayı seç
+          </button>
+          <button
+            type="button"
+            onClick={moveSelection.onCancel}
+            className="min-h-14 w-full rounded-lg border border-line px-4 font-medium text-ink-dim"
+          >
+            Vazgeç
+          </button>
+        </div>
+      ) : (
       <div className="space-y-3 p-4">
         <div className="flex items-baseline justify-between">
           <span className="text-ink-dim">Ara toplam</span>
@@ -213,6 +310,7 @@ export function Receipt({
           )
         )}
       </div>
+      )}
     </aside>
   )
 }

@@ -12,6 +12,8 @@ import {
   Login,
   LoginWithKeycloak,
   Logout,
+  MergeChecks,
+  MoveCheckItems,
   OpenCheck,
   PlaceOrder,
   PrinterStatus,
@@ -19,14 +21,17 @@ import {
   PrintReceipt,
   RegisterPayment,
   SelectKeycloakContext,
+  TransferCheck,
   TryRestoreSession,
 } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { main } from '../wailsjs/go/models'
 import { CashierSwitchModal } from './components/CashierSwitchModal'
-import { CashSessionBanner } from './components/CashSessionBanner'
+import { BannerStack, type Banner } from './components/BannerStack'
+import { CashSessionBanner, CashSessionStatusButton } from './components/CashSessionBanner'
 import { CashSessionModal } from './components/CashSessionModal'
 import { CheckRail } from './components/CheckRail'
+import { ConfirmDialog } from './components/ConfirmDialog'
 import { ContextPicker } from './components/ContextPicker'
 import { PaymentScreen, type PaymentInitial, type PaymentRequest } from './components/PaymentScreen'
 import { ProductGrid } from './components/ProductGrid'
@@ -53,6 +58,8 @@ import {
   unreportedRemoteFailures,
   type TrackedPayment,
 } from './lib/fiscalStatus'
+import { cashSessionBannerKind } from './lib/cashSession'
+import { confirmMerge, moveNotice, targetPrompt, type TargetKind } from './lib/checkActions'
 import { itemsPaidBy, payableItems } from './lib/paymentPlan'
 import {
   addProductToPending,
@@ -99,6 +106,17 @@ function App() {
   // the screen: "Yeniden dene" sits on the receipt rail, which stays visible
   // while the screen is open, so without a fresh key React would keep the old
   // screen state and the retry amount would be dropped.
+  // Target-selection flows started from the adisyon's ⋯ menu (spec §3c). While
+  // `targetPick` is set the middle panel is the floor plan, used to pick where
+  // the adisyon (or its selected items) goes.
+  const [targetPick, setTargetPick] = useState<TargetKind | null>(null)
+  // Non-null during the item-selection phase of "Kalem taşı": the ids ticked on
+  // the receipt rail. It outlives the target pick, so cancelling the pick returns
+  // to the selection instead of losing it.
+  const [moveSelectedIds, setMoveSelectedIds] = useState<ReadonlySet<string> | null>(null)
+  const [mergeTarget, setMergeTarget] = useState<main.TableDTO | null>(null)
+  const [checkActionBusy, setCheckActionBusy] = useState(false)
+  const [notice, setNotice] = useState('')
   const [paymentSession, setPaymentSession] = useState<{ id: number; initial: PaymentInitial | null } | null>(null)
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
 
@@ -319,7 +337,17 @@ function App() {
   // plan) must not carry it, or its amounts would be read against the wrong check.
   useEffect(() => {
     setPaymentSession(null)
+    setTargetPick(null)
+    setMoveSelectedIds(null)
+    setMergeTarget(null)
   }, [selectedCheckId])
+
+  // The result of a transfer/merge/move is a passing confirmation, not state.
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => setNotice(''), 5000)
+    return () => clearTimeout(timer)
+  }, [notice])
 
   const trackedForSelected = useMemo(
     () => trackedPayments.filter((p) => p.checkId === selectedCheckId),
@@ -612,9 +640,11 @@ function App() {
     void refreshServerPayments(selectedCheckId)
   }, [selectedCheckId, branchSignalForSelected, refreshServerPayments])
 
-  async function handleSelectCheck(checkId: string) {
+  // `keepPendingLines` re-reads the check without discarding the round being
+  // built — used after a transfer or a move, which change nothing about it.
+  async function handleSelectCheck(checkId: string, opts?: { keepPendingLines?: boolean }) {
     setReceiptError('')
-    setPendingLines([])
+    if (!opts?.keepPendingLines) setPendingLines([])
 
     // The check is fetched BEFORE any settled-money state is touched. An
     // earlier version wiped serverCompleted up front, which stranded the
@@ -847,6 +877,137 @@ function App() {
     }
   }
 
+  // Leaving an adisyon for the floor plan without closing it (bulgu #1). Unsent
+  // lines would be lost, so the button is blocked while there are any (see
+  // backBlockedReason) rather than discarding them silently.
+  function handleBackToFloor() {
+    setSelectedCheck(null)
+    setConfirmedOrders([])
+    setServerCompleted(EMPTY_SERVER_COMPLETED)
+    serverCompletedForCheck.current = null
+    setReceiptError('')
+    refreshOpenChecks()
+    refreshTables(session?.branch_id)
+  }
+
+  function startTargetPick(kind: TargetKind) {
+    setReceiptError('')
+    // The plan may be up to 30s stale, and a wrong "boş" here is exactly the
+    // table_occupied conflict this picker exists to avoid.
+    refreshTables(session?.branch_id)
+    setTargetPick(kind)
+  }
+
+  function cancelTargetPick() {
+    setTargetPick(null)
+    setMergeTarget(null)
+  }
+
+  function startMoveItems() {
+    setReceiptError('')
+    setMoveSelectedIds(new Set())
+  }
+
+  function toggleMoveItem(itemId: string) {
+    setMoveSelectedIds((current) => {
+      const next = new Set(current ?? [])
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  // Runs one transfer/merge/move: on failure the Turkish reason is shown, the
+  // plan is re-read (a conflict usually means it was stale) and the picker stays
+  // open so the cashier can choose another table.
+  async function runCheckAction(action: () => Promise<void>) {
+    setCheckActionBusy(true)
+    setReceiptError('')
+    try {
+      await action()
+    } catch (err) {
+      // An error thrown by an action itself already carries its Turkish text.
+      setReceiptError(err instanceof Error && !err.message.includes('apiclient') ? err.message : describeError(err))
+      setMergeTarget(null)
+      refreshTables(session?.branch_id)
+      refreshOpenChecks()
+    } finally {
+      setCheckActionBusy(false)
+    }
+  }
+
+  function handlePickTarget(table: main.TableDTO) {
+    if (!selectedCheck || !session?.branch_id || checkActionBusy) return
+    const branchId = session.branch_id
+    const source = selectedCheck
+    switch (targetPick) {
+      case 'transfer':
+        void runCheckAction(async () => {
+          await TransferCheck(source.id, table.id)
+          setTargetPick(null)
+          refreshOpenChecks()
+          refreshTables(branchId)
+          await handleSelectCheck(source.id, { keepPendingLines: true })
+          setNotice(`Adisyon ${table.name} masasına taşındı.`)
+        })
+        return
+      case 'merge':
+        setMergeTarget(table)
+        return
+      case 'move-items': {
+        const itemIds = [...(moveSelectedIds ?? [])]
+        if (itemIds.length === 0) return
+        void runCheckAction(async () => {
+          // A free table has no adisyon yet: open one for the moved items.
+          let openedHere = false
+          let targetCheckId = table.active_check_id
+          if (!targetCheckId) {
+            targetCheckId = (await OpenCheck(branchId, table.id, table.name, '')).id
+            openedHere = true
+          }
+          try {
+            await MoveCheckItems(source.id, targetCheckId, itemIds)
+          } catch (err) {
+            // The POS has no way to cancel the adisyon it just opened, and a
+            // colleague may have settled the items in the meantime. Say so
+            // instead of leaving an empty, occupied table unexplained.
+            if (openedHere) {
+              throw new Error(
+                `${describeError(err)} ${table.name} masasında boş bir adisyon açıldı — gerekirse kapatın.`,
+              )
+            }
+            throw err
+          }
+          setTargetPick(null)
+          setMoveSelectedIds(null)
+          refreshOpenChecks()
+          refreshTables(branchId)
+          await handleSelectCheck(source.id, { keepPendingLines: true })
+          setNotice(moveNotice(itemIds.length, table.name))
+        })
+        return
+      }
+      default:
+        return
+    }
+  }
+
+  function handleConfirmMerge() {
+    const table = mergeTarget
+    if (!selectedCheck || !table?.active_check_id) return
+    const source = selectedCheck
+    const targetCheckId = table.active_check_id
+    void runCheckAction(async () => {
+      await MergeChecks(targetCheckId, source.id)
+      setMergeTarget(null)
+      setTargetPick(null)
+      refreshOpenChecks()
+      refreshTables(session?.branch_id)
+      await handleSelectCheck(targetCheckId)
+      setNotice(`${source.table_label} adisyonu ${table.name} adisyonuna birleştirildi.`)
+    })
+  }
+
   async function handleCloseCheck() {
     if (!selectedCheck) return
     // Requirement 4 — belt and braces. The button is already hidden while a
@@ -906,6 +1067,93 @@ function App() {
     )
   }
 
+  // Warning banners under the header, most important first and held to two rows
+  // (BannerStack): a missing fiscal record is money, a missing kitchen ticket is
+  // food that will not be cooked, a closed drawer blocks cash sales, a receipt
+  // that did not print can be reprinted at leisure.
+  const cashBannerKind = cashSessionBannerKind(cashSession.checked, cashSession.session, cashSession.stale)
+  const banners: Banner[] = [
+    ...visibleRemoteFailures.map((failure) => ({
+      key: `fiscal-${failure.paymentId}`,
+      // Mali kayıt hatası — fişi kesilemeyen bir ödeme (bu istasyonun kendi
+      // ödemesi de olabilir, bkz. unreportedRemoteFailures). Metin hangi
+      // istasyon olduğunu İDDİA ETMEZ: şube akışı bunu ayırt etmez, kasiyere
+      // yanlış yere baktırmaktansa adisyonu söylemek daha yararlıdır. Uyarı
+      // rengi (warn), kırmızı değil: kırmızı yalnız void/iptal içindir ve buradaki
+      // ödeme iptal edilmiş değil, yeniden alınması gereken bir ödemedir. Ham
+      // `failure_reason` cihaz çıktısıdır — kasiyere Türkçe mesaj gösterilir, ham
+      // metin yalnız title olarak taşınır (bkz. describeRemoteFailure).
+      node: (
+        <div
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
+          title={failure.failureReason ?? ''}
+        >
+          <span>Mali kayıt hatası: {describeRemoteFailure()}</span>
+          <button
+            type="button"
+            onClick={() => setDismissedFailureIds((prev) => new Set(prev).add(failure.paymentId))}
+            className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+          >
+            Anladım
+          </button>
+        </div>
+      ),
+    })),
+    ...(cashBannerKind
+      ? [{ key: 'cash', node: <CashSessionBanner kind={cashBannerKind} onOpen={() => setCashSessionModalOpen(true)} /> }]
+      : []),
+    ...kitchenFailures.map((failure) => ({
+      key: `kitchen-${failure.orderId}`,
+      // Mutfak fişi hatası — sipariş verildi ama fişi mutfağa ulaşmadı: yemek
+      // yapılmayacak demektir, bu yüzden "Yeniden yazdır" ya da bilinçli "Yoksay"
+      // (mutfağa sözlü iletildi) seçilene kadar görünür kalır. Sipariş kendisi
+      // başarılıdır; hata onu geri almaz.
+      node: (
+        <div
+          role="alert"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
+        >
+          <span>{describeKitchenFailure(failure)}</span>
+          <span className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => printKitchenTicketFor(failure.orderId, failure.tableLabel)}
+              className="min-h-12 rounded bg-amber px-3 font-semibold text-amber-ink"
+            >
+              Yeniden yazdır
+            </button>
+            <button
+              type="button"
+              onClick={() => setKitchenFailures((prev) => removeKitchenFailure(prev, failure.orderId))}
+              className="min-h-12 rounded px-3 text-ink-dim"
+            >
+              Yoksay
+            </button>
+          </span>
+        </div>
+      ),
+    })),
+    ...(printError
+      ? [
+          {
+            key: 'print',
+            node: (
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
+                <span>Fiş yazdırılamadı: {printError}</span>
+                <button
+                  type="button"
+                  onClick={handleReprintReceipt}
+                  className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+                >
+                  Fişi yeniden yazdır
+                </button>
+              </div>
+            ),
+          },
+        ]
+      : []),
+  ]
+
   return (
     <div className="flex h-screen flex-col bg-surface text-ink">
       <header className="flex min-h-12 shrink-0 items-center justify-between border-b border-line px-4 text-sm">
@@ -935,6 +1183,9 @@ function App() {
               Yazıcı {printer.status === 'error' ? 'hata' : 'bağlı değil'}
             </span>
           )}
+          {cashSession.session && !cashBannerKind && (
+            <CashSessionStatusButton session={cashSession.session} onOpen={() => setCashSessionModalOpen(true)} />
+          )}
           <button
             type="button"
             disabled={!cashSession.session}
@@ -954,88 +1205,7 @@ function App() {
         </div>
       </header>
 
-      <CashSessionBanner
-        checked={cashSession.checked}
-        session={cashSession.session}
-        stale={cashSession.stale}
-        onOpen={() => setCashSessionModalOpen(true)}
-      />
-
-      {printError && (
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
-          <span>Fiş yazdırılamadı: {printError}</span>
-          <button
-            type="button"
-            onClick={handleReprintReceipt}
-            className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
-          >
-            Fişi yeniden yazdır
-          </button>
-        </div>
-      )}
-
-      {/*
-        Mutfak fişi hatası — sipariş verildi ama fişi mutfağa ulaşmadı: yemek
-        yapılmayacak demektir, bu yüzden "Yeniden yazdır" ya da bilinçli
-        "Yoksay" (mutfağa sözlü iletildi) seçilene kadar görünür kalır. Sipariş
-        kendisi başarılıdır; hata onu geri almaz. Uyarı rengi (warn), kırmızı değil (bkz.
-        ErrorBanner: kırmızı yalnız void/iptal içindir).
-      */}
-      {kitchenFailures.map((failure) => (
-        <div
-          key={failure.orderId}
-          role="alert"
-          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
-        >
-          <span>{describeKitchenFailure(failure)}</span>
-          <span className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => printKitchenTicketFor(failure.orderId, failure.tableLabel)}
-              className="min-h-12 rounded bg-amber px-3 font-semibold text-amber-ink"
-            >
-              Yeniden yazdır
-            </button>
-            <button
-              type="button"
-              onClick={() => setKitchenFailures((prev) => removeKitchenFailure(prev, failure.orderId))}
-              className="min-h-12 rounded px-3 text-ink-dim"
-            >
-              Yoksay
-            </button>
-          </span>
-        </div>
-      ))}
-
-      {/*
-        Mali kayıt hatası — fişi kesilemeyen bir ödeme (bu istasyonun kendi
-        ödemesi de olabilir, bkz. unreportedRemoteFailures). Metin hangi
-        istasyon olduğunu İDDİA ETMEZ: şube akışı bunu ayırt etmez, kasiyere
-        yanlış yere baktırmaktansa adisyonu söylemek daha yararlıdır.
-        Uyarı rengi (warn), kırmızı değil: bu app'te kırmızı yalnız void/iptal içindir
-        (bkz. style.css) ve buradaki ödeme iptal edilmiş değil, yeniden
-        alınması gereken bir ödemedir. Ham `failure_reason` cihaz çıktısıdır —
-        kasiyere Türkçe mesaj gösterilir, ham metin yalnız title olarak
-        taşınır (bkz. describeRemoteFailure).
-      */}
-      {visibleRemoteFailures.map((failure) => (
-        <div
-          key={failure.paymentId}
-          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
-          title={failure.failureReason ?? ''}
-        >
-          <span>Mali kayıt hatası: {describeRemoteFailure()}</span>
-          <button
-            type="button"
-            onClick={() =>
-              setDismissedFailureIds((prev) => new Set(prev).add(failure.paymentId))
-            }
-            className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
-          >
-            Anladım
-          </button>
-        </div>
-      ))}
+      <BannerStack banners={banners} />
 
       <div className="flex flex-1 overflow-hidden">
         <CheckRail
@@ -1047,12 +1217,34 @@ function App() {
           awaitingFiscalCheckIds={awaitingFiscalCheckIds}
         />
 
-        {selectedCheck ? (
+        {targetPick && selectedCheck ? (
+          <TablePlan
+            zones={zones}
+            loading={tablesLoading}
+            errorMessage={tablesError}
+            onSelectAvailable={handlePickTarget}
+            onSelectOccupied={() => undefined}
+            awaitingFiscalCheckIds={awaitingFiscalCheckIds}
+            target={{
+              kind: targetPick,
+              prompt: targetPrompt(targetPick, selectedCheck.table_label || 'Adisyon'),
+              currentCheckId: selectedCheck.id,
+              onPick: handlePickTarget,
+              onCancel: cancelTargetPick,
+            }}
+          />
+        ) : selectedCheck ? (
           <>
             {/* Kept mounted (only hidden) while paying, so returning to the
                 grid keeps the category tab and the loaded products. */}
             <div className={`${paymentSession ? 'hidden' : 'flex'} min-w-0 flex-1 overflow-hidden`}>
-              <ProductGrid categories={categories} disabled={!selectedCheck} onAddProduct={handleAddProduct} />
+              <ProductGrid
+                categories={categories}
+                disabled={!selectedCheck}
+                onAddProduct={handleAddProduct}
+                onBackToFloor={handleBackToFloor}
+                backBlockedReason={pendingLines.length > 0 ? 'Önce siparişi gönderin' : undefined}
+              />
             </div>
             {paymentSession && (
               <PaymentScreen
@@ -1099,6 +1291,41 @@ function App() {
           payments={trackedForSelected}
           remoteCompletedPayments={remotePaymentRows.completed}
           remotePendingPayments={remotePaymentRows.pending}
+          actions={
+            selectedCheck
+              ? {
+                  disabled: {
+                    merge:
+                      pendingLines.length > 0
+                        ? 'Önce siparişi gönderin'
+                        : settledPaidTotal > 0 || trackedForSelected.length > 0
+                          ? 'Ödemesi alınmış adisyon birleştirilemez'
+                          : undefined,
+                    moveItems:
+                      pendingLines.length > 0
+                        ? 'Önce siparişi gönderin'
+                        : checkItems.length === 0
+                          ? 'Adisyonda taşınacak kalem yok'
+                          : undefined,
+                  },
+                  onTransfer: () => startTargetPick('transfer'),
+                  onMerge: () => startTargetPick('merge'),
+                  onMoveItems: startMoveItems,
+                }
+              : null
+          }
+          moveSelection={
+            moveSelectedIds
+              ? {
+                  selectedIds: moveSelectedIds,
+                  onToggle: toggleMoveItem,
+                  onPickTarget: () => startTargetPick('move-items'),
+                  onCancel: () => setMoveSelectedIds(null),
+                }
+              : null
+          }
+          paidItemIds={paidItemIds}
+          notice={notice}
           onStartPayment={() => setPaymentSession({ id: Date.now(), initial: null })}
           paymentActive={paymentSession !== null}
           onRetryPayment={handleRetryPayment}
@@ -1106,6 +1333,16 @@ function App() {
           errorMessage={receiptError}
         />
       </div>
+
+      {mergeTarget && selectedCheck && (
+        <ConfirmDialog
+          {...confirmMerge(selectedCheck.table_label || 'Adisyon', mergeTarget.name)}
+          confirmLabel="Birleştir"
+          busy={checkActionBusy}
+          onConfirm={handleConfirmMerge}
+          onCancel={() => setMergeTarget(null)}
+        />
+      )}
 
       <CashSessionModal
         open={cashSessionModalOpen}

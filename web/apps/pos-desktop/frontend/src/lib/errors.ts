@@ -35,6 +35,15 @@ export type ApiErrorCode =
   | 'invalid_transition'
   | 'table_occupied'
   | 'session_scoped_principal'
+  | 'check_not_open'
+  | 'check_branch_mismatch'
+  | 'payments_present'
+  | 'item_already_paid'
+  | 'same_check'
+  | 'order_item_not_found'
+  | 'table_not_found'
+  | 'price_mismatch'
+  | 'invalid_order_line'
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'fiscal_pending',
@@ -42,6 +51,15 @@ const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'invalid_transition',
   'table_occupied',
   'session_scoped_principal',
+  'check_not_open',
+  'check_branch_mismatch',
+  'payments_present',
+  'item_already_paid',
+  'same_check',
+  'order_item_not_found',
+  'table_not_found',
+  'price_mismatch',
+  'invalid_order_line',
 ])
 
 /**
@@ -76,7 +94,25 @@ export function describeError(err: unknown): string {
     case 'insufficient_payment':
       return 'Adisyon tam ödenmemiş — kalan tutar tahsil edilmeden kapatılamaz.'
     case 'table_occupied':
-      return 'Bu masa az önce doldu — plan yenilendi, dolu masaya dokunarak açık adisyona geçebilirsiniz.'
+      return "Bu masada açık adisyon var — plan yenilendi. Dolu masaya dokunarak adisyona geçebilir ya da 'Masaları birleştir' ile birleştirebilirsiniz."
+    case 'check_not_open':
+      return 'Bu adisyon artık açık değil — liste yenilendi, işlemi yeniden başlatın.'
+    case 'check_branch_mismatch':
+      return 'Bu adisyon başka bir şubeye ait — bu istasyondan işlem yapılamaz.'
+    case 'payments_present':
+      return 'Ödemesi alınmış adisyon birleştirilemez — önce ödemesi olan adisyonu kapatın.'
+    case 'item_already_paid':
+      return 'Seçilen kalemler için ödeme alınmış — ödenmiş kalemler taşınamaz.'
+    case 'same_check':
+      return 'Kaynak ve hedef aynı adisyon — farklı bir masa seçin.'
+    case 'order_item_not_found':
+      return 'Seçilen kalem bu adisyonda bulunamadı — adisyonu yenileyip tekrar seçin.'
+    case 'table_not_found':
+      return 'Masa bulunamadı — masa planı yenilendi, tekrar seçin.'
+    case 'price_mismatch':
+      return 'Bir ürünün fiyatı değişmiş — satırları kaldırıp ürünleri yeniden ekleyin.'
+    case 'invalid_order_line':
+      return 'Sipariş satırlarından biri geçersiz — satırları kontrol edin.'
     case 'invalid_transition':
       return 'Bu adisyon/sipariş başka bir işlemle çakışıyor — sayfayı yenileyin.'
     case 'session_scoped_principal':
@@ -114,7 +150,7 @@ export function describeError(err: unknown): string {
   // generic 409/422 fallbacks below, since a table-select conflict needs an
   // actionable message ("dolu masaya dokunun"), not a generic "çakışıyor".
   if (raw.includes('table is already occupied')) {
-    return 'Bu masa az önce doldu — plan yenilendi, dolu masaya dokunarak açık adisyona geçebilirsiniz.'
+    return "Bu masada açık adisyon var — plan yenilendi. Dolu masaya dokunarak adisyona geçebilir ya da 'Masaları birleştir' ile birleştirebilirsiniz."
   }
   if (raw.includes('table does not belong to this branch')) {
     return 'Bu masa başka bir şubeye ait — bu istasyondan seçilemez.'

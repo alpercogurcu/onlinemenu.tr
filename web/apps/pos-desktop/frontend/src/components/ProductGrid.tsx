@@ -11,6 +11,10 @@ type ProductGridProps = {
   categories: main.CategoryDTO[]
   disabled: boolean
   onAddProduct: (product: main.ProductDTO, options?: LineOptions) => void
+  /** Leaves the adisyon for the floor plan. */
+  onBackToFloor: () => void
+  /** Why leaving is not possible right now (e.g. unsent lines); shown in the button. */
+  backBlockedReason?: string
 }
 
 /**
@@ -26,7 +30,7 @@ type ProductGridProps = {
  * receipt line warns; the grid then quietly re-fetches that product's options
  * so the next tap can offer them.
  */
-export function ProductGrid({ categories, disabled, onAddProduct }: ProductGridProps) {
+export function ProductGrid({ categories, disabled, onAddProduct, onBackToFloor, backBlockedReason }: ProductGridProps) {
   const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null)
   const [products, setProducts] = useState<main.ProductDTO[]>([])
   const [loading, setLoading] = useState(false)
@@ -75,7 +79,20 @@ export function ProductGrid({ categories, disabled, onAddProduct }: ProductGridP
 
   return (
     <section className="flex h-full flex-1 flex-col overflow-hidden bg-surface">
-      <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-3 py-2">
+      <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-3 py-2">
+        {/* Always on screen and in the same place (spec ilke 4): a cashier who
+            opened the wrong table must be able to leave without closing it.
+            When leaving would lose unsent lines the button says why instead of
+            hiding (ilke 5). */}
+        <button
+          type="button"
+          disabled={Boolean(backBlockedReason)}
+          onClick={onBackToFloor}
+          className="mr-2 flex min-h-14 shrink-0 flex-col items-center justify-center rounded-md border border-line px-4 text-sm font-semibold text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <span>← Masa planı</span>
+          {backBlockedReason && <span className="text-xs font-normal text-warn">{backBlockedReason}</span>}
+        </button>
         {categories.map((cat) => (
           <button
             key={cat.id}

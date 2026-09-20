@@ -1,4 +1,5 @@
 import type { main } from '../../wailsjs/go/models'
+import { canPickTable, type TargetKind } from '../lib/checkActions'
 import { PendingFiscalDot } from './PendingFiscalDot'
 
 type TablePlanProps = {
@@ -10,6 +11,19 @@ type TablePlanProps = {
   /** Checks with a payment awaiting its fiscal record — the table holding one
    * gets a warn indicator (requirement 5). */
   awaitingFiscalCheckIds: ReadonlySet<string>
+  /** Target-selection mode (transfer / merge / move items): the plan is used to
+   * pick where an adisyon goes instead of opening one. */
+  target?: TargetSelection
+}
+
+export type TargetSelection = {
+  kind: TargetKind
+  /** Header text, e.g. "Hedef masayı seçin — Masa 4 taşınacak". */
+  prompt: string
+  /** The adisyon being moved — its own table is never a valid target. */
+  currentCheckId: string
+  onPick: (table: main.TableDTO) => void
+  onCancel: () => void
 }
 
 /**
@@ -27,13 +41,34 @@ type TablePlanProps = {
  *  - cleaning        -> not tappable (disabled, both visually and via the
  *                       button's disabled attribute)
  */
-export function TablePlan({
+export function TablePlan(props: TablePlanProps) {
+  const { target } = props
+  if (!target) return <TablePlanBody {...props} />
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-4 py-2">
+        <h2 className="font-display text-lg font-bold text-ink">{target.prompt}</h2>
+        <button
+          type="button"
+          onClick={target.onCancel}
+          className="min-h-12 shrink-0 rounded-md border border-line px-4 font-semibold text-ink"
+        >
+          İptal
+        </button>
+      </div>
+      <TablePlanBody {...props} />
+    </div>
+  )
+}
+
+function TablePlanBody({
   zones,
   loading,
   errorMessage,
   onSelectAvailable,
   onSelectOccupied,
   awaitingFiscalCheckIds,
+  target,
 }: TablePlanProps) {
   // Fail-open once the plan has data: a transient failure on the 30s
   // background refresh (see App.tsx's refreshTables) must not blank out an
@@ -73,6 +108,7 @@ export function TablePlan({
                 table={table}
                 onSelectAvailable={onSelectAvailable}
                 onSelectOccupied={onSelectOccupied}
+                target={target}
                 awaitingFiscal={Boolean(table.active_check_id && awaitingFiscalCheckIds.has(table.active_check_id))}
               />
             ))}
@@ -88,11 +124,13 @@ function TableCard({
   onSelectAvailable,
   onSelectOccupied,
   awaitingFiscal,
+  target,
 }: {
   table: main.TableDTO
   onSelectAvailable: (table: main.TableDTO) => void
   onSelectOccupied: (checkId: string) => void
   awaitingFiscal: boolean
+  target?: TargetSelection
 }) {
   const isOccupied = table.status === 'occupied'
   const isReserved = table.status === 'reserved'
@@ -103,7 +141,15 @@ function TableCard({
   else if (isReserved) variant = 'border-2 border-teal bg-panel text-ink'
   else if (isCleaning) variant = 'table-cleaning-pattern border-line bg-panel text-ink-dim'
 
+  // In target mode a card is either a valid destination (tappable, outlined) or
+  // dimmed and inert; the normal open/jump behavior is off.
+  const pickable = target ? canPickTable(target.kind, table, target.currentCheckId) : false
+
   function handleClick() {
+    if (target) {
+      if (pickable) target.onPick(table)
+      return
+    }
     if (isCleaning) return
     if (isOccupied) {
       if (table.active_check_id) onSelectOccupied(table.active_check_id)
@@ -115,9 +161,11 @@ function TableCard({
   return (
     <button
       type="button"
-      disabled={isCleaning}
+      disabled={target ? !pickable : isCleaning}
       onClick={handleClick}
-      className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors disabled:cursor-not-allowed ${variant}`}
+      className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors disabled:cursor-not-allowed ${variant} ${
+        target ? (pickable ? 'ring-2 ring-amber' : 'opacity-40') : ''
+      }`}
     >
       {awaitingFiscal && (
         <span className="absolute right-1.5 top-1.5">

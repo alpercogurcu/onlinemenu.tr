@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -837,5 +838,138 @@ func TestClient_GetProduct_UsesProductRoute(t *testing.T) {
 	}
 	if p.CategoryID != "" || p.TaxRateBPS != 1000 || p.Unit != "adet" {
 		t.Fatalf("product = %+v", p)
+	}
+}
+
+func TestClient_ListOpenChecks_ExcludesMergedAndKeepsTotal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"id":"1","status":"open","branch_id":"b","total":24000},
+			{"id":"2","status":"merged","branch_id":"b","total":0,"merged_into_check_id":"1"},
+			{"id":"3","status":"open","branch_id":"b"}
+		]`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	checks, err := c.ListOpenChecks(t.Context(), "")
+	if err != nil {
+		t.Fatalf("ListOpenChecks: %v", err)
+	}
+	if len(checks) != 2 || checks[0].ID != "1" || checks[1].ID != "3" {
+		t.Fatalf("checks = %+v, want the two open ones — a merged adisyon is not an open one", checks)
+	}
+	if checks[0].Total == nil || *checks[0].Total != 24000 {
+		t.Fatalf("total = %v, want 24000", checks[0].Total)
+	}
+	if checks[1].Total != nil {
+		t.Fatalf("a check without a total must decode to nil, got %d", *checks[1].Total)
+	}
+}
+
+func TestClient_CheckMoves_UseTheRoutesAndBodiesTheBackendExpects(t *testing.T) {
+	tests := []struct {
+		name     string
+		wantPath string
+		wantBody map[string]any
+		call     func(c *Client) (Check, error)
+	}{
+		{
+			name:     "transfer",
+			wantPath: "/api/v1/pos/checks/chk-1/transfer",
+			wantBody: map[string]any{"table_id": "tbl-9"},
+			call:     func(c *Client) (Check, error) { return c.TransferCheck(t.Context(), "chk-1", "tbl-9") },
+		},
+		{
+			name:     "merge: the path id is the surviving check",
+			wantPath: "/api/v1/pos/checks/target/merge",
+			wantBody: map[string]any{"source_check_id": "source"},
+			call:     func(c *Client) (Check, error) { return c.MergeChecks(t.Context(), "target", "source") },
+		},
+		{
+			name:     "move items: the path id is the check the items leave",
+			wantPath: "/api/v1/pos/checks/from/move-items",
+			wantBody: map[string]any{"target_check_id": "to", "order_item_ids": []any{"i1", "i2"}},
+			call: func(c *Client) (Check, error) {
+				return c.MoveCheckItems(t.Context(), "from", "to", []string{"i1", "i2"})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var key string
+			var got map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != tt.wantPath {
+					t.Fatalf("request = %s %s, want POST %s", r.Method, r.URL.Path, tt.wantPath)
+				}
+				key = r.Header.Get("Idempotency-Key")
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"chk-1","status":"open","table_label":"Masa 9"}`))
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, &memStore{token: "tok", saved: true})
+			check, err := tt.call(c)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if check.TableLabel != "Masa 9" {
+				t.Fatalf("check = %+v", check)
+			}
+			if key == "" {
+				t.Fatal("missing Idempotency-Key — ADR-SEC-003: these endpoints change the state of money-bearing checks")
+			}
+			if len(got) != len(tt.wantBody) {
+				t.Fatalf("body = %v, want %v", got, tt.wantBody)
+			}
+			for k, want := range tt.wantBody {
+				if fmt.Sprint(got[k]) != fmt.Sprint(want) {
+					t.Fatalf("body[%s] = %v, want %v", k, got[k], want)
+				}
+			}
+		})
+	}
+}
+
+func TestClient_CheckMoves_RejectMissingIDsBeforeCallingServer(t *testing.T) {
+	var called atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called.Store(true) }))
+	defer srv.Close()
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+
+	calls := map[string]func() error{
+		"transfer without table": func() error { _, err := c.TransferCheck(t.Context(), "c", ""); return err },
+		"transfer without check": func() error { _, err := c.TransferCheck(t.Context(), "", "t"); return err },
+		"merge without source":   func() error { _, err := c.MergeChecks(t.Context(), "c", ""); return err },
+		"move without items":     func() error { _, err := c.MoveCheckItems(t.Context(), "a", "b", nil); return err },
+		"move without target":    func() error { _, err := c.MoveCheckItems(t.Context(), "a", "", []string{"i"}); return err },
+	}
+	for name, call := range calls {
+		if err := call(); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if called.Load() {
+		t.Fatal("the server was called with an incomplete request")
+	}
+}
+
+func TestClient_CheckMoves_SurfaceTheMachineReadableConflictCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"source check has payments; close it before merging","code":"payments_present"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.MergeChecks(t.Context(), "target", "source")
+	if err == nil || !strings.Contains(err.Error(), `"code":"payments_present"`) {
+		t.Fatalf("err = %v — the frontend maps the Turkish message from this code, so it must survive in the error text", err)
 	}
 }

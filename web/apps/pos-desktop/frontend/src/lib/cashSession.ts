@@ -166,3 +166,19 @@ export function isValidMovementReason(reason: string): boolean {
 export function isValidOpeningAmount(amountKurus: number): boolean {
   return Number.isFinite(amountKurus) && amountKurus >= 0
 }
+
+/**
+ * Which cash-session warning the banner row shows, if any. "missing" (no open
+ * session) and "stale" (the submitted count drifted) are warnings; an open,
+ * on-track session needs no banner row at all — it shows as a small status
+ * button in the header instead, so it no longer costs a permanent row.
+ */
+export function cashSessionBannerKind(
+  checked: boolean,
+  session: unknown,
+  stale: boolean,
+): 'missing' | 'stale' | null {
+  if (!checked) return null
+  if (!session) return 'missing'
+  return stale ? 'stale' : null
+}

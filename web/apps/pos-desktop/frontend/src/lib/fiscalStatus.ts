@@ -60,6 +60,11 @@ export type TrackedPayment = {
    * exceed amountTotal when change is due). Needed for the printed receipt's
    * "ALINAN"/para üstü line — see receivedTotalForPrint. */
   receivedAmount: number
+  /** How it was taken. Absent on payments that predate the payment screen. */
+  method?: 'cash' | 'card'
+  /** Order-item ids this payment paid for, when it was an item payment (see
+   * lib/paymentPlan itemsPaidBy). Absent for full/split/amount payments. */
+  itemIds?: string[]
   /** Epoch ms at which this payment was registered. Drives the anti-flicker
    * delay in requirement 6 (see shouldRenderPendingBadge). */
   registeredAtMs: number

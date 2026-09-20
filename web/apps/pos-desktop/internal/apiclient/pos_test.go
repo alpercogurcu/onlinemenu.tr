@@ -728,3 +728,114 @@ func TestClient_PlaceOrder_SendsModifierIDs(t *testing.T) {
 		t.Fatalf("request items = %+v", body.Items)
 	}
 }
+
+func TestClient_RegisterPayment_SendsMethodLinesAndMeta(t *testing.T) {
+	var body struct {
+		Method      string `json:"method"`
+		AmountTotal int64  `json:"amount_total"`
+		Lines       []struct {
+			Name             string `json:"name"`
+			UnitPriceMinor   int64  `json:"unit_price_minor"`
+			QuantityMilli    int64  `json:"quantity_milli"`
+			TaxRatePermyriad int    `json:"tax_rate_permyriad"`
+			CategoryID       string `json:"category_id"`
+			Unit             string `json:"unit"`
+		} `json:"lines"`
+		Meta struct {
+			TableLabel string `json:"table_label"`
+		} `json:"meta"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Payment{ID: "pay-1", Method: body.Method, Status: "pending", AmountTotal: body.AmountTotal})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.RegisterPayment(t.Context(), RegisterPaymentInput{
+		BranchID:    "b1",
+		CheckID:     "c1",
+		Method:      "terminal",
+		AmountTotal: 14500,
+		TableLabel:  "Masa 7",
+		Lines: []FiscalLine{
+			{Name: "Lahmacun", UnitPriceMinor: 6500, QuantityMilli: 2000, TaxRatePermyriad: 1000, CategoryID: "cat-1", Unit: "C62"},
+			{Name: "Çay", UnitPriceMinor: 1500, QuantityMilli: 1000, TaxRatePermyriad: 1000},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterPayment: %v", err)
+	}
+	if body.Method != "terminal" || body.AmountTotal != 14500 || body.Meta.TableLabel != "Masa 7" {
+		t.Fatalf("request = %+v", body)
+	}
+	if len(body.Lines) != 2 || body.Lines[0].QuantityMilli != 2000 || body.Lines[0].TaxRatePermyriad != 1000 || body.Lines[0].CategoryID != "cat-1" || body.Lines[0].Unit != "C62" {
+		t.Fatalf("lines = %+v", body.Lines)
+	}
+	if body.Lines[1].CategoryID != "" {
+		t.Fatalf("a line without a category must omit category_id, got %q", body.Lines[1].CategoryID)
+	}
+}
+
+func TestClient_RegisterPayment_RejectsLinesThatDoNotAddUpToTheAmountBeforeCallingServer(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []FiscalLine
+	}{
+		{"lines below the amount", []FiscalLine{{Name: "A", UnitPriceMinor: 1000, QuantityMilli: 1000}}},
+		{"lines above the amount", []FiscalLine{{Name: "A", UnitPriceMinor: 3000, QuantityMilli: 1000}}},
+		{"a quantity that does not divide into whole kuruş", []FiscalLine{{Name: "A", UnitPriceMinor: 1001, QuantityMilli: 1500}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var called atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called.Store(true) }))
+			defer srv.Close()
+
+			c := New(srv.URL, &memStore{token: "tok", saved: true})
+			_, err := c.RegisterPayment(t.Context(), RegisterPaymentInput{BranchID: "b1", CheckID: "c1", Method: "cash", AmountTotal: 2000, Lines: tt.lines})
+			if !errors.Is(err, ErrLinesTotalMismatch) {
+				t.Fatalf("err = %v, want ErrLinesTotalMismatch", err)
+			}
+			if called.Load() {
+				t.Fatal("the server was called although the basket cannot be valid")
+			}
+		})
+	}
+}
+
+func TestClient_RegisterPayment_NoLinesIsAllowed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Payment{ID: "pay-1"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	if _, err := c.RegisterPayment(t.Context(), RegisterPaymentInput{BranchID: "b1", CheckID: "c1", Method: "cash", AmountTotal: 2000}); err != nil {
+		t.Fatalf("RegisterPayment without lines: %v", err)
+	}
+}
+
+func TestClient_GetProduct_UsesProductRoute(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/catalog/products/p-1" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"p-1","category_id":null,"name":"Çay","unit":"adet","tax_rate_bps":1000}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	p, err := c.GetProduct(t.Context(), "p-1")
+	if err != nil {
+		t.Fatalf("GetProduct: %v", err)
+	}
+	if p.CategoryID != "" || p.TaxRateBPS != 1000 || p.Unit != "adet" {
+		t.Fatalf("product = %+v", p)
+	}
+}

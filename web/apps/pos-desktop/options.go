@@ -25,6 +25,7 @@ type optionsAPI interface {
 	ListModifierGroups(ctx context.Context) ([]apiclient.ModifierGroup, error)
 	ListProductModifierGroupIDs(ctx context.Context, productID string) ([]string, error)
 	ListModifiers(ctx context.Context, groupID string) ([]apiclient.Modifier, error)
+	GetProduct(ctx context.Context, productID string) (apiclient.Product, error)
 }
 
 type timed[V any] struct {
@@ -54,6 +55,7 @@ type optionsResolver struct {
 	productGroups map[string]timed[[]string]
 	catalog       map[string]timed[map[string]apiclient.ModifierGroup]
 	modifiers     map[string]timed[[]apiclient.Modifier]
+	products      map[string]timed[apiclient.Product]
 }
 
 func newOptionsResolver(api optionsAPI) *optionsResolver {
@@ -63,6 +65,7 @@ func newOptionsResolver(api optionsAPI) *optionsResolver {
 		productGroups: map[string]timed[[]string]{},
 		catalog:       map[string]timed[map[string]apiclient.ModifierGroup]{},
 		modifiers:     map[string]timed[[]apiclient.Modifier]{},
+		products:      map[string]timed[apiclient.Product]{},
 	}
 }
 
@@ -74,6 +77,27 @@ func (r *optionsResolver) reset() {
 	clear(r.productGroups)
 	clear(r.catalog)
 	clear(r.modifiers)
+	clear(r.products)
+}
+
+// rememberProducts caches products that a category listing already returned, so
+// paying for an item the cashier just sold costs no extra lookup.
+func (r *optionsResolver) rememberProducts(products []apiclient.Product) {
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range products {
+		r.products[p.ID] = timed[apiclient.Product]{value: p, at: now}
+	}
+}
+
+// productMeta returns a product's tax rate, category and unit — what the fiscal
+// basket needs and an order item does not carry. Cached like the option groups,
+// including serving a stale entry when a refresh fails.
+func (r *optionsResolver) productMeta(ctx context.Context, productID string) (apiclient.Product, error) {
+	return fetchCached(r, r.products, productID, func() (apiclient.Product, error) {
+		return r.api.GetProduct(ctx, productID)
+	})
 }
 
 func fetchCached[V any](r *optionsResolver, cache map[string]timed[V], key string, fetch func() (V, error)) (V, error) {

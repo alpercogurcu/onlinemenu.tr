@@ -17,17 +17,18 @@ import {
   PrinterStatus,
   PrintKitchenTicket,
   PrintReceipt,
-  RegisterCashPayment,
+  RegisterPayment,
   SelectKeycloakContext,
   TryRestoreSession,
 } from '../wailsjs/go/main/App'
 import { EventsOn } from '../wailsjs/runtime/runtime'
-import type { main } from '../wailsjs/go/models'
+import { main } from '../wailsjs/go/models'
 import { CashierSwitchModal } from './components/CashierSwitchModal'
 import { CashSessionBanner } from './components/CashSessionBanner'
 import { CashSessionModal } from './components/CashSessionModal'
 import { CheckRail } from './components/CheckRail'
 import { ContextPicker } from './components/ContextPicker'
+import { PaymentScreen, type PaymentInitial, type PaymentRequest } from './components/PaymentScreen'
 import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
@@ -52,6 +53,7 @@ import {
   unreportedRemoteFailures,
   type TrackedPayment,
 } from './lib/fiscalStatus'
+import { itemsPaidBy, payableItems } from './lib/paymentPlan'
 import {
   addProductToPending,
   confirmedOrdersTotal,
@@ -92,12 +94,18 @@ function App() {
   const [openChecks, setOpenChecks] = useState<main.CheckDTO[]>([])
   const [selectedCheck, setSelectedCheck] = useState<main.CheckDTO | null>(null)
   const [confirmedOrders, setConfirmedOrders] = useState<main.OrderDTO[]>([])
+  // Non-null while the payment screen has the middle panel; `initial` carries a
+  // failed payment's amount/method when the screen opens to retry it. `id` keys
+  // the screen: "Yeniden dene" sits on the receipt rail, which stays visible
+  // while the screen is open, so without a fresh key React would keep the old
+  // screen state and the retry amount would be dropped.
+  const [paymentSession, setPaymentSession] = useState<{ id: number; initial: PaymentInitial | null } | null>(null)
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
 
   // --- Payment money, split into two buckets (ADR-FISCAL-002) -------------
   //
   // Before the fiscal registration went asynchronous, a single accumulated
-  // `alreadyPaidTotal` was correct: RegisterCashPayment returned a COMPLETED
+  // `alreadyPaidTotal` was correct: RegisterPayment returned a COMPLETED
   // payment, so crediting its amount immediately matched what the backend had
   // on record. That is no longer true — POST now returns `pending`, and
   // pos/service.CheckService.Close's paid-in-full guard (TotalPaidForCheck)
@@ -307,6 +315,12 @@ function App() {
 
   const selectedCheckId = selectedCheck?.id ?? null
 
+  // The payment screen belongs to one check: moving to another (or to the floor
+  // plan) must not carry it, or its amounts would be read against the wrong check.
+  useEffect(() => {
+    setPaymentSession(null)
+  }, [selectedCheckId])
+
   const trackedForSelected = useMemo(
     () => trackedPayments.filter((p) => p.checkId === selectedCheckId),
     [trackedPayments, selectedCheckId],
@@ -366,6 +380,8 @@ function App() {
   )
 
   const confirmedTotal = confirmedOrdersTotal(confirmedOrders)
+  const checkItems = useMemo(() => payableItems(confirmedOrders), [confirmedOrders])
+  const paidItemIds = useMemo(() => itemsPaidBy(trackedForSelected), [trackedForSelected])
   const settledPaidTotal = settledTotal(serverCompleted, trackedForSelected, remoteSettledForSelected)
   const remaining = collectableRemaining(
     confirmedTotal,
@@ -494,7 +510,7 @@ function App() {
 
   // refreshServerPayments re-syncs the money the server has already collected
   // on a check. It runs when a check is selected, when the branch fiscal
-  // snapshot reports movement on it, and after a RegisterCashPayment call fails
+  // snapshot reports movement on it, and after a RegisterPayment call fails
   // (see handleRegisterPayment): a failed call might still have landed
   // server-side (network error after the write committed), so the remaining
   // balance shown to the cashier must not silently drift from what the backend
@@ -712,20 +728,37 @@ function App() {
     }
   }
 
-  // amountToRegister is one cash-payment INSTALLMENT (already clamped to the
-  // remaining balance by Receipt.tsx); receivedAmount is the raw cash the
-  // customer handed over for this installment.
+  // One payment INSTALLMENT (already clamped to the remaining balance by the
+  // payment screen) with the fiscal basket it covers. `received` is the raw cash
+  // the customer handed over for it (equals the amount for a card).
   //
   // The returned payment is `pending` (ADR-FISCAL-002): its amount is recorded
   // as tracked-but-unsettled, which reserves it against the remaining balance
   // (so the same money cannot be collected twice) WITHOUT marking the check
   // payable-in-full. The polling hook flips it to completed/failed/voided.
-  async function handleRegisterPayment(amountToRegister: number, receivedAmount: number) {
+  async function handleRegisterPayment(request: PaymentRequest) {
     if (!selectedCheck || !session?.branch_id) return
     setReceiptError('')
     const checkId = selectedCheck.id
+    if (request.amount > 0 && request.lines.length === 0) {
+      // Without lines the backend invents a single "Satis" line, which a real
+      // ÖKC rejects after the money is already recorded. This happens when the
+      // check's items are not loaded (a failed or stale order fetch).
+      const message = 'Adisyon kalemleri yüklenemedi — ödeme kaydedilmedi. Adisyonu yeniden açıp tekrar deneyin.'
+      setReceiptError(message)
+      throw new Error(message)
+    }
     try {
-      const payment = await RegisterCashPayment(session.branch_id, checkId, amountToRegister)
+      const payment = await RegisterPayment(
+        main.RegisterPaymentInputDTO.createFrom({
+          branch_id: session.branch_id,
+          check_id: checkId,
+          method: request.method,
+          amount_total: request.amount,
+          lines: request.lines,
+          table_label: selectedCheck.table_label,
+        }),
+      )
       setTrackedPayments((prev) => [
         ...prev,
         {
@@ -736,7 +769,9 @@ function App() {
           // a synchronous adapter (or a replayed idempotent POST) may hand back
           // an already-completed payment, which must go straight to green.
           status: parseStatus(payment.status),
-          receivedAmount,
+          receivedAmount: request.received,
+          method: request.method,
+          itemIds: request.itemIds.length > 0 ? request.itemIds : undefined,
           registeredAtMs: Date.now(),
         },
       ])
@@ -766,12 +801,15 @@ function App() {
   // carries no money (it never counted toward settled or reserved — see
   // fiscalStatus.ts), so dropping it from the tracked list simply returns its
   // amount to the collectable balance. The retry itself is just the ordinary
-  // cash flow again: Receipt reopens cash mode with the amount prefilled and
+  // payment flow again: the payment screen reopens on that amount and method and
   // calls handleRegisterPayment, which POSTs a brand-new payment. The failed
   // one stays on record server-side; nothing here mutates it.
-  function handleDiscardFailedPayment(paymentId: string) {
-    setTrackedPayments((prev) => prev.filter((p) => p.id !== paymentId))
+  function handleRetryPayment(payment: TrackedPayment) {
+    setTrackedPayments((prev) => prev.filter((p) => p.id !== payment.id))
+    setPaymentSession({ id: Date.now(), initial: { due: payment.amountTotal, method: payment.method ?? 'cash' } })
   }
+
+  const closePaymentScreen = useCallback(() => setPaymentSession(null), [])
 
   // printReceiptFor is best-effort by design (task note: "baskı hatası
   // kapanışı ENGELLEMEZ"): a failure here never throws back to its caller —
@@ -1010,7 +1048,28 @@ function App() {
         />
 
         {selectedCheck ? (
-          <ProductGrid categories={categories} disabled={!selectedCheck} onAddProduct={handleAddProduct} />
+          <>
+            {/* Kept mounted (only hidden) while paying, so returning to the
+                grid keeps the category tab and the loaded products. */}
+            <div className={`${paymentSession ? 'hidden' : 'flex'} min-w-0 flex-1 overflow-hidden`}>
+              <ProductGrid categories={categories} disabled={!selectedCheck} onAddProduct={handleAddProduct} />
+            </div>
+            {paymentSession && (
+              <PaymentScreen
+                key={paymentSession.id}
+                tableLabel={selectedCheck.table_label}
+                items={checkItems}
+                paidItemIds={paidItemIds}
+                confirmedTotal={confirmedTotal}
+                settledPaidTotal={settledPaidTotal}
+                remaining={remaining}
+                initial={paymentSession.initial}
+                onRegister={handleRegisterPayment}
+                onClose={closePaymentScreen}
+                errorMessage={receiptError}
+              />
+            )}
+          </>
         ) : (
           <TablePlan
             zones={zones}
@@ -1040,8 +1099,9 @@ function App() {
           payments={trackedForSelected}
           remoteCompletedPayments={remotePaymentRows.completed}
           remotePendingPayments={remotePaymentRows.pending}
-          onRegisterPayment={handleRegisterPayment}
-          onDiscardFailedPayment={handleDiscardFailedPayment}
+          onStartPayment={() => setPaymentSession({ id: Date.now(), initial: null })}
+          paymentActive={paymentSession !== null}
+          onRetryPayment={handleRetryPayment}
           onCloseCheck={handleCloseCheck}
           errorMessage={receiptError}
         />

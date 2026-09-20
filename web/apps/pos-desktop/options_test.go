@@ -15,6 +15,8 @@ import (
 type fakeOptionsAPI struct {
 	mu sync.Mutex
 
+	products        map[string]apiclient.Product
+	productFetches  map[string]int
 	groups          []apiclient.ModifierGroup
 	productGroupIDs map[string][]string
 	modifiers       map[string][]apiclient.Modifier
@@ -29,6 +31,8 @@ type fakeOptionsAPI struct {
 
 func newFakeOptionsAPI() *fakeOptionsAPI {
 	return &fakeOptionsAPI{
+		products:        map[string]apiclient.Product{},
+		productFetches:  map[string]int{},
 		productGroupIDs: map[string][]string{},
 		modifiers:       map[string][]apiclient.Modifier{},
 		productErr:      map[string]error{},
@@ -63,6 +67,20 @@ func (f *fakeOptionsAPI) ListModifiers(_ context.Context, groupID string) ([]api
 		return nil, err
 	}
 	return f.modifiers[groupID], nil
+}
+
+func (f *fakeOptionsAPI) GetProduct(_ context.Context, productID string) (apiclient.Product, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.productFetches[productID]++
+	if err := f.productErr[productID]; err != nil {
+		return apiclient.Product{}, err
+	}
+	p, ok := f.products[productID]
+	if !ok {
+		return apiclient.Product{}, errors.New("not found")
+	}
+	return p, nil
 }
 
 func int16Ptr(v int16) *int16 { return &v }
@@ -278,5 +296,58 @@ func TestOptionsResolver_Reset_DropsCache(t *testing.T) {
 	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
 	if api.groupsCalls != 2 {
 		t.Fatalf("groupsCalls = %d, want 2 after reset", api.groupsCalls)
+	}
+}
+
+func TestOptionsResolver_ProductMeta_FetchesOnceAndServesFromCache(t *testing.T) {
+	api := newFakeOptionsAPI()
+	api.products["p1"] = apiclient.Product{ID: "p1", CategoryID: "cat", TaxRateBPS: 1000, Unit: "adet"}
+
+	r := newOptionsResolver(api)
+	for i := 0; i < 3; i++ {
+		got, err := r.productMeta(context.Background(), "p1")
+		if err != nil || got.CategoryID != "cat" {
+			t.Fatalf("productMeta = %+v, %v", got, err)
+		}
+	}
+	if api.productFetches["p1"] != 1 {
+		t.Fatalf("fetches = %d, want 1", api.productFetches["p1"])
+	}
+}
+
+func TestOptionsResolver_RememberProducts_SavesTheFetchForProductsAlreadyListed(t *testing.T) {
+	api := newFakeOptionsAPI()
+	r := newOptionsResolver(api)
+	r.rememberProducts([]apiclient.Product{{ID: "p1", CategoryID: "cat", TaxRateBPS: 2000, Unit: "lt"}})
+
+	got, err := r.productMeta(context.Background(), "p1")
+	if err != nil || got.TaxRateBPS != 2000 {
+		t.Fatalf("productMeta = %+v, %v", got, err)
+	}
+	if api.productFetches["p1"] != 0 {
+		t.Fatalf("fetches = %d, want 0 — the category listing already carried this product", api.productFetches["p1"])
+	}
+}
+
+func TestOptionsResolver_ProductMeta_ServesStaleWhenRefreshFails(t *testing.T) {
+	api := newFakeOptionsAPI()
+	api.products["p1"] = apiclient.Product{ID: "p1", TaxRateBPS: 1000}
+	now := time.Now()
+	r := newResolverWithClock(api, &now)
+	if _, err := r.productMeta(context.Background(), "p1"); err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+
+	now = now.Add(optionsCacheTTL + time.Second)
+	api.productErr["p1"] = errors.New("offline")
+	got, err := r.productMeta(context.Background(), "p1")
+	if err != nil || got.TaxRateBPS != 1000 {
+		t.Fatalf("productMeta = %+v, %v; want the stale entry", got, err)
+	}
+}
+
+func TestOptionsResolver_ProductMeta_UnknownProductFails(t *testing.T) {
+	if _, err := newOptionsResolver(newFakeOptionsAPI()).productMeta(context.Background(), "nope"); err == nil {
+		t.Fatal("expected an error for a product the catalog does not know")
 	}
 }

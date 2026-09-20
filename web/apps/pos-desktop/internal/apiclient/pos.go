@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -65,6 +66,18 @@ func (c *Client) ListProducts(ctx context.Context, categoryID string) ([]Product
 	path := fmt.Sprintf("/api/v1/catalog/categories/%s/products", categoryID)
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, fmt.Errorf("apiclient: list products: %w", err)
+	}
+	return out, nil
+}
+
+// GetProduct calls GET /api/v1/catalog/products/{id}. The payment flow needs a
+// product's tax rate, category and unit for the fiscal basket, and an order
+// item carries none of them.
+func (c *Client) GetProduct(ctx context.Context, productID string) (Product, error) {
+	var out Product
+	path := fmt.Sprintf("/api/v1/catalog/products/%s", url.PathEscape(productID))
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return Product{}, fmt.Errorf("apiclient: get product: %w", err)
 	}
 	return out, nil
 }
@@ -397,49 +410,116 @@ type Payment struct {
 	CompletedAt     *time.Time `json:"completed_at"`
 }
 
-type registerSaleRequest struct {
-	BranchID    string `json:"branch_id"`
-	CheckID     string `json:"check_id"`
-	Method      string `json:"method"`
-	AmountTotal int64  `json:"amount_total"`
-	Currency    string `json:"currency"`
+// FiscalLine mirrors payment/http fiscalLineRequest: one line of the fiscal
+// basket. Quantity is in thousandths (1000 = 1 unit) and the tax rate in
+// permyriad (1000 = 10.00%).
+type FiscalLine struct {
+	Name             string `json:"name"`
+	UnitPriceMinor   int64  `json:"unit_price_minor"`
+	QuantityMilli    int64  `json:"quantity_milli"`
+	TaxRatePermyriad int    `json:"tax_rate_permyriad"`
+	// CategoryID is omitted when empty: the backend field is a uuid.UUID, and
+	// an empty string would fail to parse rather than mean "none".
+	CategoryID string `json:"category_id,omitempty"`
+	Unit       string `json:"unit,omitempty"`
 }
 
-// RegisterCashPayment calls POST /api/v1/payments (Idempotency-Key
-// required — ADR-SEC-003) with method "cash". branch_id is required by the
-// handler (422 if empty); amount_total must be > 0 (payment/service
-// validation). amountTotal is ONE cash-payment installment against the
-// check — for a split/partial payment this is less than the check's full
-// total (see pos/repo.CheckRepo.GetTotal's sum(quantity*unit_price), the
-// same computation the frontend uses to derive the check's total and
-// remaining balance — there is no server-side "check total" endpoint).
-// Calling this more than once for the same check is expected and
-// supported: the backend records each call as a separate payment, and
-// CloseCheck only succeeds once the sum of all of them reaches the check
-// total (payment/service.CheckService — see CloseCheck's doc comment).
-// The backend does NOT reject a call whose amountTotal exceeds the check's
-// remaining balance (no overpayment guard) — callers must clamp to the
-// remaining balance themselves before calling this (see
-// frontend/src/lib/payment.ts's clampToRemaining).
-func (c *Client) RegisterCashPayment(ctx context.Context, branchID, checkID string, amountTotal int64) (Payment, error) {
-	if checkID == "" {
-		return Payment{}, fmt.Errorf("apiclient: register cash payment: check_id is required")
+type fiscalMetaRequest struct {
+	TableLabel string `json:"table_label,omitempty"`
+	WaiterName string `json:"waiter_name,omitempty"`
+}
+
+type registerSaleRequest struct {
+	BranchID    string            `json:"branch_id"`
+	CheckID     string            `json:"check_id"`
+	Method      string            `json:"method"`
+	AmountTotal int64             `json:"amount_total"`
+	Currency    string            `json:"currency"`
+	Lines       []FiscalLine      `json:"lines,omitempty"`
+	Meta        fiscalMetaRequest `json:"meta"`
+}
+
+// ErrLinesTotalMismatch reports fiscal lines that do not add up to the payment
+// amount. A device rejects such a basket ("TotalMinor must equal lines"), so it
+// is refused here — before money is recorded — instead of surfacing later as a
+// failed fiscal registration on an already-taken payment.
+var ErrLinesTotalMismatch = errors.New("fiscal lines do not add up to the payment amount")
+
+// RegisterPaymentInput is one payment against a check. Method is the backend's
+// payment method ("cash", "terminal", ...). Lines are optional; when present
+// they must add up to AmountTotal.
+type RegisterPaymentInput struct {
+	BranchID    string
+	CheckID     string
+	Method      string
+	AmountTotal int64
+	Lines       []FiscalLine
+	TableLabel  string
+}
+
+func linesTotal(lines []FiscalLine) (int64, bool) {
+	var total int64
+	for _, l := range lines {
+		product := l.UnitPriceMinor * l.QuantityMilli
+		if product%1000 != 0 {
+			return 0, false
+		}
+		total += product / 1000
 	}
-	if amountTotal <= 0 {
-		return Payment{}, fmt.Errorf("apiclient: register cash payment: amount_total must be positive")
+	return total, true
+}
+
+// RegisterPayment calls POST /api/v1/payments (Idempotency-Key required —
+// ADR-SEC-003). branch_id is required by the handler (422 if empty);
+// AmountTotal must be > 0. AmountTotal is ONE installment against the check —
+// for a split/partial payment it is less than the check's full total (see
+// pos/repo.CheckRepo.GetTotal's sum(quantity*unit_price), the same computation
+// the frontend uses to derive the check's total and remaining balance — there
+// is no server-side "check total" endpoint). Calling this more than once for
+// the same check is expected and supported: the backend records each call as a
+// separate payment, and CloseCheck only succeeds once the sum of all of them
+// reaches the check total (payment/service.CheckService).
+//
+// The backend does NOT reject an amount above the check's remaining balance (no
+// overpayment guard) — callers must clamp to the remaining balance themselves
+// (see frontend/src/lib/payment.ts's clampToRemaining).
+//
+// Without Lines the backend synthesizes a single "Satis" line, which a real
+// device rejects (payment_service.go buildFiscalSale); the payment screen
+// therefore always sends them.
+func (c *Client) RegisterPayment(ctx context.Context, in RegisterPaymentInput) (Payment, error) {
+	if in.CheckID == "" {
+		return Payment{}, fmt.Errorf("apiclient: register payment: check_id is required")
+	}
+	if in.AmountTotal <= 0 {
+		return Payment{}, fmt.Errorf("apiclient: register payment: amount_total must be positive")
+	}
+	if len(in.Lines) > 0 {
+		total, exact := linesTotal(in.Lines)
+		if !exact || total != in.AmountTotal {
+			return Payment{}, fmt.Errorf("apiclient: register payment: %w (lines %d, amount %d)", ErrLinesTotalMismatch, total, in.AmountTotal)
+		}
 	}
 	var out Payment
 	req := registerSaleRequest{
-		BranchID:    branchID,
-		CheckID:     checkID,
-		Method:      "cash",
-		AmountTotal: amountTotal,
+		BranchID:    in.BranchID,
+		CheckID:     in.CheckID,
+		Method:      in.Method,
+		AmountTotal: in.AmountTotal,
 		Currency:    "TRY",
+		Lines:       in.Lines,
+		Meta:        fiscalMetaRequest{TableLabel: in.TableLabel},
 	}
 	if err := c.doIdempotent(ctx, http.MethodPost, "/api/v1/payments", req, &out); err != nil {
-		return Payment{}, fmt.Errorf("apiclient: register cash payment: %w", err)
+		return Payment{}, fmt.Errorf("apiclient: register payment: %w", err)
 	}
 	return out, nil
+}
+
+// RegisterCashPayment registers a cash sale without a fiscal basket. Kept for
+// callers that have no items to attach; the cashier flow uses RegisterPayment.
+func (c *Client) RegisterCashPayment(ctx context.Context, branchID, checkID string, amountTotal int64) (Payment, error) {
+	return c.RegisterPayment(ctx, RegisterPaymentInput{BranchID: branchID, CheckID: checkID, Method: "cash", AmountTotal: amountTotal})
 }
 
 // GetPayment calls GET /api/v1/payments/{id} — the ONLY way a client can

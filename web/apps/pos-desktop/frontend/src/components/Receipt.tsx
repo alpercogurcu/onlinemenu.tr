@@ -2,27 +2,13 @@ import { useEffect, useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import type { PendingLine } from '../lib/cart'
 import type { RemoteCompletedRow, RemotePendingFiscal, TrackedPayment } from '../lib/fiscalStatus'
-import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
+import { formatMoney } from '../lib/format'
 import { shortOrderId } from '../lib/kitchenPrint'
-import { formatMoneyInputDisplay, kurusToMoneyInput } from '../lib/numpad'
-import { changeDue as computeChangeDue, clampToRemaining, splitSuggestion } from '../lib/payment'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
 import { HoldButton } from './HoldButton'
 import { CheckIcon, ClockIcon } from './icons'
-import { Numpad } from './Numpad'
 import { PendingLineRow } from './PendingLineRow'
-
-const QUICK_NOTES = [5000, 10000, 20000, 50000] // ₺50 / ₺100 / ₺200 / ₺500 in kuruş
-// Turkish vowel harmony makes the dative suffix on a numeral irregular
-// across values (2 -> "2'ye", 3/4 -> "3'e"/"4'e") — not templatable from
-// the number alone, so each label is spelled out rather than built from
-// `${parts}'e böl`.
-const SPLIT_PARTS: { parts: number; label: string }[] = [
-  { parts: 2, label: "2'ye böl" },
-  { parts: 3, label: "3'e böl" },
-  { parts: 4, label: "4'e böl" },
-]
 
 type ReceiptProps = {
   tableLabel: string
@@ -63,18 +49,14 @@ type ReceiptProps = {
    * station — the reason `remaining` is lower / the close is blocked even
    * though this station's own `payments` list looks clear. Already deduped. */
   remotePendingPayments: readonly RemotePendingFiscal[]
-  /**
-   * amountToRegister is the CLAMPED amount for this one cash-payment step
-   * (never more than the remaining balance — see lib/payment's
-   * clampToRemaining). receivedAmount is the raw cash the customer physically
-   * handed over for this step (which may exceed amountToRegister when change is
-   * due) — passed alongside so the parent can attach it to the tracked payment
-   * for the receipt print that follows CloseCheck.
-   */
-  onRegisterPayment: (amountToRegister: number, receivedAmount: number) => Promise<void>
-  /** Requirement 3 — drop a failed payment from the tracked list so its amount
-   * returns to the collectable balance before the retry re-registers it. */
-  onDiscardFailedPayment: (paymentId: string) => void
+  /** Opens the payment screen over the middle panel (see PaymentScreen). */
+  onStartPayment: () => void
+  /** True while the payment screen is open — the rail then drops its own "Ödeme al". */
+  paymentActive: boolean
+  /** Requirement 3 — retry a failed payment: the parent drops it from the tracked
+   * list (returning its amount to the collectable balance) and reopens the
+   * payment screen on that amount and method. */
+  onRetryPayment: (payment: TrackedPayment) => void
   onCloseCheck: () => Promise<void>
   errorMessage: string
 }
@@ -83,8 +65,9 @@ type ReceiptProps = {
  * Right rail — the signature element: a live thermal-receipt view of the
  * current adisyon. Confirmed (already sent to kitchen) lines are read-only
  * mono rows; unsent lines are the same style but removable (void, red —
- * the only place red appears outside close/cancel). Cash payment mode
- * expands this panel in place instead of opening a modal.
+ * the only place red appears outside close/cancel). Taking the payment
+ * happens on the payment screen (PaymentScreen), which takes over the middle
+ * panel; the rail stays as the breakdown next to it.
  *
  * Since ADR-FISCAL-002 a registered payment is not the end of the story: each
  * one carries a fiscal-record status badge until the ÖKC confirms the receipt.
@@ -107,19 +90,12 @@ export function Receipt({
   payments,
   remoteCompletedPayments,
   remotePendingPayments,
-  onRegisterPayment,
-  onDiscardFailedPayment,
+  onStartPayment,
+  paymentActive,
+  onRetryPayment,
   onCloseCheck,
   errorMessage,
 }: ReceiptProps) {
-  const [cashMode, setCashMode] = useState(false)
-  const [receivedInput, setReceivedInput] = useState('')
-  // A preset (₺100, "2'ye böl", a retried amount) fills the field; the next key
-  // press then starts a fresh amount instead of appending to the preset — the
-  // cashier would otherwise have to backspace "200,00" digit by digit.
-  const [receivedIsPreset, setReceivedIsPreset] = useState(false)
-  const [submittingPayment, setSubmittingPayment] = useState(false)
-
   const grandTotal = confirmedTotal + pendingTotal
   const canSendOrder = pendingLines.length > 0 && !sendingOrder
 
@@ -128,303 +104,115 @@ export function Receipt({
   // money, and the check total — rather than from a single accumulated total.
   const canPay = pendingLines.length === 0 && confirmedTotal > 0 && remaining > 0
 
-  // An empty amount field means "exact cash for the remaining balance, no
-  // change" — the common case (including the common case of a single,
-  // non-split payment, where remaining === confirmedTotal). The cashier
-  // only types an amount when paying a partial share or when change is
-  // due, so a blank field must not block "Nakit alındı".
-  const receivedBlank = receivedInput.trim() === ''
-  const receivedKurus = receivedBlank ? remaining : parseMoneyInputToKurus(receivedInput)
-  // What actually gets registered as a payment — never more than what is
-  // still owed, so a cashier entering more than remaining (to make change
-  // on the final installment) never overpays the check; the excess comes
-  // back as changeDue, not as a recorded payment.
-  const amountToRegister = clampToRemaining(receivedKurus, remaining)
-  const changeDue = computeChangeDue(receivedKurus, remaining)
-  const receivedEnough = receivedKurus > 0 && remaining > 0
-
-  function applyPreset(moneyInput: string) {
-    setReceivedInput(moneyInput)
-    setReceivedIsPreset(true)
-  }
-
-  function handleNumpadChange(next: string) {
-    setReceivedInput(next)
-    setReceivedIsPreset(false)
-  }
-
-  async function handleConfirmPayment() {
-    setSubmittingPayment(true)
-    try {
-      await onRegisterPayment(amountToRegister, receivedKurus)
-      setReceivedInput('')
-      setReceivedIsPreset(false)
-      // Cash mode only closes itself once the balance is fully settled —
-      // otherwise it stays open, cleared, ready for the next installment.
-      if (remaining - amountToRegister <= 0) {
-        setCashMode(false)
-      }
-    } catch {
-      // errorMessage is already derived from onRegisterPayment's own state
-      // update in the parent (App), which also refreshes the remaining
-      // balance from the server on failure — nothing further to do here
-      // besides staying in cash mode so the cashier can retry.
-    } finally {
-      setSubmittingPayment(false)
-    }
-  }
-
-  // Requirement 3 — "Yeniden dene": drop the failed payment (returning its
-  // amount to `remaining`) and reopen the ordinary cash flow with that amount
-  // prefilled. No bespoke retry endpoint: this registers a brand-new payment,
-  // exactly as if the cashier had typed the amount again.
-  function handleRetryPayment(payment: TrackedPayment) {
-    onDiscardFailedPayment(payment.id)
-    applyPreset(kurusToMoneyInput(payment.amountTotal))
-    setCashMode(true)
-  }
-
   return (
     <aside className="flex h-full w-96 shrink-0 flex-col border-l border-line bg-panel">
       <div className="border-b border-line p-4">
         <h2 className="font-display text-lg font-bold text-ink">{tableLabel || 'Adisyon'}</h2>
       </div>
 
-      {!cashMode && (
-        <>
-          <div className="flex-1 overflow-y-auto px-4 py-2 font-mono text-sm text-ink">
-            {confirmedOrders.length === 0 && pendingLines.length === 0 && (
-              <p className="py-6 text-center text-ink-dim">Adisyon boş — ürün ekleyin.</p>
-            )}
+      <div className="flex-1 overflow-y-auto px-4 py-2 font-mono text-sm text-ink">
+        {confirmedOrders.length === 0 && pendingLines.length === 0 && (
+          <p className="py-6 text-center text-ink-dim">Adisyon boş — ürün ekleyin.</p>
+        )}
 
-            {confirmedOrders.map((order) => (
-              <div key={order.id}>
-                {order.items.map((item) => (
-                  <div key={item.id} className="receipt-line-enter py-1">
-                    <div className="flex justify-between gap-2">
-                      <span className="qty text-ink-dim">{item.quantity}×</span>
-                      <span className="flex-1 truncate">{item.product_name}</span>
-                      <span className="money tabular-nums">
-                        {formatMoney(item.quantity * item.unit_price_amount)}
-                      </span>
-                    </div>
-                    {item.note && <p className="break-words pl-7 text-xs text-ink-dim">{item.note}</p>}
-                  </div>
-                ))}
-                <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />
-              </div>
-            ))}
-
-            {pendingLines.map((line) => (
-              <PendingLineRow
-                key={line.clientId}
-                line={line}
-                onChangeQuantity={onChangePendingQuantity}
-                onRemove={onRemovePendingLine}
-              />
-            ))}
-          </div>
-
-          <div className="receipt-tear" aria-hidden="true" />
-
-          <div className="space-y-3 p-4">
-            <div className="flex items-baseline justify-between">
-              <span className="text-ink-dim">Ara toplam</span>
-              <span className="money font-display text-2xl font-bold tabular-nums text-ink">
-                {formatMoney(grandTotal)}
-              </span>
-            </div>
-
-            {settledPaidTotal > 0 && (
-              <div className="flex items-baseline justify-between rounded-md bg-teal/10 px-2 py-1 text-sm">
-                <span className="text-ink-dim">Önceden ödenen</span>
-                <span className="money font-semibold tabular-nums text-teal">
-                  {formatMoney(settledPaidTotal)}
-                </span>
-              </div>
-            )}
-
-            <PaymentStatusList
-              payments={payments}
-              remoteCompletedPayments={remoteCompletedPayments}
-              remotePendingPayments={remotePendingPayments}
-              onRetry={handleRetryPayment}
-            />
-
-            <ErrorBanner message={errorMessage} />
-
-            {pendingLines.length > 0 && (
-              <button
-                type="button"
-                onClick={onSendOrder}
-                disabled={!canSendOrder}
-                className="min-h-14 w-full rounded-lg bg-teal px-4 font-semibold text-amber-ink disabled:opacity-50"
-              >
-                {sendingOrder ? 'Gönderiliyor…' : 'Siparişi gönder'}
-              </button>
-            )}
-
-            {!isFullyPaid && (
-              <button
-                type="button"
-                disabled={!canPay}
-                onClick={() => setCashMode(true)}
-                className="min-h-14 w-full rounded-lg bg-amber px-4 font-display text-lg font-bold text-amber-ink disabled:opacity-40"
-              >
-                Nakit al
-              </button>
-            )}
-            {!isFullyPaid && pendingLines.length > 0 && (
-              <p className="text-center text-xs text-ink-dim">Önce siparişi gönderin</p>
-            )}
-
-            {/* Requirement 4 — the close is withheld, not merely disabled, while
-                a fiscal record is outstanding: a disabled HoldButton would still
-                invite the cashier to press and hold it for two seconds before
-                learning nothing happens. The reason takes its place. */}
-            {closeBlockReason ? (
-              <p
-                className="rounded-md border border-line bg-surface px-3 py-2 text-center text-sm text-ink"
-                role="status"
-              >
-                {closeBlockReason} — mali kayıt tamamlanmadan adisyon kapatılamaz.
-              </p>
-            ) : (
-              isFullyPaid && (
-                <HoldButton label="Basılı tutup kapat" holdingLabel="Kapatılıyor…" onConfirm={onCloseCheck} />
-              )
-            )}
-          </div>
-        </>
-      )}
-
-      {cashMode && (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-            <div className="flex items-baseline justify-between gap-2">
-              <p className="text-ink-dim">Kalan</p>
-              <p className="money font-display text-3xl font-bold tabular-nums text-ink">
-                {formatMoney(remaining)}
-              </p>
-            </div>
-            {settledPaidTotal > 0 && (
-              <p className="text-xs text-ink-dim">
-                {formatMoney(confirmedTotal)} hesaptan {formatMoney(settledPaidTotal)} ödendi
-              </p>
-            )}
-
-            <div className="grid grid-cols-4 gap-2">
-              {QUICK_NOTES.map((note) => (
-                <button
-                  key={note}
-                  type="button"
-                  onClick={() => applyPreset(kurusToMoneyInput(note))}
-                  className="min-h-12 rounded-md border border-line bg-surface text-sm font-semibold text-ink"
-                >
-                  {formatMoney(note)}
-                </button>
-              ))}
-            </div>
-
-            {/* Quick split — suggests an equal share of the REMAINING
-                balance (not the full check), so splitting after a partial
-                payment already made still divides what is actually left. */}
-            <div className="grid grid-cols-4 gap-2">
-              <button
-                type="button"
-                aria-label="Kalanın tamamı"
-                onClick={() => {
-                  setReceivedInput('')
-                  setReceivedIsPreset(false)
-                }}
-                className="min-h-12 rounded-md border border-amber bg-surface text-sm font-semibold text-amber"
-              >
-                Tam
-              </button>
-              {SPLIT_PARTS.map(({ parts, label }) => (
-                <button
-                  key={parts}
-                  type="button"
-                  onClick={() => applyPreset(kurusToMoneyInput(splitSuggestion(remaining, parts)))}
-                  className="min-h-12 rounded-md border border-dashed border-line bg-surface text-sm text-ink-dim"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div
-              id="received-amount"
-              role="status"
-              aria-label="Alınan tutar"
-              className="flex min-h-14 items-baseline justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2"
-            >
-              <span className="text-sm text-ink-dim">Alınan</span>
-              {receivedBlank ? (
-                <span className="money text-xl tabular-nums text-ink-dim">
-                  {formatMoney(remaining)} <span className="text-xs">(kalanın tamamı)</span>
-                </span>
-              ) : (
-                <span className="money text-2xl font-semibold tabular-nums text-ink">
-                  {formatMoneyInputDisplay(receivedInput)} ₺
-                </span>
-              )}
-            </div>
-
-            {/* Sits right under the amount, above the pad: change due is the number
-                the cashier must read before touching anything else, so it must
-                never be pushed below the fold by the keys. */}
-            {changeDue > 0 ? (
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="text-ink-dim">Para üstü</p>
-                <p key={changeDue} className="money change-due-pulse font-display text-3xl font-bold tabular-nums text-teal">
-                  {formatMoney(changeDue)}
-                </p>
-              </div>
-            ) : (
-              // Partial payment (entered < remaining) — no change is due,
-              // so show what this installment leaves behind instead, per
-              // req item 1 ("kalan her zaman görünür").
-              receivedKurus > 0 &&
-              amountToRegister < remaining && (
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-ink-dim">Bu ödemeden sonra kalan</p>
-                  <p className="money font-display text-2xl font-bold tabular-nums text-ink-dim">
-                    {formatMoney(remaining - amountToRegister)}
-                  </p>
+        {confirmedOrders.map((order) => (
+          <div key={order.id}>
+            {order.items.map((item) => (
+              <div key={item.id} className="receipt-line-enter py-1">
+                <div className="flex justify-between gap-2">
+                  <span className="qty text-ink-dim">{item.quantity}×</span>
+                  <span className="flex-1 truncate">{item.product_name}</span>
+                  <span className="money tabular-nums">
+                    {formatMoney(item.quantity * item.unit_price_amount)}
+                  </span>
                 </div>
-              )
-            )}
-
-            <Numpad
-              mode="money"
-              value={receivedInput}
-              pendingReplace={receivedIsPreset}
-              onChange={handleNumpadChange}
-              disabled={submittingPayment}
-            />
+                {item.note && <p className="break-words pl-7 text-xs text-ink-dim">{item.note}</p>}
+              </div>
+            ))}
+            <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />
           </div>
+        ))}
 
-          <div className="shrink-0 space-y-2 border-t border-line p-4">
-            <ErrorBanner message={errorMessage} />
-            <button
-              type="button"
-              disabled={!receivedEnough || submittingPayment}
-              onClick={handleConfirmPayment}
-              className="min-h-14 w-full rounded-lg bg-amber px-4 font-display text-lg font-bold text-amber-ink disabled:opacity-40"
-            >
-              {submittingPayment ? 'Kaydediliyor…' : 'Nakit alındı'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCashMode(false)}
-              className="min-h-14 w-full rounded-lg border border-line px-4 font-medium text-ink-dim"
-            >
-              Vazgeç
-            </button>
-          </div>
+        {pendingLines.map((line) => (
+          <PendingLineRow
+            key={line.clientId}
+            line={line}
+            onChangeQuantity={onChangePendingQuantity}
+            onRemove={onRemovePendingLine}
+          />
+        ))}
+      </div>
+
+      <div className="receipt-tear" aria-hidden="true" />
+
+      <div className="space-y-3 p-4">
+        <div className="flex items-baseline justify-between">
+          <span className="text-ink-dim">Ara toplam</span>
+          <span className="money font-display text-2xl font-bold tabular-nums text-ink">
+            {formatMoney(grandTotal)}
+          </span>
         </div>
-      )}
+
+        {settledPaidTotal > 0 && (
+          <div className="flex items-baseline justify-between rounded-md bg-teal/10 px-2 py-1 text-sm">
+            <span className="text-ink-dim">Önceden ödenen</span>
+            <span className="money font-semibold tabular-nums text-teal">
+              {formatMoney(settledPaidTotal)}
+            </span>
+          </div>
+        )}
+
+        <PaymentStatusList
+          payments={payments}
+          remoteCompletedPayments={remoteCompletedPayments}
+          remotePendingPayments={remotePendingPayments}
+          onRetry={onRetryPayment}
+        />
+
+        <ErrorBanner message={errorMessage} />
+
+        {pendingLines.length > 0 && (
+          <button
+            type="button"
+            onClick={onSendOrder}
+            disabled={!canSendOrder}
+            className="min-h-14 w-full rounded-lg bg-teal px-4 font-semibold text-amber-ink disabled:opacity-50"
+          >
+            {sendingOrder ? 'Gönderiliyor…' : 'Siparişi gönder'}
+          </button>
+        )}
+
+        {!isFullyPaid && !paymentActive && (
+          <button
+            type="button"
+            disabled={!canPay}
+            onClick={onStartPayment}
+            className="min-h-14 w-full rounded-lg bg-amber px-4 font-display text-lg font-bold text-amber-ink disabled:opacity-40"
+          >
+            Ödeme al
+          </button>
+        )}
+        {!isFullyPaid && pendingLines.length > 0 && (
+          <p className="text-center text-xs text-ink-dim">Önce siparişi gönderin</p>
+        )}
+
+        {/* Requirement 4 — the close is withheld, not merely disabled, while
+            a fiscal record is outstanding: a disabled HoldButton would still
+            invite the cashier to press and hold it for two seconds before
+            learning nothing happens. The reason takes its place. */}
+        {closeBlockReason ? (
+          <p
+            className="rounded-md border border-line bg-surface px-3 py-2 text-center text-sm text-ink"
+            role="status"
+          >
+            {closeBlockReason} — mali kayıt tamamlanmadan adisyon kapatılamaz.
+          </p>
+        ) : (
+          isFullyPaid && (
+            <HoldButton label="Basılı tutup kapat" holdingLabel="Kapatılıyor…" onConfirm={onCloseCheck} />
+          )
+        )}
+      </div>
     </aside>
   )
 }
@@ -467,7 +255,10 @@ function PaymentStatusList({
         <li key={payment.id} className="rounded-md border border-line bg-surface px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="money text-sm font-semibold tabular-nums text-ink">
-              {formatMoney(payment.amountTotal)}
+              {formatMoney(payment.amountTotal)}{' '}
+              {payment.method && (
+                <span className="text-xs font-normal text-ink-dim">{payment.method === 'card' ? 'Kart' : 'Nakit'}</span>
+              )}
             </span>
             <FiscalStatusBadge payment={payment} />
           </div>

@@ -181,7 +181,9 @@ func (a *App) ListProducts(categoryID string) ([]ProductDTO, error) {
 			SortOrder:   p.SortOrder,
 		}
 	}
-	a.optionsResolver().enrich(a.ctx, out)
+	resolver := a.optionsResolver()
+	resolver.rememberProducts(products)
+	resolver.enrich(a.ctx, out)
 	return out, nil
 }
 
@@ -292,42 +294,9 @@ func (a *App) PlaceOrder(branchID, checkID string, items []OrderItemInputDTO) (O
 	return toOrderDTO(o), nil
 }
 
-// RegisterCashPayment registers a cash sale against a check. amountTotal is
-// in kuruş (smallest currency unit) and is ONE cash-payment installment —
-// for a split/partial payment it is less than the check's full total, not
-// always the whole receipt (see apiclient.Client.RegisterCashPayment's doc
-// comment). The frontend derives the check's total (and remaining balance)
-// by summing every placed order's item lines (quantity * unit_price_amount),
-// the same computation pos/repo.CheckRepo.GetTotal performs server-side for
-// CloseCheck's paid-in-full check (there is no server-side "check total"
-// endpoint to read it from), and is responsible for clamping amountTotal to
-// that remaining balance before calling this — see
-// apiclient.Client.RegisterCashPayment's doc comment on why (no
-// server-side overpayment guard).
-func (a *App) RegisterCashPayment(branchID, checkID string, amountTotal int64) (PaymentDTO, error) {
-	if branchID == "" {
-		return PaymentDTO{}, fmt.Errorf("şube bilgisi eksik — oturum yeniden açılmalı")
-	}
-	p, err := a.api.RegisterCashPayment(a.ctx, branchID, checkID, amountTotal)
-	if err != nil {
-		return PaymentDTO{}, err
-	}
-	dto := PaymentDTO{
-		ID:          p.ID,
-		Method:      p.Method,
-		Status:      p.Status,
-		AmountTotal: p.AmountTotal,
-		Currency:    p.Currency,
-	}
-	if p.CheckID != nil {
-		dto.CheckID = *p.CheckID
-	}
-	return dto, nil
-}
-
 // GetPayment reads a single payment by id so the cashier UI can observe the
 // asynchronous fiscal registration finishing (ADR-FISCAL-002): since
-// RegisterCashPayment now returns status "pending" rather than a completed
+// RegisterPayment now returns status "pending" rather than a completed
 // sale, this is what turns the "Mali kayıt bekliyor" badge into
 // "Fiş kesildi" / "Başarısız" / "İptal".
 //
@@ -379,10 +348,10 @@ func (a *App) GetPayment(paymentID string) (PaymentDTO, error) {
 // correct remaining balance instead of restarting the count from zero.
 //
 // IMPORTANT — the client-side clamp (never send more than the remaining
-// balance — see apiclient.Client.RegisterCashPayment's doc comment) is a
+// balance — see apiclient.Client.RegisterPayment's doc comment) is a
 // UI-only guard, not a backend one: pos/service.CheckService.Close only
 // rejects paid < total (underpayment); it does not reject paid > total, so
-// nothing server-side stops a RegisterCashPayment call from succeeding and
+// nothing server-side stops a RegisterPayment call from succeeding and
 // overpaying a check if the client fails to clamp. This frontend check is
 // the only thing preventing that today.
 //

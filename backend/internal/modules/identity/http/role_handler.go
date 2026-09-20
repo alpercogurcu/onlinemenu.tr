@@ -156,5 +156,10 @@ func toRoleResponse(r domain.Role) roleResponse {
 		SystemKey: r.SystemKey,
 		IsSystem:  r.IsSystem,
 		BranchID:  r.BranchID,
+		// Without this the admin UI never offers a branch picker when the
+		// role being granted is branch-scoped (ADR-SEC-005): every role read
+		// back as chain-wide, and the membership POST then failed the
+		// memberships_branch_scope_guard trigger.
+		BranchScoped: r.BranchScoped,
 	}
 }

@@ -248,6 +248,13 @@ func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// nil for the chain manager (OPA tenant scope), the caller's own branch
+	// otherwise. Both branches of this handler are bounded by it: a
+	// branch-scoped principal must not be able to read another branch's
+	// takings by naming its check, nor to page through the whole chain's
+	// payments by naming nothing at all.
+	branchScope := service.BranchScopeFilter(r.Context(), p)
+
 	if v := r.URL.Query().Get("check_id"); v != "" {
 		checkID, err := uuid.Parse(v)
 		if err != nil {
@@ -260,11 +267,7 @@ func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		out := make([]paymentResponse, len(payments))
-		for i, pay := range payments {
-			out[i] = toPaymentResponse(pay)
-		}
-		respondJSON(w, http.StatusOK, map[string]any{"payments": out})
+		respondJSON(w, http.StatusOK, map[string]any{"payments": toPaymentResponses(payments, branchScope)})
 		return
 	}
 
@@ -280,17 +283,32 @@ func (h *Handler) listPayments(w http.ResponseWriter, r *http.Request) {
 			offset = n
 		}
 	}
-	payments, err := h.payments.ListByTenant(r.Context(), p.TenantID, limit, offset)
+	payments, err := h.payments.ListByTenant(r.Context(), p.TenantID, branchScope, limit, offset)
 	if err != nil {
 		h.logger.Error("payment: list", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	out := make([]paymentResponse, len(payments))
-	for i, pay := range payments {
-		out[i] = toPaymentResponse(pay)
+	respondJSON(w, http.StatusOK, map[string]any{"payments": toPaymentResponses(payments, branchScope)})
+}
+
+// toPaymentResponses projects a payment page, dropping rows outside
+// branchScope (nil = every branch).
+//
+// The tenant-wide list is filtered in SQL, but the check-scoped one is
+// filtered here: ListByCheck is also the cross-module double-payment guard,
+// and narrowing its query would change what the service reports to pos as
+// already paid. Filtering the DTO keeps the wire answer branch-correct
+// without touching that contract.
+func toPaymentResponses(payments []domain.Payment, branchScope *uuid.UUID) []paymentResponse {
+	out := make([]paymentResponse, 0, len(payments))
+	for _, pay := range payments {
+		if branchScope != nil && pay.BranchID != *branchScope {
+			continue
+		}
+		out = append(out, toPaymentResponse(pay))
 	}
-	respondJSON(w, http.StatusOK, map[string]any{"payments": out})
+	return out
 }
 
 func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +324,19 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.BranchID == uuid.Nil {
 		http.Error(w, "branch_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+	// ADR-AUTH-001 layer 3. Until this guard existed, a cashier bound to
+	// branch B could POST branch_id=A and the sale went through 201: the
+	// money landed in branch A's open drawer and a fiscal receipt was minted
+	// against it. OPA (layer 2) only decides that "register a sale" is
+	// allowed at all — it never sees which branch the body names — and
+	// AssertCheckWritable only compares the adisyon against that same
+	// attacker-supplied branch_id, so the two agreed with each other and
+	// nobody checked the principal. Refused BEFORE the service so the 403
+	// precedes any check verdict (see service.RequireBranchAccess).
+	if err := service.RequireBranchAccess(r.Context(), p, req.BranchID); err != nil {
+		respondError(w, http.StatusForbidden, codeBranchForbidden, "branch is outside this principal's scope")
 		return
 	}
 
@@ -343,6 +374,11 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 // are left as they are — clients already parse them.
 func (h *Handler) registerSaleError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, pub.ErrBranchForbidden):
+		// Unreachable through the HTTP guard above, which refuses first.
+		// Mapped anyway so a future service-side guard cannot regress into a
+		// 500 the way ErrInvalidInput once did.
+		respondError(w, http.StatusForbidden, codeBranchForbidden, "branch is outside this principal's scope")
 	case errors.Is(err, pub.ErrCheckNotOpen):
 		// The 2026-09-15 production finding: cash was collected and a fiscal
 		// receipt minted against a closed adisyon, and the response was 201.
@@ -410,6 +446,14 @@ func (h *Handler) getPayment(w http.ResponseWriter, r *http.Request) {
 		}
 		h.logger.Error("payment: get by id", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	// 404 rather than 403 on a cross-branch read: a 403 would confirm the id
+	// exists in the tenant, letting a branch B station enumerate branch A's
+	// takings (docs/lessons-from-b2b.md §2). Writes keep their 403 — there
+	// the caller already holds a resource they legitimately know about.
+	if service.RequireBranchAccess(r.Context(), p, payment.BranchID) != nil {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	respondJSON(w, http.StatusOK, toPaymentResponse(payment))

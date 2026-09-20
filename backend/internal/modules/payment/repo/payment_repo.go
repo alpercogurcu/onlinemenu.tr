@@ -153,16 +153,22 @@ func (r *PaymentRepo) InsertFiscalReceipt(ctx context.Context, tx pgx.Tx, rec do
 }
 
 // ListByTenant returns payments for a tenant ordered by created_at desc.
-func (r *PaymentRepo) ListByTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, limit, offset int) ([]domain.Payment, error) {
+// branchID narrows the page to one branch (ADR-AUTH-001 layer 3); nil means
+// every branch of the chain and is reserved for tenant-scoped callers. It is
+// applied in SQL rather than by discarding rows afterwards so LIMIT/OFFSET
+// still paginate what the caller may actually see — post-filtering would
+// hand a branch-scoped cashier short, and eventually empty, pages.
+func (r *PaymentRepo) ListByTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, branchID *uuid.UUID, limit, offset int) ([]domain.Payment, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
 		       method, status, amount_total, currency, fiscal_receipt_id,
 		       created_at, completed_at
 		FROM payments
 		WHERE tenant_id = $1
+		  AND ($2::uuid IS NULL OR branch_id = $2)
 		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`, tenantID, limit, offset)
+		LIMIT $3 OFFSET $4
+	`, tenantID, branchID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("payment/repo: list by tenant: %w", err)
 	}

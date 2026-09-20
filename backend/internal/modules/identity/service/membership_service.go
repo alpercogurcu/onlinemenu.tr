@@ -122,25 +122,25 @@ func (s *MembershipService) ListContextsByPerson(ctx context.Context, personID u
 // Create binds a person to a role within a tenant (and optionally a branch).
 // Branch-scoped roles require a non-nil branchID. System roles (nil TenantID)
 // are always valid targets; no additional tenant-ownership check is needed.
-func (s *MembershipService) Create(ctx context.Context, tenantID, personID uuid.UUID, branchID *uuid.UUID, roleID uuid.UUID) (domain.Membership, error) {
+func (s *MembershipService) Create(ctx context.Context, tenantID, personID uuid.UUID, branchID *uuid.UUID, roleID uuid.UUID) (domain.MembershipDetail, error) {
 	var role domain.Role
 	if err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		role, err = s.roleRepo.GetByID(ctx, tx, tenantID, roleID)
 		return err
 	}); err != nil {
-		return domain.Membership{}, wrapNotFound(err, "identity/service/membership: create — get role: %w")
+		return domain.MembershipDetail{}, wrapNotFound(err, "identity/service/membership: create — get role: %w")
 	}
 
 	// Early, clean 400. The memberships_branch_scope_guard trigger (identity
 	// migration 000012) is the last line of defence; this is the UX path.
 	if role.RequiresBranch() && branchID == nil {
-		return domain.Membership{}, pub.ErrInvalid
+		return domain.MembershipDetail{}, pub.ErrInvalid
 	}
 
 	// R2: a branch_id, if supplied, must actually exist in this tenant.
 	if err := validateBranch(ctx, s.tenantReader, tenantID, branchID); err != nil {
-		return domain.Membership{}, err
+		return domain.MembershipDetail{}, err
 	}
 
 	m := domain.Membership{
@@ -151,14 +151,22 @@ func (s *MembershipService) Create(ctx context.Context, tenantID, personID uuid.
 		Status:   domain.MembershipActive,
 	}
 
-	var created domain.Membership
+	// The detail projection is read back inside the SAME transaction as the
+	// insert, not after it: the admin user list renders person_name /
+	// person_email / role_name, and a caller that had to re-read the row
+	// afterwards would see it through a second RLS snapshot (and answer with
+	// empty display fields whenever that read failed).
+	var created domain.MembershipDetail
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		var err error
-		created, err = s.membershipRepo.Create(ctx, tx, m)
+		row, err := s.membershipRepo.Create(ctx, tx, m)
+		if err != nil {
+			return err
+		}
+		created, err = s.membershipRepo.GetDetailByID(ctx, tx, tenantID, row.ID)
 		return err
 	})
 	if err != nil {
-		return domain.Membership{}, fmt.Errorf("identity/service/membership: create: %w", err)
+		return domain.MembershipDetail{}, fmt.Errorf("identity/service/membership: create: %w", err)
 	}
 	return created, nil
 }

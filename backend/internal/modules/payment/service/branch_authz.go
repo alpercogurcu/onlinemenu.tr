@@ -48,3 +48,26 @@ func requireBranch(ctx context.Context, principal auth.Principal, branchID uuid.
 	}
 	return pub.ErrBranchForbidden
 }
+
+// RequireBranchAccess exports requireBranch for payment's own HTTP layer,
+// which must apply the ADR-AUTH-001 layer 3 check to the client-supplied
+// branch_id of a sale BEFORE the service is entered.
+//
+// The guard sits in front of RegisterSale rather than inside it because the
+// ordering it produces is load-bearing: "this cashier does not work at branch
+// A" (403) must be answered before "that adisyon belongs to another branch"
+// (409 check_branch_mismatch, from AssertCheckWritable). Folding both into
+// RegisterSale would make the two verdicts race on argument order, and the
+// POS client branches on the difference — one is a misconfigured station, the
+// other a mistyped adisyon.
+func RequireBranchAccess(ctx context.Context, principal auth.Principal, branchID uuid.UUID) error {
+	return requireBranch(ctx, principal, branchID)
+}
+
+// BranchScopeFilter exports branchScopeFilter for payment's HTTP layer, so a
+// list endpoint that takes no branch_id (GET /payments, GET /payments?check_id=)
+// is bounded by the caller's own branch instead of answering chain-wide.
+// See branchScopeFilter for the fail-closed rationale on a nil BranchID.
+func BranchScopeFilter(ctx context.Context, principal auth.Principal) *uuid.UUID {
+	return branchScopeFilter(ctx, principal)
+}

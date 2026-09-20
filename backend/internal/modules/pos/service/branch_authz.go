@@ -67,3 +67,27 @@ func requireBranch(ctx context.Context, principal auth.Principal, branchID uuid.
 func RequireBranchAccess(ctx context.Context, principal auth.Principal, branchID uuid.UUID) error {
 	return requireBranch(ctx, principal, branchID)
 }
+
+// BranchScopeFilter resolves the same ADR-AUTH-001 layer 3 decision as
+// requireBranch into a *list filter* rather than a yes/no verdict: nil when
+// the principal may see every branch of the chain (OPA tenant scope —
+// manager), otherwise the one branch they may see.
+//
+// It exists because a list endpoint cannot answer "forbidden" when the caller
+// named no branch at all. Before this, GET /pos/checks without a branch_id
+// handed a branch B cashier every open adisyon in the chain: RLS bounds the
+// read to the tenant, and branch_id was documented as "narrowing, not
+// restricting". Reads are now restricted the same way writes are, so the
+// filter is forced rather than merely offered.
+//
+// A branch-scoped principal whose own BranchID is uuid.Nil filters to
+// uuid.Nil, which matches no row (checks.branch_id is NOT NULL). That is the
+// deliberate fail-closed direction and matches payment's branchScopeFilter:
+// an empty list is recoverable, a chain-wide leak is not.
+func BranchScopeFilter(ctx context.Context, principal auth.Principal) *uuid.UUID {
+	if scope, ok := auth.ScopeFromContext(ctx); ok && scope == "tenant" {
+		return nil
+	}
+	branchID := principal.BranchID
+	return &branchID
+}

@@ -94,7 +94,7 @@ func (h *Handler) CreateMembership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeJSON(w, http.StatusCreated, toMembershipResponse(created))
+	h.writeJSON(w, http.StatusCreated, toMembershipDetailResponse(created))
 }
 
 func (h *Handler) UpdateMembershipStatus(w http.ResponseWriter, r *http.Request) {

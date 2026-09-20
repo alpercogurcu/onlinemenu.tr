@@ -360,6 +360,14 @@ func TestMembershipService_Create_KnownBranch_Succeeds(t *testing.T) {
 	membership, err := membershipSvc.Create(ctx, tenantA, person.ID, &branchA, cashierRoleID)
 	require.NoError(t, err)
 	assert.Equal(t, branchA, *membership.BranchID)
+
+	// Create returns the JOINED projection, not the bare row: POST
+	// /memberships answers with the shape the admin user table renders, and
+	// before this it echoed empty person_name / person_email / role_name, so
+	// a freshly invited person showed up as a blank row until reload.
+	assert.Equal(t, "Known Branch", membership.PersonName)
+	assert.Equal(t, person.Email, membership.PersonEmail)
+	assert.NotEmpty(t, membership.RoleName, "role_name must be joined in, not left empty")
 }
 
 // TestMembershipService_Create_UnknownBranch_ReturnsErrInvalidInput pins R2:

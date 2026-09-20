@@ -85,6 +85,53 @@ func (r *MembershipRepo) ListByPerson(ctx context.Context, tx pgx.Tx, tenantID, 
 // persons_select only exposes people who hold a membership in this tenant,
 // which every listed row satisfies, but the join must not turn a policy
 // change into silently missing users.
+// GetDetailByID returns a single membership with the person and role display
+// fields joined in — the same projection ListDetailsForTenant produces, for
+// one row. It exists so POST /memberships can answer with the shape the admin
+// list already renders (person_name, person_email, role_name) instead of a
+// row whose display fields are empty strings.
+func (r *MembershipRepo) GetDetailByID(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, membershipID uuid.UUID,
+) (domain.MembershipDetail, error) {
+	row := tx.QueryRow(ctx, membershipDetailSelect+`
+		WHERE m.tenant_id = $1 AND m.id = $2`, tenantID, membershipID)
+
+	var (
+		d         domain.MembershipDetail
+		status    string
+		createdAt time.Time
+		updatedAt time.Time
+	)
+	if err := row.Scan(
+		&d.ID, &d.PersonID, &d.TenantID, &d.BranchID,
+		&d.RoleID, &status, &createdAt, &updatedAt,
+		&d.PersonName, &d.PersonEmail, &d.RoleName,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.MembershipDetail{}, pub.ErrNotFound
+		}
+		return domain.MembershipDetail{}, fmt.Errorf("identity/repo/membership: get detail by id: %w", err)
+	}
+	d.Status = domain.MembershipStatus(status)
+	d.CreatedAt = createdAt
+	d.UpdatedAt = updatedAt
+	return d, nil
+}
+
+// membershipDetailSelect is the shared projection behind GetDetailByID and
+// ListDetailsForTenant. persons/roles are LEFT JOINed (not INNER) so a
+// membership stays visible even when its role row is a system role the
+// tenant-scoped RLS context cannot read; the display name then comes back
+// empty rather than dropping the row.
+const membershipDetailSelect = `
+		SELECT m.id, m.person_id, m.tenant_id, m.branch_id, m.role_id, m.status, m.created_at, m.updated_at,
+		       COALESCE(p.full_name, ''), COALESCE(p.email, ''), COALESCE(r.name, '')
+		FROM memberships m
+		LEFT JOIN persons p ON p.id = m.person_id
+		LEFT JOIN roles r ON r.id = m.role_id`
+
 func (r *MembershipRepo) ListDetailsForTenant(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -92,16 +139,9 @@ func (r *MembershipRepo) ListDetailsForTenant(
 	personID *uuid.UUID,
 	branchID *uuid.UUID,
 ) ([]domain.MembershipDetail, error) {
-	const base = `
-		SELECT m.id, m.person_id, m.tenant_id, m.branch_id, m.role_id, m.status, m.created_at, m.updated_at,
-		       COALESCE(p.full_name, ''), COALESCE(p.email, ''), COALESCE(r.name, '')
-		FROM memberships m
-		LEFT JOIN persons p ON p.id = m.person_id
-		LEFT JOIN roles r ON r.id = m.role_id
-		WHERE m.tenant_id = $1`
-
 	args := []any{tenantID}
-	q := base
+	q := membershipDetailSelect + `
+		WHERE m.tenant_id = $1`
 	if personID != nil {
 		args = append(args, *personID)
 		q += fmt.Sprintf(" AND m.person_id = $%d", len(args))

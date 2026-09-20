@@ -137,16 +137,44 @@ func requirePrincipal(w http.ResponseWriter, r *http.Request) (auth.Principal, b
 	return p, true
 }
 
+// visibleBranch is the read-side counterpart of service.RequireBranchAccess
+// for endpoints addressing ONE persisted row by id. It answers 404, not the
+// 403 the write paths use: a 403 confirms that the id exists inside the
+// tenant, which is exactly the existence oracle docs/lessons-from-b2b.md §2
+// warns about — a branch B cashier could enumerate branch A's adisyon and
+// order ids and learn how busy it is without reading a single field.
+//
+// List endpoints do NOT go through here: they have no single row to hide and
+// are force-filtered with service.BranchScopeFilter instead. Writes keep
+// their 403 (the caller named a resource they can see is real — the e2e role
+// matrix pins that distinction).
+//
+// It reports whether the caller may proceed, and has already written the
+// response when it reports false.
+func (h *Handler) visibleBranch(w http.ResponseWriter, r *http.Request, p auth.Principal, branchID uuid.UUID) bool {
+	if err := service.RequireBranchAccess(r.Context(), p, branchID); err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
 // ---------------------------------------------------------------------------
 // Check handlers
 // ---------------------------------------------------------------------------
 
-// listChecks supports two optional query filters, status and branch_id (both
-// narrowing, not restricting, the tenant-wide result set — see
-// CheckService.List's doc comment on why branch_id is not enforced against
-// the principal here). Either or both may be present; absent means "no
-// filter on that column", so an empty query string must not be treated as an
-// invalid value — only a *present but malformed* value is a 422.
+// listChecks supports two optional query filters, status and branch_id.
+// Absent means "no filter on that column", so an empty query string must not
+// be treated as an invalid value — only a *present but malformed* value is a
+// 422.
+//
+// branch_id is no longer merely narrowing (ADR-AUTH-001 layer 3): a
+// branch-scoped principal naming another branch is refused with 403, and one
+// naming no branch at all has their own branch forced in by
+// service.BranchScopeFilter. Refusing the explicit case rather than silently
+// rewriting it is deliberate — a cashier whose station is misconfigured for
+// branch A must be told, not handed branch B's adisyons under branch A's
+// heading. The chain manager (OPA tenant scope) keeps the unfiltered view.
 func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
@@ -167,7 +195,13 @@ func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid branch_id", http.StatusUnprocessableEntity)
 			return
 		}
+		if err := service.RequireBranchAccess(r.Context(), p, branchID); err != nil {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		filter.BranchID = &branchID
+	} else {
+		filter.BranchID = service.BranchScopeFilter(r.Context(), p)
 	}
 	checks, totals, err := h.checks.List(r.Context(), p.TenantID, filter)
 	if err != nil {
@@ -237,6 +271,9 @@ func (h *Handler) getCheck(w http.ResponseWriter, r *http.Request) {
 	c, total, err := h.checks.GetByIDWithTotal(r.Context(), p.TenantID, id)
 	if err != nil {
 		h.error(w, r, err)
+		return
+	}
+	if !h.visibleBranch(w, r, p, c.BranchID) {
 		return
 	}
 	resp := toCheckResponse(c)
@@ -396,6 +433,18 @@ func (h *Handler) listOrdersByCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid check id", http.StatusBadRequest)
 		return
 	}
+	// The owning check is resolved first so an adisyon of another branch is
+	// hidden even when it currently carries no orders — deriving the branch
+	// from the returned rows would answer 200 [] for an empty foreign check
+	// and 404 for a populated one, which is itself an existence oracle.
+	owner, err := h.checks.GetByID(r.Context(), p.TenantID, checkID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	if !h.visibleBranch(w, r, p, owner.BranchID) {
+		return
+	}
 	orders, err := h.orders.ListByCheck(r.Context(), p.TenantID, checkID)
 	if err != nil {
 		h.error(w, r, err)
@@ -508,9 +557,15 @@ func (h *Handler) listOrdersByIDs(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	resp := make([]orderResponse, len(orders))
-	for i, o := range orders {
-		resp[i] = toOrderResponse(o)
+	// Another branch's orders drop out of the response rather than failing
+	// the call: this endpoint is already contractually partial (see above),
+	// and a kitchen board that asked for one stale id must not be blanked.
+	resp := make([]orderResponse, 0, len(orders))
+	for _, o := range orders {
+		if service.RequireBranchAccess(r.Context(), p, o.BranchID) != nil {
+			continue
+		}
+		resp = append(resp, toOrderResponse(o))
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -565,6 +620,9 @@ func (h *Handler) getOrder(w http.ResponseWriter, r *http.Request) {
 	o, err := h.orders.GetByID(r.Context(), p.TenantID, id)
 	if err != nil {
 		h.error(w, r, err)
+		return
+	}
+	if !h.visibleBranch(w, r, p, o.BranchID) {
 		return
 	}
 	respondJSON(w, http.StatusOK, toOrderResponse(o))

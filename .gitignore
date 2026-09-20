@@ -97,3 +97,6 @@ web/apps/pos-desktop/build/bin/
 # --exclude listesiyle eşleşir).
 deploy/.git-sha
 deploy/.api-image
+
+# b2b personel davet çıktıları (kişisel veri)
+deploy/b2b-staff.local.*

@@ -47,8 +47,8 @@ küme `product_type='pos_sale'` ürünleridir.
 
 | b2b | Online Menu | Not |
 |---|---|---|
-| şube `sales` | `branches` `ownership_type='sube'`, `operation_type='fast_food'`, slug = adın ASCII hali (`adapazari`, `izmit`, `kirkpinar`, `serdivan`) | franchise bilgisi b2b'de yok → hepsi `sube` |
-| şube `manufacturing` | `operation_type='imalat'` | yalnız `include_manufacturing=1` ile (Soru 2) |
+| şube `sales` | `branches` `operation_type='fast_food'`, slug = adın ASCII hali (`adapazari`, `izmit`, `kirkpinar`, `serdivan`) | ownership: ADA/IZM/KRK = `franchise`, SRD = `sube` (§10 karar 3) |
+| şube `manufacturing` | `operation_type='imalat'`, ad "İmalat Merkezi (Serdivan)", `sube` | yalnız `include_manufacturing=1` ile |
 | şube adres etiketi | `branches.address` | `city/district` boş kalır (b2b'de yok) |
 | — | `branch_settings` (yeni şubeler için) `fiscal_device_type='mock'`, `tax_rate_bps=1000` (`business_day_offset=240` migration varsayılanı) | prod şu an mock ÖKC; `'none'` prod'da yasak |
 | `products.sale_price_tl` (KDV-dahil TL) | `products.price_amount` = `round(TL×100)` kuruş, `currency='TRY'` | **Tenant fiyatı = b2b tabanı = en düşük fiyat.** Veri bunu destekliyor: ADA/SRD taban fiyattan, İzmit/Kırkpınar hep ≥ taban. |
@@ -107,3 +107,21 @@ Kaynak liste, repoya girmeyecek biçimde alınır: `SELECT full_name, email, rol
 - **"Ana Şube"** yeniden adlandırılmış kalır ve import'un oluşturduğu `branch_settings` satırı silinmez: gerekirse elle `UPDATE branches SET name='Ana Şube', slug=NULL WHERE id=…` + o şubenin `branch_settings` satırı.
 - Tam geri dönüş: adım 2'deki yedek.
 - Personel daveti geri alınamaz sayılır: Keycloak kullanıcısı + membership ayrı silinir (DELETE membership, Keycloak'tan devre dışı).
+
+## 10. Uygulandı 2026-09-20
+
+**Kararlar:** (1) "Ana Şube" → Serdivan (`existing_branch_code=SRD`, aynı id, 3 masa yerinde). (2) İmalat Merkezi alındı: "İmalat Merkezi (Serdivan)", `imalat`, `sube`.
+(3) Adapazarı/İzmit/Kırkpınar `franchise`+`fast_food`; Serdivan `sube`. (4) 3 kategori; demo ürünler `is_active=false` (`-v deactivate_demo=1`).
+(5) Fiyatlar KDV-dahil, `tax_rate_bps=1000`. (6) Personel: davet ucu ÇAĞRILMADI, komutlar üretildi (aşağıda).
+
+**Sıra:** dev'de kuru+gerçek+tekrar+geri alma → prod yedeği (`/root/backups/onlinemenu-pre-b2b-import-20260920.dump`) → prod kuru koşu (ROLLBACK, değişiklik yok doğrulandı) → prod gerçek koşu (`app_migrator`, tek transaction, `COMMIT`).
+
+**Prod'da öncesi → sonrası (SELECT ile doğrulandı):** şube 1 → **5** (5'inde `branch_settings` mock/1000) · kategori 2 → **5** (Burgerler 11, Tavuk 5, Çocuk 2 aktif ürünle; eski 2'sinde aktif ürün 0) ·
+ürün 3 → **21** (18 aktif + 3 pasif demo) · override 0 → **20** (İzmit 10, Kırkpınar 10; American Smash 49000, aralık 44000–58500 kuruş, hepsi `is_available=true`). Başka tabloya dokunulmadı.
+
+**Doğrulanamayanlar:** Admin UI/API testi yapılamadı — `deploy/.env.diverserver.local` içindeki `FIRST_ADMIN_PASSWORD` Keycloak'ta "Invalid username or password" verdi (parola 09-15'ten sonra değişmiş); prod'da doğrudan-grant istemcisi yok, kilitlenmemek için tek denemeyle durduruldu. Etkin fiyat SQL düzeyinde doğrulandı (İzmit American Smash 49000). Kalan: yönetici parolasıyla `GET /catalog/branches/{izmit}/product-overrides` (10 satır) ve Şube Fiyatları sayfasında İzmit rozetleri.
+
+**Personel komutları:** `deploy/scripts/invite-staff-from-b2b.sh` yalnız `curl` üretir, çalıştırmaz. Çıktı (git dışı): `deploy/b2b-staff.local.commands.sh` — 12 davet
+(Yönetici 1, Shift Müdürü 6, Kasiyer 2, Depo 2, Şoför 1; auditor atlandı, 1 kişi OM'de zaten var). Koşmadan önce `TOKEN` (Yönetici bağlam token'ı) gerekir.
+
+**Geri alma notu:** `-v rollback=1` demo ürünleri yeniden aktifleştirmez ve "Serdivan" adını geri çevirmez (elle).

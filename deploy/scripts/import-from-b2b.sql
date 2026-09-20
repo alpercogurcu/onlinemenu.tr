@@ -12,6 +12,7 @@
 --     -v include_manufacturing=0         `# 1 = also import the İMALAT branch (operation_type=imalat)` \
 --     -v dry_run=1                       `# 1 (default) = ROLLBACK at the end, 0 = COMMIT` \
 --     -v rollback=0                      `# 1 = undo mode: delete only rows this import created` \
+--     -v deactivate_demo=0               `# 1 = set the 3 seed demo products (Adana Kebap/Ayran/Lahmacun) inactive` \
 --     -f deploy/scripts/import-from-b2b.sql
 --   (or pass the document directly: -v payload="$(cat b2b-export.json)")
 --
@@ -24,6 +25,8 @@
 --                    row is traceable and a re-run only refreshes price/tax/active/sku/unit.
 --   overrides        ON CONFLICT (tenant_id, branch_id, product_id) (catalog/000003 PK). A re-run refreshes
 --                    price_amount only; is_available is never overwritten (owner may close a product later).
+-- Branch rules (owner decision 2026-09-20): ADA/IZM/KRK → ownership_type=franchise; SRD → sube; the
+-- manufacturing branch is renamed 'İmalat Merkezi (Serdivan)' (operation_type=imalat, ownership sube).
 -- Undo (-v rollback=1): deletes exactly the rows whose ids are the deterministic uuid_v5 ids
 -- (overrides, products, new categories, new branches + their settings). The adopted placeholder
 -- branch is NOT renamed back. Only valid before the first real sale — once orders reference the
@@ -58,6 +61,10 @@
 \else
   \set rollback 0
 \endif
+\if :{?deactivate_demo}
+\else
+  \set deactivate_demo 0
+\endif
 \if :{?payload}
 \else
   \set payload `cat "$B2B_JSON"`
@@ -69,6 +76,7 @@ CREATE TEMP TABLE imp_in ON COMMIT DROP AS
 SELECT t.id                          AS tenant_id,
        :'existing_branch_code'::text AS existing_code,
        (:'include_manufacturing')::int AS incl_mfg,
+       (:'deactivate_demo')::int AS deact_demo,
        :'payload'::jsonb             AS doc
 FROM tenants t
 WHERE t.slug = :'tenant_slug';
@@ -95,7 +103,7 @@ END
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Branches (b2b sales → fast_food, b2b manufacturing → imalat; all ownership_type=sube)
+-- Branches (b2b sales → fast_food, b2b manufacturing → imalat; ownership per the branch rules above)
 -- ---------------------------------------------------------------------------------------------
 CREATE TEMP TABLE imp_branch ON COMMIT DROP AS
 WITH src AS (
@@ -104,10 +112,12 @@ WITH src AS (
            (b->>'is_active')::boolean AS is_active
     FROM imp_in, jsonb_array_elements(doc->'branches') b
 ), sel AS (
-    SELECT s.*,
-           btrim(regexp_replace(lower(translate(s.name, 'İIıĞğÜüŞşÖöÇç', 'iiigguussoocc')),
+    SELECT s.b2b_id, s.code, s.type, s.address, s.is_active,
+           CASE WHEN s.code = 'IMALAT' THEN 'İmalat Merkezi (Serdivan)' ELSE s.name END AS name,
+           btrim(regexp_replace(lower(translate(CASE WHEN s.code = 'IMALAT' THEN 'İmalat Merkezi (Serdivan)' ELSE s.name END, 'İIıĞğÜüŞşÖöÇç', 'iiigguussoocc')),
                                 '[^a-z0-9]+', '-', 'g'), '-') AS slug,
-           CASE s.type WHEN 'manufacturing' THEN 'imalat' ELSE 'fast_food' END AS operation_type
+           CASE s.type WHEN 'manufacturing' THEN 'imalat' ELSE 'fast_food' END AS operation_type,
+           CASE WHEN s.code IN ('ADA', 'IZM', 'KRK') THEN 'franchise' ELSE 'sube' END AS ownership_type
     FROM src s
     WHERE s.type = 'sales' OR (s.type = 'manufacturing' AND (SELECT incl_mfg FROM imp_in) = 1)
 )
@@ -173,11 +183,12 @@ FROM imp_in i, jsonb_array_elements(i.doc->'products') p;
                  WHERE b.om_id = uuid_generate_v5(i.tenant_id, 'b2b:branch:' || b.b2b_id));
 \else
 INSERT INTO branches (id, tenant_id, name, address, is_active, slug, ownership_type, operation_type)
-SELECT b.om_id, i.tenant_id, b.name, b.address, b.is_active, b.slug, 'sube', b.operation_type
+SELECT b.om_id, i.tenant_id, b.name, b.address, b.is_active, b.slug, b.ownership_type, b.operation_type
 FROM imp_branch b, imp_in i
 ON CONFLICT (id) DO UPDATE
     SET name           = EXCLUDED.name,
         slug           = EXCLUDED.slug,
+        ownership_type = EXCLUDED.ownership_type,
         operation_type = EXCLUDED.operation_type,
         address        = COALESCE(branches.address, EXCLUDED.address),
         updated_at     = NOW()
@@ -227,6 +238,17 @@ ON CONFLICT (id) DO UPDATE
           IS DISTINCT FROM
           (EXCLUDED.price_amount, EXCLUDED.tax_rate_bps, EXCLUDED.is_active, EXCLUDED.sku, EXCLUDED.unit);
 
+-- Seed demo catalog (not b2b data) is deactivated, never deleted; only exactly these names, only rows
+-- this import did not create.
+UPDATE products x
+   SET is_active = FALSE, updated_at = NOW()
+  FROM imp_in i
+ WHERE i.deact_demo = 1
+   AND x.tenant_id = i.tenant_id
+   AND x.is_active
+   AND x.name IN ('Adana Kebap', 'Ayran', 'Lahmacun')
+   AND x.id NOT IN (SELECT om_id FROM imp_product);
+
 -- ---------------------------------------------------------------------------------------------
 -- Per-branch prices → branch_product_overrides. Only rows that differ from the tenant price are
 -- written (b2b has no availability table: every pos_sale product is sellable in every branch,
@@ -249,7 +271,7 @@ ON CONFLICT (tenant_id, branch_id, product_id) DO UPDATE
 -- ---------------------------------------------------------------------------------------------
 -- Proof of what this run touched
 -- ---------------------------------------------------------------------------------------------
-SELECT b.name AS branch, b.slug, b.operation_type,
+SELECT b.name AS branch, b.slug, b.ownership_type, b.operation_type,
        (SELECT count(*) FROM branch_product_overrides o
          WHERE o.branch_id = b.om_id AND o.product_id IN (SELECT om_id FROM imp_product)) AS price_overrides
 FROM imp_branch b ORDER BY b.code;
@@ -260,7 +282,10 @@ SELECT (SELECT count(*) FROM imp_branch)  AS branches,
        (SELECT count(*) FROM products WHERE id IN (SELECT om_id FROM imp_product)) AS products,
        (SELECT count(*) FROM branch_product_overrides
          WHERE product_id IN (SELECT om_id FROM imp_product)
-           AND branch_id IN (SELECT om_id FROM imp_branch)) AS overrides;
+           AND branch_id IN (SELECT om_id FROM imp_branch)) AS overrides,
+       (SELECT count(*) FROM products x, imp_in i WHERE x.tenant_id = i.tenant_id AND x.is_active) AS active_products,
+       (SELECT count(*) FROM products x, imp_in i WHERE x.tenant_id = i.tenant_id AND NOT x.is_active) AS inactive_products,
+       (SELECT count(*) FROM branch_settings s, imp_in i WHERE s.tenant_id = i.tenant_id) AS branch_settings;
 
 \if :dry_run
   ROLLBACK;

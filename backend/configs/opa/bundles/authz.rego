@@ -273,6 +273,20 @@ allow if {
 	has_role("shift_manager")
 }
 
+# pos.table.clean is the one manual table move a counter role may make: a
+# closed or cancelled check parks its table in "cleaning", and the people who
+# just cleared it (cashier at the counter, waiter on the floor) must be able to
+# hand it back as "empty" without a manager. The route is gated by this wide
+# grant; the handler still demands pos.table.manage for every other status
+# transition (service.TableService.SetStatus), so this never lets a cashier
+# free an occupied table or reserve one.
+pos_table_clean_actions := {"pos.table.clean"}
+
+allow if {
+	input.action in pos_table_clean_actions
+	any_role({"cashier", "shift_manager", "waiter"})
+}
+
 # -- POS: day-end sales report. Shift managers close the day; cashiers do not
 # see chain figures (mirrors role_permissions seed: reports/read only for
 # shift_manager). Manager passes via the wildcard above.

@@ -111,6 +111,43 @@ func TestAuthz_PosTableManage_ReadOnlyRolesDenied(t *testing.T) {
 	}
 }
 
+// TestAuthz_PosTableClean pins the narrow grant that lets the people who
+// close a check hand its table back (cleaning -> empty). It is deliberately
+// wider than pos.table.manage for the counter roles and nothing else:
+// kitchen/bar/driver keep no say over the floor plan.
+func TestAuthz_PosTableClean_GrantedRoles(t *testing.T) {
+	eng := newSmokeTestEngine(t)
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+	}{
+		{"manager", tablePolicyManagerID},
+		{"shift_manager", tablePolicyShiftManagerID},
+		{"cashier", tablePolicyCashierID},
+		{"waiter", tablePolicyWaiterID},
+	} {
+		d, err := eng.Decide(context.Background(), "pos.table.clean", tablePolicyPrincipal(tc.id))
+		require.NoError(t, err)
+		assert.Truef(t, d.Allow, "%s should be allowed pos.table.clean", tc.name)
+	}
+}
+
+func TestAuthz_PosTableClean_DeniedRoles(t *testing.T) {
+	eng := newSmokeTestEngine(t)
+	for _, tc := range []struct {
+		name string
+		id   uuid.UUID
+	}{
+		{"kitchen", tablePolicyKitchenID},
+		{"bar", tablePolicyBarID},
+		{"driver", tablePolicyDriverID},
+	} {
+		d, err := eng.Decide(context.Background(), "pos.table.clean", tablePolicyPrincipal(tc.id))
+		require.NoError(t, err)
+		assert.Falsef(t, d.Allow, "%s should be denied pos.table.clean", tc.name)
+	}
+}
+
 // TestAuthz_PosReportRead_ManagerAndShiftManagerAllowed / _CounterAndKitchenRolesDenied
 // pin the day-end sales report's OPA rule (pos_report_actions in
 // authz.rego), mirroring the pos.table.manage two-way matrix directly above:

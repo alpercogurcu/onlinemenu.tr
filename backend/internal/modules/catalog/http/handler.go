@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -359,7 +360,15 @@ func (h *Handler) listByCategory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid category id", http.StatusBadRequest)
 		return
 	}
-	products, err := h.products.ListByCategory(r.Context(), tenantID, catID)
+	includeInactive := false
+	if raw := r.URL.Query().Get("include_inactive"); raw != "" {
+		includeInactive, err = strconv.ParseBool(raw)
+		if err != nil {
+			http.Error(w, "include_inactive must be true or false", http.StatusBadRequest)
+			return
+		}
+	}
+	products, err := h.products.ListByCategory(r.Context(), tenantID, catID, includeInactive)
 	if err != nil {
 		h.error(w, r, err)
 		return

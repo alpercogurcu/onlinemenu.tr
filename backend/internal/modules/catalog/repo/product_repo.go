@@ -91,17 +91,19 @@ func (r *ProductRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Product, er
 	return out, rows.Err()
 }
 
-// ListByCategory returns products belonging to a specific category.
-func (r *ProductRepo) ListByCategory(ctx context.Context, tx pgx.Tx, categoryID uuid.UUID) ([]domain.Product, error) {
+// ListByCategory returns products belonging to a specific category. Inactive
+// products are left out unless includeInactive is set: an inactive product is
+// not sellable, so a caller that lists a category to sell from must not see it.
+func (r *ProductRepo) ListByCategory(ctx context.Context, tx pgx.Tx, categoryID uuid.UUID, includeInactive bool) ([]domain.Product, error) {
 	const q = `
 		SELECT id, tenant_id, category_id, name, COALESCE(description,''), COALESCE(image_key,''),
 		       price_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
 		       tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		       sort_order, source_stock_item_id, created_at, updated_at
-		FROM products WHERE category_id = $1
+		FROM products WHERE category_id = $1 AND (is_active OR $2)
 		ORDER BY sort_order, name`
 
-	rows, err := tx.Query(ctx, q, categoryID)
+	rows, err := tx.Query(ctx, q, categoryID, includeInactive)
 	if err != nil {
 		return nil, fmt.Errorf("catalog/repo/product: list by category: %w", err)
 	}

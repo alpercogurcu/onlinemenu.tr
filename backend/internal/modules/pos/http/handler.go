@@ -2,6 +2,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,7 +114,11 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("pos.table.read")).Get("/tables", hwc.h.listTables)
 		r.With(hwc.h.permit("pos.table.manage")).Post("/tables", hwc.h.createTable)
 		r.With(hwc.h.permit("pos.table.manage")).Patch("/tables/{id}", hwc.h.updateTable)
-		r.With(hwc.h.permit("pos.table.manage")).Post("/tables/{id}/status", hwc.h.setTableStatus)
+		// The status route is gated by the wide pos.table.clean grant (cashier,
+		// waiter, shift_manager) so the counter can hand a cleaned table back;
+		// setTableStatus then requires pos.table.manage for every edge except
+		// cleaning -> empty.
+		r.With(hwc.h.permit("pos.table.clean")).Post("/tables/{id}/status", hwc.h.setTableStatus)
 
 		// Day-end sales report (Sprint pilot-mvp): shift_manager only, mirrors
 		// role_permissions seed's reports:read grant (see
@@ -836,6 +841,18 @@ func (h *Handler) updateTable(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, toTableResponse(service.TablePlanEntry{Table: t}))
 }
 
+// canManageTables reports whether p holds pos.table.manage. A policy error
+// denies: the narrow pos.table.clean edge stays available, everything else is
+// refused.
+func (h *Handler) canManageTables(ctx context.Context, p auth.Principal) bool {
+	d, err := h.engine.Decide(ctx, "pos.table.manage", p)
+	if err != nil {
+		h.logger.Warn("pos: table manage decision failed, treating as denied", zap.Error(err))
+		return false
+	}
+	return d.Allow
+}
+
 func (h *Handler) setTableStatus(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
@@ -853,7 +870,7 @@ func (h *Handler) setTableStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	t, err := h.tables.SetStatus(r.Context(), p.TenantID, p, id, domain.TableStatus(req.Status))
+	t, err := h.tables.SetStatus(r.Context(), p.TenantID, p, id, domain.TableStatus(req.Status), h.canManageTables(r.Context(), p))
 	if err != nil {
 		h.error(w, r, err)
 		return
@@ -1089,7 +1106,7 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		respondError(w, http.StatusConflict, codeInvalidTransition, "invalid status transition")
 		return
 	}
-	if errors.Is(err, pub.ErrBranchForbidden) {
+	if errors.Is(err, pub.ErrBranchForbidden) || errors.Is(err, service.ErrTableManageRequired) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

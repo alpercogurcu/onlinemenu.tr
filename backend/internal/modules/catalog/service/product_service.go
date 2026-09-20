@@ -68,12 +68,13 @@ func (s *ProductService) GetByID(ctx context.Context, tenantID, productID uuid.U
 	return p, nil
 }
 
-// ListByCategory returns products belonging to a specific category.
-func (s *ProductService) ListByCategory(ctx context.Context, tenantID, categoryID uuid.UUID) ([]domain.Product, error) {
+// ListByCategory returns the active products of a category; includeInactive
+// adds the deactivated ones (admin views).
+func (s *ProductService) ListByCategory(ctx context.Context, tenantID, categoryID uuid.UUID, includeInactive bool) ([]domain.Product, error) {
 	var products []domain.Product
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		products, err = s.productRepo.ListByCategory(ctx, tx, categoryID)
+		products, err = s.productRepo.ListByCategory(ctx, tx, categoryID, includeInactive)
 		return err
 	})
 	if err != nil {

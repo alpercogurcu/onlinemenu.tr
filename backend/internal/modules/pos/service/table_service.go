@@ -27,6 +27,11 @@ import (
 // eventual Close/Cancel -> cleaning handoff would have nothing to act on.
 var ErrManualOccupyForbidden = errors.New("pos/service/table: table can only become occupied by opening a check")
 
+// ErrTableManageRequired is returned by TableService.SetStatus when the
+// caller holds only the narrow pos.table.clean grant and asks for anything
+// other than cleaning -> empty.
+var ErrTableManageRequired = errors.New("pos/service/table: this status change requires pos.table.manage")
+
 // TablePlanEntry pairs a table with its zone's name/floor and the id of the
 // check currently open against it (nil if none) — the shape the cash
 // register needs to draw one row of the floor plan, grouped/labeled by zone
@@ -272,10 +277,17 @@ func (s *TableService) UpdateTable(ctx context.Context, tenantID uuid.UUID, prin
 // reserved for CheckService.Open, which drives it atomically alongside
 // opening the check itself.
 //
+// canManage reports whether the caller holds pos.table.manage. Without it the
+// only permitted move is cleaning -> empty (the pos.table.clean edge); any
+// other request fails with ErrTableManageRequired. The check runs against the
+// row read under lock, after the branch check and before the transition
+// check, so a cashier asking for an edge they may not take gets a 403 rather
+// than a state-machine hint about a table they cannot touch.
+//
 // The table row is locked (GetTableForUpdate) before the transition check,
 // serializing this against a concurrent CheckService.Open on the same table
 // exactly like CheckRepo.GetForUpdate serializes concurrent Close/Cancel.
-func (s *TableService) SetStatus(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, tableID uuid.UUID, status domain.TableStatus) (domain.Table, error) {
+func (s *TableService) SetStatus(ctx context.Context, tenantID uuid.UUID, principal auth.Principal, tableID uuid.UUID, status domain.TableStatus, canManage bool) (domain.Table, error) {
 	if status == domain.TableStatusOccupied {
 		return domain.Table{}, ErrManualOccupyForbidden
 	}
@@ -290,6 +302,9 @@ func (s *TableService) SetStatus(ctx context.Context, tenantID uuid.UUID, princi
 		}
 		if err := requireBranch(ctx, principal, current.BranchID); err != nil {
 			return err
+		}
+		if !canManage && (current.Status != domain.TableStatusCleaning || status != domain.TableStatusEmpty) {
+			return ErrTableManageRequired
 		}
 		if err := domain.TransitionTableStatus(current.Status, status); err != nil {
 			return err

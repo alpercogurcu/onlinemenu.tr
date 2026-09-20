@@ -486,6 +486,49 @@ test.describe("adisyon taşıma, birleştirme ve kalem taşıma", () => {
     }
   })
 
+  test("adisyon kapanınca temizlenen masayı kasiyer ve garson boşaltır; dolu masayı boşaltamaz", async ({ request }) => {
+    const manager = await headersFor(request, USERS.manager)
+    const cashier = await headersFor(request, USERS.cashier)
+    const waiter = await headersFor(request, USERS.waiter)
+    const table = await emptyTable(request, manager)
+    const setStatus = (headers: Headers, status: string) =>
+      request.post(`${POS}/tables/${table.id}/status`, { headers, data: { status } })
+    const openOnTable = async () => {
+      const res = await request.post(`${POS}/checks`, {
+        headers: cashier,
+        data: { branch_id: BRANCH_ID, table_id: table.id, pax: 2 },
+      })
+      expect(res.status(), await res.text()).toBe(201)
+      return ((await res.json()) as Check).id
+    }
+    const opened: string[] = []
+
+    try {
+      const first = await openOnTable()
+      opened.push(first)
+
+      // The table is occupied: the clean grant covers cleaning -> empty only.
+      expect((await setStatus(cashier, "empty")).status(), "cashier must not free an occupied table").toBe(403)
+
+      await request.post(`${POS}/checks/${first}/cancel`, { headers: cashier, data: { reason: "e2e" } })
+      const parked = await setStatus(waiter, "reserved")
+      expect(parked.status(), "waiter holds no pos.table.manage").toBe(403)
+
+      const byWaiter = await setStatus(waiter, "empty")
+      expect(byWaiter.status(), await byWaiter.text()).toBe(200)
+      expect(((await byWaiter.json()) as PosTable).status).toBe("empty")
+
+      const second = await openOnTable()
+      opened.push(second)
+      await request.post(`${POS}/checks/${second}/cancel`, { headers: cashier, data: { reason: "e2e" } })
+      const byCashier = await setStatus(cashier, "empty")
+      expect(byCashier.status(), await byCashier.text()).toBe(200)
+    } finally {
+      for (const id of opened) await cleanup(request, manager, id)
+      await resetTable(request, manager, table.id)
+    }
+  })
+
   test("kasiyer birleştirebilir, garson birleştiremez", async ({ request }) => {
     const manager = await headersFor(request, USERS.manager)
     const cashier = await headersFor(request, USERS.cashier)

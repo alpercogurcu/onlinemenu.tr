@@ -20,6 +20,8 @@ excludeFiles:
   - "internal/modules/inventory/http/supply_policy_visibility_test\\.go"
   - "internal/modules/billing/service/integration_test\\.go"
   - "internal/modules/pos/ws/hub_test\\.go"
+  - "internal/modules/pos/service/table_status_authz_integration_test\\.go"
+  - "internal/modules/catalog/service/category_products_http_integration_test\\.go"
   - "internal/modules/identity/repo/role_tenant_guard_test\\.go"
   - "internal/modules/tenant/http/branch_directory_integration_test\\.go"
 

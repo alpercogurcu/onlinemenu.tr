@@ -206,3 +206,7 @@ Paketler bağımsızdır; P1 ve P2 paralel gidebilir, P3 P1'e bağımlıdır.
 | **P6** | **Admin sıkışıklık düzeltmesi** (3e) | `app/(main)/catalog/menus/[id]/page.tsx` (yeni), `components/catalog/menu-items-dialog.tsx` (kaldır), `components/catalog/product-editor.tsx:370-374` | `web/apps/admin/e2e/catalog.spec.ts` güncellenir: menü içeriği yönetimi sayfa üzerinden yürür, dialog beklenmez. 1366px viewport'ta ürün editörü sağ sütununda yatay taşma yok. |
 
 **Renk tokenı notu (bulgu #12):** P2 ile birlikte `style.css`'e `warn` tokenı eklenir ve dolu masa amber'den ayrı bir tona taşınır; `amber` yalnız para/birincil aksiyon anlamında kalır. **Tek dosya değil:** dolu masa amber'den çıkınca `TablePlan.tsx:100` varyantı, `TablePlan.tsx:120-125`'teki `PendingFiscalDot onAmber={isOccupied}` propu ve `PendingFiscalDot.tsx` kontrast varyantı birlikte düzeltilmeli — aksi halde bekleyen-mali-kayıt noktası yeni zeminde görünmez olur. P2 kapsamındadır.
+
+---
+
+**Uygulama notu (2026-09-20):** P0–P6 uygulandı. §3a "Veri saklama" kararından sapma: seçenekler `note`ya ek olarak `order_items.modifier_ids UUID[]` ile kalıcı (pos/000009), gerekçe migration yorumunda. Ek işler: masa taşıma/birleştirme/kalem taşımada mutfağa bilgi fişi, `pos.table.clean` izni (kasiyer/garson cleaning→empty), kategori ürün ucu varsayılan yalnız aktif, POS canlı API smoke (`task pos:test:live`). Açık: kalem `paid_amount` sunucu tarafı (Faz 2), boş masaya kalem taşımada reddedilirse boş adisyon kalır, kategorisiz ürün gerçek ÖKC öncesi kategori ister.

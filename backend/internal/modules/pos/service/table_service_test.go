@@ -240,7 +240,7 @@ func TestTableService_SetStatus_ManualOccupyForbidden(t *testing.T) {
 	tableSvc := newTableService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	_, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusOccupied)
+	_, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusOccupied, true)
 	assert.ErrorIs(t, err, service.ErrManualOccupyForbidden)
 }
 
@@ -249,11 +249,11 @@ func TestTableService_SetStatus_ValidManualTransitions(t *testing.T) {
 	tableSvc := newTableService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	reserved, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved)
+	reserved, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved, true)
 	require.NoError(t, err)
 	assert.Equal(t, domain.TableStatusReserved, reserved.Status)
 
-	emptied, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusEmpty)
+	emptied, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusEmpty, true)
 	require.NoError(t, err)
 	assert.Equal(t, domain.TableStatusEmpty, emptied.Status)
 }
@@ -264,10 +264,10 @@ func TestTableService_SetStatus_InvalidTransitionRejected(t *testing.T) {
 	tbl := newOpenTestTable(t, ctx, branchA) // starts "empty"
 
 	// empty -> cleaning is allowed by the machine, but cleaning -> reserved is not.
-	_, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusCleaning)
+	_, err := tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusCleaning, true)
 	require.NoError(t, err)
 
-	_, err = tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved)
+	_, err = tableSvc.SetStatus(chainWideCtx(t, ctx), tenantA, chainWidePrincipal(), tbl.ID, domain.TableStatusReserved, true)
 	assert.ErrorIs(t, err, pub.ErrInvalidTransition)
 }
 
@@ -300,7 +300,7 @@ func TestTableAuthz_SetStatus_ForeignBranchForbidden(t *testing.T) {
 	tableSvc := newTableService()
 	tbl := newOpenTestTable(t, ctx, branchA)
 
-	_, err := tableSvc.SetStatus(ctx, tenantA, branchPrincipal(branchB), tbl.ID, domain.TableStatusReserved)
+	_, err := tableSvc.SetStatus(ctx, tenantA, branchPrincipal(branchB), tbl.ID, domain.TableStatusReserved, true)
 	assert.ErrorIs(t, err, pub.ErrBranchForbidden)
 }
 
@@ -315,7 +315,7 @@ func TestTableAuthz_CrossTenant_NotFound(t *testing.T) {
 	principalB := chainWidePrincipal()
 	principalB.TenantID = tenantB
 
-	_, err := tableSvc.SetStatus(ctx, tenantB, principalB, tbl.ID, domain.TableStatusReserved)
+	_, err := tableSvc.SetStatus(ctx, tenantB, principalB, tbl.ID, domain.TableStatusReserved, true)
 	assert.ErrorIs(t, err, pub.ErrNotFound)
 }
 

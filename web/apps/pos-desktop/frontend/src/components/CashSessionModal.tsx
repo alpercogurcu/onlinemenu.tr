@@ -2,9 +2,24 @@ import { useEffect, useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import { computeDifference, emptyDenominationRows, type ClosingSnapshot, type DenominationRow } from '../lib/cashSession'
 import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
+import { AmountDisplay } from './AmountDisplay'
 import { DenominationCounter } from './DenominationCounter'
 import { ErrorBanner } from './ErrorBanner'
 import { HoldButton } from './HoldButton'
+import { Numpad } from './Numpad'
+
+// Ready-made amounts and reasons keep the common cases to one tap: the kiosk
+// has no keyboard, so free text is the slow path (docs/pos-ux-spec.md §2 ilke 6).
+const OPENING_PRESETS: { label: string; input: string }[] = [
+  { label: '₺0', input: '0' },
+  { label: '₺500', input: '500' },
+  { label: '₺1.000', input: '1000' },
+]
+
+const MOVEMENT_REASONS: Record<'in' | 'out', string[]> = {
+  in: ['Bozuk para takviyesi', 'Ek nakit girişi', 'Diğer'],
+  out: ['Bankaya yatırma', 'Gider ödemesi', 'Bozuk para değişimi', 'Diğer'],
+}
 
 type View = 'opening' | 'status' | 'movement' | 'ledger' | 'counting' | 'closing'
 
@@ -88,16 +103,21 @@ export function CashSessionModal({
   }, [open, session?.status, session?.id])
 
   const [openingInput, setOpeningInput] = useState('')
+  // After a preset chip the next key starts a new amount instead of appending.
+  const [openingIsPreset, setOpeningIsPreset] = useState(false)
   const [openingNotes, setOpeningNotes] = useState('')
+  const [openingNotesShown, setOpeningNotesShown] = useState(false)
   const [openingSubmitting, setOpeningSubmitting] = useState(false)
 
   const [direction, setDirection] = useState<'in' | 'out'>('in')
   const [movementInput, setMovementInput] = useState('')
   const [movementReason, setMovementReason] = useState('')
+  const [movementCustomReason, setMovementCustomReason] = useState(false)
   const [movementSubmitting, setMovementSubmitting] = useState(false)
 
   const [rows, setRows] = useState<DenominationRow[]>(emptyDenominationRows())
   const [countingNotes, setCountingNotes] = useState('')
+  const [countingNotesShown, setCountingNotesShown] = useState(false)
   const [countingSubmitting, setCountingSubmitting] = useState(false)
 
   const [closeSubmitting, setCloseSubmitting] = useState(false)
@@ -114,8 +134,19 @@ export function CashSessionModal({
     setOpeningSubmitting(false)
     if (ok) {
       setOpeningInput('')
+      setOpeningIsPreset(false)
       setOpeningNotes('')
+      setOpeningNotesShown(false)
     }
+  }
+
+  function changeDirection(next: 'in' | 'out') {
+    if (next === direction) return
+    setDirection(next)
+    // The reason chips differ per direction; a reason chosen for "giriş" makes
+    // no sense on "çıkış".
+    setMovementReason('')
+    setMovementCustomReason(false)
   }
 
   async function handleOpenLedger() {
@@ -132,6 +163,7 @@ export function CashSessionModal({
     if (ok) {
       setMovementInput('')
       setMovementReason('')
+      setMovementCustomReason(false)
       setView('status')
     }
   }
@@ -143,6 +175,7 @@ export function CashSessionModal({
     if (ok) {
       setRows(emptyDenominationRows())
       setCountingNotes('')
+      setCountingNotesShown(false)
       // view flips to 'closing' via the effect once `session.status` updates.
     }
   }
@@ -169,7 +202,11 @@ export function CashSessionModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-line bg-panel">
+      <div
+        className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-line bg-panel ${
+          view === 'movement' ? 'max-w-3xl' : 'max-w-md'
+        }`}
+      >
         <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
           <h2 className="font-display text-lg font-bold text-ink">
             Kasa
@@ -182,7 +219,7 @@ export function CashSessionModal({
                 mid-press (see closeSession's own pre-close refresh). */}
             {loading && checked && <span className="ml-2 text-xs font-normal text-ink-dim">yenileniyor…</span>}
           </h2>
-          <button type="button" onClick={onClose} className="min-h-10 min-w-10 rounded text-ink-dim" aria-label="Kapat">
+          <button type="button" onClick={onClose} className="min-h-12 min-w-12 rounded text-ink-dim" aria-label="Kapat">
             ✕
           </button>
         </div>
@@ -192,34 +229,56 @@ export function CashSessionModal({
             <p className="text-sm text-ink-dim">Yükleniyor…</p>
           ) : view === 'opening' ? (
             <div className="flex flex-col gap-4">
-              <p className="text-sm text-ink-dim">
-                Bu şubede açık kasa oturumu yok. Satışa başlamadan önce çekmecedeki tutarı sayıp kasayı açın.
-              </p>
+              <p className="text-base font-semibold text-ink">Kasada başlangıç parası ne kadar?</p>
               {!canOpenSession && (
                 <p className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink">
                   Bu istasyon şubeye bağlı değil — kasa açmak için şube bazlı oturum gerekli.
                 </p>
               )}
-              <label className="flex flex-col gap-1 text-sm text-ink">
-                Açılış sayımı
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={openingInput}
-                  onChange={(e) => setOpeningInput(e.target.value)}
-                  placeholder="0,00"
-                  className="min-h-14 rounded-md border border-line bg-surface px-3 text-lg tabular-nums text-ink"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm text-ink">
-                Not (opsiyonel)
-                <textarea
-                  value={openingNotes}
-                  onChange={(e) => setOpeningNotes(e.target.value)}
-                  rows={2}
-                  className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                />
-              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {OPENING_PRESETS.map((preset) => (
+                  <button
+                    key={preset.input}
+                    type="button"
+                    onClick={() => {
+                      setOpeningInput(preset.input)
+                      setOpeningIsPreset(true)
+                    }}
+                    className="min-h-14 rounded-md border border-line bg-surface font-semibold text-ink"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <AmountDisplay label="Açılış sayımı" value={openingInput} />
+              <Numpad
+                mode="money"
+                value={openingInput}
+                pendingReplace={openingIsPreset}
+                onChange={(next) => {
+                  setOpeningInput(next)
+                  setOpeningIsPreset(false)
+                }}
+              />
+              {openingNotesShown ? (
+                <label className="flex flex-col gap-1 text-sm text-ink">
+                  Not (opsiyonel)
+                  <textarea
+                    value={openingNotes}
+                    onChange={(e) => setOpeningNotes(e.target.value)}
+                    rows={2}
+                    className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
+                  />
+                </label>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setOpeningNotesShown(true)}
+                  className="min-h-12 self-start rounded-md px-3 text-sm text-ink-dim underline-offset-2 hover:underline"
+                >
+                  + Not ekle
+                </button>
+              )}
               <button
                 type="button"
                 disabled={!canOpenSession || openingAmount < 0 || openingSubmitting}
@@ -241,6 +300,13 @@ export function CashSessionModal({
                 <dt className="font-semibold text-ink">Beklenen kapanış</dt>
                 <dd className="text-right font-semibold tabular-nums text-ink">{formatMoney(session.expected_close)}</dd>
               </dl>
+              <button
+                type="button"
+                onClick={() => setView('counting')}
+                className="min-h-14 w-full rounded-lg bg-amber font-semibold text-amber-ink"
+              >
+                Sayımı Başlat
+              </button>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -251,19 +317,12 @@ export function CashSessionModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setView('counting')}
-                  className="min-h-14 flex-1 rounded-lg bg-amber font-semibold text-amber-ink"
+                  onClick={handleOpenLedger}
+                  className="min-h-14 flex-1 rounded-md border border-line font-semibold text-ink"
                 >
-                  Sayımı Başlat
+                  Hareket Defteri
                 </button>
               </div>
-              <button
-                type="button"
-                onClick={handleOpenLedger}
-                className="min-h-14 w-full rounded-md border border-line font-semibold text-ink"
-              >
-                Hareket Defteri
-              </button>
             </div>
           ) : view === 'ledger' && session ? (
             <div className="flex flex-col gap-4">
@@ -301,11 +360,15 @@ export function CashSessionModal({
               </button>
             </div>
           ) : view === 'movement' && session ? (
-            <div className="flex flex-col gap-4">
+            // Two columns: amount + pad on the left, reason + actions on the
+            // right, so on a 768px kiosk the save button never sits below the
+            // fold of a tall single column.
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="flex flex-col gap-4">
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setDirection('in')}
+                  onClick={() => changeDirection('in')}
                   className={`min-h-14 flex-1 rounded-md border font-semibold ${
                     direction === 'in' ? 'border-teal bg-teal/15 text-teal' : 'border-line text-ink'
                   }`}
@@ -314,7 +377,7 @@ export function CashSessionModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDirection('out')}
+                  onClick={() => changeDirection('out')}
                   className={`min-h-14 flex-1 rounded-md border font-semibold ${
                     direction === 'out' ? 'border-amber bg-amber/15 text-amber' : 'border-line text-ink'
                   }`}
@@ -322,27 +385,56 @@ export function CashSessionModal({
                   Çıkış (kasadan para al)
                 </button>
               </div>
-              <label className="flex flex-col gap-1 text-sm text-ink">
-                Tutar
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={movementInput}
-                  onChange={(e) => setMovementInput(e.target.value)}
-                  placeholder="0,00"
-                  className="min-h-14 rounded-md border border-line bg-surface px-3 text-lg tabular-nums text-ink"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm text-ink">
-                Açıklama
-                <input
-                  type="text"
-                  value={movementReason}
-                  onChange={(e) => setMovementReason(e.target.value)}
-                  placeholder="ör. bozuk para takviyesi"
-                  className="min-h-14 rounded-md border border-line bg-surface px-3 text-ink"
-                />
-              </label>
+              <AmountDisplay label="Tutar" value={movementInput} />
+              <Numpad mode="money" value={movementInput} onChange={setMovementInput} />
+              </div>
+              <div className="flex flex-col justify-between gap-4">
+              <div>
+                <p className="mb-2 text-sm text-ink">Açıklama</p>
+                <div className="flex flex-wrap gap-2">
+                  {MOVEMENT_REASONS[direction].map((reason) => (
+                    <button
+                      key={reason}
+                      type="button"
+                      aria-pressed={!movementCustomReason && movementReason === reason}
+                      onClick={() => {
+                        setMovementCustomReason(false)
+                        setMovementReason(reason)
+                      }}
+                      className={`min-h-12 rounded-md border px-3 text-sm font-semibold ${
+                        !movementCustomReason && movementReason === reason
+                          ? 'border-amber bg-amber/15 text-amber'
+                          : 'border-line text-ink'
+                      }`}
+                    >
+                      {reason}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    aria-pressed={movementCustomReason}
+                    onClick={() => {
+                      setMovementCustomReason(true)
+                      setMovementReason('')
+                    }}
+                    className={`min-h-12 rounded-md border px-3 text-sm ${
+                      movementCustomReason ? 'border-amber text-amber' : 'border-dashed border-line text-ink-dim'
+                    }`}
+                  >
+                    ✎ Başka açıklama
+                  </button>
+                </div>
+                {movementCustomReason && (
+                  <input
+                    type="text"
+                    value={movementReason}
+                    onChange={(e) => setMovementReason(e.target.value)}
+                    placeholder="Açıklama yazın"
+                    aria-label="Açıklama"
+                    className="mt-2 min-h-14 w-full rounded-md border border-line bg-surface px-3 text-ink"
+                  />
+                )}
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -360,6 +452,7 @@ export function CashSessionModal({
                   {movementSubmitting ? 'Kaydediliyor…' : 'Kaydet'}
                 </button>
               </div>
+              </div>
             </div>
           ) : view === 'counting' && session ? (
             <div className="flex flex-col gap-4">
@@ -367,15 +460,25 @@ export function CashSessionModal({
                 Çekmecedeki her kupürü sayıp giriniz — toplam otomatik hesaplanır.
               </p>
               <DenominationCounter rows={rows} onChange={setRows} disabled={countingSubmitting} />
-              <label className="flex flex-col gap-1 text-sm text-ink">
-                Not (opsiyonel)
-                <textarea
-                  value={countingNotes}
-                  onChange={(e) => setCountingNotes(e.target.value)}
-                  rows={2}
-                  className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
-                />
-              </label>
+              {countingNotesShown ? (
+                <label className="flex flex-col gap-1 text-sm text-ink">
+                  Not (opsiyonel)
+                  <textarea
+                    value={countingNotes}
+                    onChange={(e) => setCountingNotes(e.target.value)}
+                    rows={2}
+                    className="rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink"
+                  />
+                </label>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setCountingNotesShown(true)}
+                  className="min-h-12 self-start rounded-md px-3 text-sm text-ink-dim underline-offset-2 hover:underline"
+                >
+                  + Not ekle
+                </button>
+              )}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -415,14 +518,14 @@ export function CashSessionModal({
               </dl>
 
               {stale && (
-                <div className="rounded-md border border-line bg-amber/10 px-3 py-2 text-sm text-ink" role="alert">
+                <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm text-ink" role="alert">
                   Bu sayım bayatladı — kasa bakiyesi sayımdan sonra değişti (ör. bekleyen bir mali işlem
                   sonuçlandı). Yukarıdaki fark artık geçerli değil; kasayı yeniden sayın.
                 </div>
               )}
 
               {cannotCloseReasons && cannotCloseReasons.length > 0 && (
-                <div className="rounded-md border border-line bg-amber/10 px-3 py-2 text-sm text-ink" role="alert">
+                <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm text-ink" role="alert">
                   <p className="font-semibold">Kasa kapatılamıyor:</p>
                   <ul className="mt-1 list-disc pl-5">
                     {cannotCloseReasons.map((reason) => (
@@ -434,14 +537,14 @@ export function CashSessionModal({
                       type="button"
                       onClick={handleRefresh}
                       disabled={refreshing}
-                      className="min-h-10 rounded border border-line px-3 text-sm font-semibold text-ink"
+                      className="min-h-12 rounded border border-line px-3 text-sm font-semibold text-ink"
                     >
                       {refreshing ? 'Yenileniyor…' : 'Durumu yenile'}
                     </button>
                     <button
                       type="button"
                       onClick={onDismissCannotClose}
-                      className="min-h-10 rounded border border-line px-3 text-sm font-semibold text-ink"
+                      className="min-h-12 rounded border border-line px-3 text-sm font-semibold text-ink"
                     >
                       Anladım
                     </button>

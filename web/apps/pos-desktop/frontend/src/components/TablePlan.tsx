@@ -8,7 +8,7 @@ type TablePlanProps = {
   onSelectAvailable: (table: main.TableDTO) => void
   onSelectOccupied: (checkId: string) => void
   /** Checks with a payment awaiting its fiscal record — the table holding one
-   * gets an amber indicator (requirement 5). */
+   * gets a warn indicator (requirement 5). */
   awaitingFiscalCheckIds: ReadonlySet<string>
 }
 
@@ -16,8 +16,10 @@ type TablePlanProps = {
  * Full-panel floor plan shown in the center column while no adisyon is
  * selected — "yeni adisyon" akışı starts here instead of a free-text table
  * label. Card status is never color-only (WCAG): occupied/reserved/cleaning
- * each also carry a text label, and cleaning additionally gets a cross-hatch
- * pattern (see style.css's .table-cleaning-pattern).
+ * each also carry a text label ("Dolu"/"Rezerve"/"Temizlik"), and cleaning
+ * additionally gets a cross-hatch pattern (see style.css's
+ * .table-cleaning-pattern). Occupied is slate, not amber: amber is reserved
+ * for money/primary actions (docs/pos-ux-spec.md §2 ilke 7).
  *
  * Tap behavior (see App.tsx's handleSelectTable/handleSelectCheck):
  *  - empty/reserved  -> open a new check against this table (onSelectAvailable)
@@ -97,7 +99,7 @@ function TableCard({
   const isCleaning = table.status === 'cleaning'
 
   let variant = 'border-line bg-panel text-ink' // empty (default)
-  if (isOccupied) variant = 'border-amber bg-amber font-semibold text-amber-ink'
+  if (isOccupied) variant = 'border-2 border-occupied-line bg-occupied font-semibold text-ink'
   else if (isReserved) variant = 'border-2 border-teal bg-panel text-ink'
   else if (isCleaning) variant = 'table-cleaning-pattern border-line bg-panel text-ink-dim'
 
@@ -117,15 +119,14 @@ function TableCard({
       onClick={handleClick}
       className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors disabled:cursor-not-allowed ${variant}`}
     >
-      {/* An occupied card is already painted amber, so the indicator flips to
-          amber-ink there to stay visible (see PendingFiscalDot's onAmber). */}
       {awaitingFiscal && (
         <span className="absolute right-1.5 top-1.5">
-          <PendingFiscalDot onAmber={isOccupied} />
+          <PendingFiscalDot />
         </span>
       )}
       <span className="block font-medium leading-tight">{table.name}</span>
-      <span className="block text-xs opacity-80">{table.capacity} kişi</span>
+      <span className={`block text-xs ${isOccupied ? '' : 'opacity-80'}`}>{table.capacity} kişi</span>
+      {isOccupied && <span className="block text-[10px] uppercase tracking-wide">Dolu</span>}
       {isReserved && <span className="block text-[10px] uppercase tracking-wide">Rezerve</span>}
       {isCleaning && <span className="block text-[10px] uppercase tracking-wide">Temizlik</span>}
     </button>

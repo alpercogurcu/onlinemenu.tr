@@ -69,6 +69,11 @@ type App struct {
 
 	api *apiclient.Client
 
+	// options caches product option groups (see options.go); created on first
+	// use because a.api only exists once startup has run.
+	options     *optionsResolver
+	optionsOnce sync.Once
+
 	hardwareCancel context.CancelFunc
 	printer        hardware.Printer
 
@@ -438,6 +443,10 @@ func (a *App) Logout() error {
 	// worse, emit another branch snapshot into a frontend that has already
 	// returned to the login screen.
 	a.stopBranchWorkers()
+
+	// A different tenant may log in next; the option cache is keyed by IDs, so
+	// dropping it is about not holding another tenant's catalog in memory.
+	a.optionsResolver().reset()
 
 	_, loadErr := keycloakauth.LoadSessionState(a.kcStore)
 	hadKeycloakSession := loadErr == nil

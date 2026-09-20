@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import type { PendingLine } from '../lib/cart'
-import { pendingLineTotal } from '../lib/cart'
 import type { RemoteCompletedRow, RemotePendingFiscal, TrackedPayment } from '../lib/fiscalStatus'
 import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
 import { shortOrderId } from '../lib/kitchenPrint'
+import { formatMoneyInputDisplay, kurusToMoneyInput } from '../lib/numpad'
 import { changeDue as computeChangeDue, clampToRemaining, splitSuggestion } from '../lib/payment'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
 import { HoldButton } from './HoldButton'
 import { CheckIcon, ClockIcon } from './icons'
+import { Numpad } from './Numpad'
+import { PendingLineRow } from './PendingLineRow'
 
 const QUICK_NOTES = [5000, 10000, 20000, 50000] // ₺50 / ₺100 / ₺200 / ₺500 in kuruş
 // Turkish vowel harmony makes the dative suffix on a numeral irregular
@@ -22,16 +24,12 @@ const SPLIT_PARTS: { parts: number; label: string }[] = [
   { parts: 4, label: "4'e böl" },
 ]
 
-/** Kuruş -> the "1234,56" shape the amount input expects. */
-function toMoneyInput(kurus: number): string {
-  return (kurus / 100).toFixed(2).replace('.', ',')
-}
-
 type ReceiptProps = {
   tableLabel: string
   confirmedOrders: main.OrderDTO[]
   pendingLines: PendingLine[]
   onRemovePendingLine: (clientId: string) => void
+  onChangePendingQuantity: (clientId: string, delta: number) => void
   onSendOrder: () => Promise<void>
   /** Reprints one order's kitchen ticket; resolves true when it was printed.
    * A failure is reported by the parent's banner, not here. */
@@ -96,6 +94,7 @@ export function Receipt({
   confirmedOrders,
   pendingLines,
   onRemovePendingLine,
+  onChangePendingQuantity,
   onSendOrder,
   onReprintKitchenTicket,
   sendingOrder,
@@ -115,6 +114,10 @@ export function Receipt({
 }: ReceiptProps) {
   const [cashMode, setCashMode] = useState(false)
   const [receivedInput, setReceivedInput] = useState('')
+  // A preset (₺100, "2'ye böl", a retried amount) fills the field; the next key
+  // press then starts a fresh amount instead of appending to the preset — the
+  // cashier would otherwise have to backspace "200,00" digit by digit.
+  const [receivedIsPreset, setReceivedIsPreset] = useState(false)
   const [submittingPayment, setSubmittingPayment] = useState(false)
 
   const grandTotal = confirmedTotal + pendingTotal
@@ -140,11 +143,22 @@ export function Receipt({
   const changeDue = computeChangeDue(receivedKurus, remaining)
   const receivedEnough = receivedKurus > 0 && remaining > 0
 
+  function applyPreset(moneyInput: string) {
+    setReceivedInput(moneyInput)
+    setReceivedIsPreset(true)
+  }
+
+  function handleNumpadChange(next: string) {
+    setReceivedInput(next)
+    setReceivedIsPreset(false)
+  }
+
   async function handleConfirmPayment() {
     setSubmittingPayment(true)
     try {
       await onRegisterPayment(amountToRegister, receivedKurus)
       setReceivedInput('')
+      setReceivedIsPreset(false)
       // Cash mode only closes itself once the balance is fully settled —
       // otherwise it stays open, cleared, ready for the next installment.
       if (remaining - amountToRegister <= 0) {
@@ -166,7 +180,7 @@ export function Receipt({
   // exactly as if the cashier had typed the amount again.
   function handleRetryPayment(payment: TrackedPayment) {
     onDiscardFailedPayment(payment.id)
-    setReceivedInput(toMoneyInput(payment.amountTotal))
+    applyPreset(kurusToMoneyInput(payment.amountTotal))
     setCashMode(true)
   }
 
@@ -186,12 +200,15 @@ export function Receipt({
             {confirmedOrders.map((order) => (
               <div key={order.id}>
                 {order.items.map((item) => (
-                  <div key={item.id} className="receipt-line-enter flex justify-between gap-2 py-1">
-                    <span className="qty text-ink-dim">{item.quantity}×</span>
-                    <span className="flex-1 truncate">{item.product_name}</span>
-                    <span className="money tabular-nums">
-                      {formatMoney(item.quantity * item.unit_price_amount)}
-                    </span>
+                  <div key={item.id} className="receipt-line-enter py-1">
+                    <div className="flex justify-between gap-2">
+                      <span className="qty text-ink-dim">{item.quantity}×</span>
+                      <span className="flex-1 truncate">{item.product_name}</span>
+                      <span className="money tabular-nums">
+                        {formatMoney(item.quantity * item.unit_price_amount)}
+                      </span>
+                    </div>
+                    {item.note && <p className="break-words pl-7 text-xs text-ink-dim">{item.note}</p>}
                   </div>
                 ))}
                 <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />
@@ -199,24 +216,12 @@ export function Receipt({
             ))}
 
             {pendingLines.map((line) => (
-              <div
+              <PendingLineRow
                 key={line.clientId}
-                className="receipt-line-enter flex items-center justify-between gap-2 border-t border-dashed border-line/60 py-1 text-ink-dim"
-              >
-                <span className="qty">{line.quantity}×</span>
-                <span className="flex-1 truncate">
-                  {line.productName} <span className="text-xs">(gönderilmedi)</span>
-                </span>
-                <span className="money tabular-nums">{formatMoney(pendingLineTotal(line))}</span>
-                <button
-                  type="button"
-                  aria-label={`${line.productName} satırını kaldır`}
-                  onClick={() => onRemovePendingLine(line.clientId)}
-                  className="ml-1 min-h-8 min-w-8 rounded text-danger"
-                >
-                  ×
-                </button>
-              </div>
+                line={line}
+                onChangeQuantity={onChangePendingQuantity}
+                onRemove={onRemovePendingLine}
+              />
             ))}
           </div>
 
@@ -294,71 +299,85 @@ export function Receipt({
       )}
 
       {cashMode && (
-        <div className="flex flex-1 flex-col justify-between p-4">
-          <div>
-            <p className="text-ink-dim">Kalan</p>
-            <p className="money font-display text-4xl font-bold tabular-nums text-ink">
-              {formatMoney(remaining)}
-            </p>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-ink-dim">Kalan</p>
+              <p className="money font-display text-3xl font-bold tabular-nums text-ink">
+                {formatMoney(remaining)}
+              </p>
+            </div>
             {settledPaidTotal > 0 && (
-              <p className="mt-1 text-xs text-ink-dim">
+              <p className="text-xs text-ink-dim">
                 {formatMoney(confirmedTotal)} hesaptan {formatMoney(settledPaidTotal)} ödendi
               </p>
             )}
 
-            <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               {QUICK_NOTES.map((note) => (
                 <button
                   key={note}
                   type="button"
-                  onClick={() => setReceivedInput(toMoneyInput(note))}
-                  className="min-h-14 rounded-md border border-line bg-surface font-semibold text-ink"
+                  onClick={() => applyPreset(kurusToMoneyInput(note))}
+                  className="min-h-12 rounded-md border border-line bg-surface text-sm font-semibold text-ink"
                 >
                   {formatMoney(note)}
                 </button>
               ))}
-              <button
-                type="button"
-                onClick={() => setReceivedInput('')}
-                className="min-h-14 rounded-md border border-line bg-surface font-semibold text-ink"
-              >
-                Kalanın tamamı
-              </button>
             </div>
 
             {/* Quick split — suggests an equal share of the REMAINING
                 balance (not the full check), so splitting after a partial
                 payment already made still divides what is actually left. */}
-            <div className="mt-2 grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                type="button"
+                aria-label="Kalanın tamamı"
+                onClick={() => {
+                  setReceivedInput('')
+                  setReceivedIsPreset(false)
+                }}
+                className="min-h-12 rounded-md border border-amber bg-surface text-sm font-semibold text-amber"
+              >
+                Tam
+              </button>
               {SPLIT_PARTS.map(({ parts, label }) => (
                 <button
                   key={parts}
                   type="button"
-                  onClick={() => setReceivedInput(toMoneyInput(splitSuggestion(remaining, parts)))}
-                  className="min-h-10 rounded-md border border-dashed border-line bg-surface text-sm text-ink-dim"
+                  onClick={() => applyPreset(kurusToMoneyInput(splitSuggestion(remaining, parts)))}
+                  className="min-h-12 rounded-md border border-dashed border-line bg-surface text-sm text-ink-dim"
                 >
                   {label}
                 </button>
               ))}
             </div>
 
-            <label className="mt-4 block text-sm text-ink-dim" htmlFor="received-amount">
-              Alınan tutar <span className="text-ink-dim/70">(boş = kalanın tamamı)</span>
-            </label>
-            <input
+            <div
               id="received-amount"
-              inputMode="decimal"
-              placeholder={formatMoney(remaining)}
-              className="money min-h-14 w-full rounded-md border border-line bg-surface px-3 py-2 text-xl tabular-nums text-ink placeholder:text-ink-dim/50"
-              value={receivedInput}
-              onChange={(e) => setReceivedInput(e.target.value)}
-              autoFocus
-            />
+              role="status"
+              aria-label="Alınan tutar"
+              className="flex min-h-14 items-baseline justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2"
+            >
+              <span className="text-sm text-ink-dim">Alınan</span>
+              {receivedBlank ? (
+                <span className="money text-xl tabular-nums text-ink-dim">
+                  {formatMoney(remaining)} <span className="text-xs">(kalanın tamamı)</span>
+                </span>
+              ) : (
+                <span className="money text-2xl font-semibold tabular-nums text-ink">
+                  {formatMoneyInputDisplay(receivedInput)} ₺
+                </span>
+              )}
+            </div>
 
+            {/* Sits right under the amount, above the pad: change due is the number
+                the cashier must read before touching anything else, so it must
+                never be pushed below the fold by the keys. */}
             {changeDue > 0 ? (
-              <div className="mt-4">
+              <div className="flex items-baseline justify-between gap-2">
                 <p className="text-ink-dim">Para üstü</p>
-                <p key={changeDue} className="money change-due-pulse font-display text-5xl font-bold tabular-nums text-teal">
+                <p key={changeDue} className="money change-due-pulse font-display text-3xl font-bold tabular-nums text-teal">
                   {formatMoney(changeDue)}
                 </p>
               </div>
@@ -368,17 +387,25 @@ export function Receipt({
               // req item 1 ("kalan her zaman görünür").
               receivedKurus > 0 &&
               amountToRegister < remaining && (
-                <div className="mt-4">
+                <div className="flex items-baseline justify-between gap-2">
                   <p className="text-ink-dim">Bu ödemeden sonra kalan</p>
-                  <p className="money font-display text-3xl font-bold tabular-nums text-ink-dim">
+                  <p className="money font-display text-2xl font-bold tabular-nums text-ink-dim">
                     {formatMoney(remaining - amountToRegister)}
                   </p>
                 </div>
               )
             )}
+
+            <Numpad
+              mode="money"
+              value={receivedInput}
+              pendingReplace={receivedIsPreset}
+              onChange={handleNumpadChange}
+              disabled={submittingPayment}
+            />
           </div>
 
-          <div className="space-y-2">
+          <div className="shrink-0 space-y-2 border-t border-line p-4">
             <ErrorBanner message={errorMessage} />
             <button
               type="button"
@@ -406,7 +433,7 @@ export function Receipt({
  * One row per payment this session registered against the check, each carrying
  * its fiscal-record status (requirement 1). A payment whose registration failed
  * additionally shows the reason and a full-width retry target (requirement 3 —
- * min-h-11 = 44px).
+ * min-h-12 = 48px).
  *
  * Followed by two more row kinds — same rail, same visual language — for
  * money this station did NOT itself register but that already moves
@@ -453,7 +480,7 @@ function PaymentStatusList({
               <button
                 type="button"
                 onClick={() => onRetry(payment)}
-                className="mt-2 min-h-11 w-full rounded-md bg-amber px-3 font-semibold text-amber-ink"
+                className="mt-2 min-h-12 w-full rounded-md bg-amber px-3 font-semibold text-amber-ink"
               >
                 Yeniden dene
               </button>
@@ -540,7 +567,7 @@ function KitchenTicketButton({
         disabled={state === 'busy'}
         onClick={handleClick}
         title={`Sipariş #${shortOrderId(orderId)} için mutfak fişini yeniden yazdır`}
-        className="min-h-8 rounded px-2 font-sans text-xs text-ink-dim underline-offset-2 hover:underline disabled:opacity-50"
+        className="min-h-12 rounded px-3 font-sans text-xs text-ink-dim underline-offset-2 hover:underline disabled:opacity-50"
       >
         {state === 'busy' ? 'Yazdırılıyor…' : state === 'done' ? 'Yazdırıldı' : 'Mutfak fişi'}
       </button>

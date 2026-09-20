@@ -69,6 +69,62 @@ func (c *Client) ListProducts(ctx context.Context, categoryID string) ([]Product
 	return out, nil
 }
 
+// ModifierGroup mirrors catalog/http modifierGroupResponse (the subset the
+// POS needs to render an option picker).
+type ModifierGroup struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	SelectionType string `json:"selection_type"`
+	MinSelections int16  `json:"min_selections"`
+	MaxSelections *int16 `json:"max_selections"`
+	IsRequired    bool   `json:"is_required"`
+	SortOrder     int16  `json:"sort_order"`
+}
+
+// Modifier mirrors catalog/http modifierResponse. PriceDelta is the signed
+// price difference in kuruş added to the product's base price.
+type Modifier struct {
+	ID         string `json:"id"`
+	GroupID    string `json:"group_id"`
+	Name       string `json:"name"`
+	PriceDelta int64  `json:"price_delta"`
+	IsActive   bool   `json:"is_active"`
+	SortOrder  int16  `json:"sort_order"`
+}
+
+// ListModifierGroups calls GET /api/v1/catalog/modifier-groups — every group
+// of the tenant. The per-product endpoint returns group IDs only, so the POS
+// resolves those IDs against this one list instead of one GET per group.
+func (c *Client) ListModifierGroups(ctx context.Context) ([]ModifierGroup, error) {
+	var out []ModifierGroup
+	if err := c.do(ctx, http.MethodGet, "/api/v1/catalog/modifier-groups", nil, &out); err != nil {
+		return nil, fmt.Errorf("apiclient: list modifier groups: %w", err)
+	}
+	return out, nil
+}
+
+// ListProductModifierGroupIDs calls GET /api/v1/catalog/products/{id}/modifier-groups,
+// which returns the IDs of the groups assigned to the product (not the groups).
+func (c *Client) ListProductModifierGroupIDs(ctx context.Context, productID string) ([]string, error) {
+	var out []string
+	path := fmt.Sprintf("/api/v1/catalog/products/%s/modifier-groups", url.PathEscape(productID))
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("apiclient: list product modifier groups: %w", err)
+	}
+	return out, nil
+}
+
+// ListModifiers calls GET /api/v1/catalog/modifier-groups/{id}/modifiers. The
+// endpoint returns inactive modifiers too; callers filter on IsActive.
+func (c *Client) ListModifiers(ctx context.Context, groupID string) ([]Modifier, error) {
+	var out []Modifier
+	path := fmt.Sprintf("/api/v1/catalog/modifier-groups/%s/modifiers", url.PathEscape(groupID))
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("apiclient: list modifiers: %w", err)
+	}
+	return out, nil
+}
+
 // --- Checks (adisyon) ---
 
 // Check mirrors pos/http checkResponse.
@@ -286,6 +342,10 @@ type OrderItemInput struct {
 	Quantity           int    `json:"quantity"`
 	UnitPriceAmount    int64  `json:"unit_price_amount"`
 	Note               string `json:"note"`
+	// ModifierIDs lists the chosen options so the server can validate
+	// UnitPriceAmount == product price + sum of their price deltas. Ignored
+	// (inert) by a server that does not read it yet.
+	ModifierIDs []string `json:"modifier_ids,omitempty"`
 }
 
 type placeOrderRequest struct {

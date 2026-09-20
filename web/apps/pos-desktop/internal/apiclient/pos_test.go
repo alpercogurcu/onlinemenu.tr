@@ -634,3 +634,97 @@ func TestClient_GetOrder_NotFoundIsAnError(t *testing.T) {
 		t.Fatal("GetOrder on 404: want error, got nil")
 	}
 }
+
+func TestClient_ModifierCalls_UseCatalogRoutesAndDecode(t *testing.T) {
+	tests := []struct {
+		name     string
+		wantPath string
+		body     string
+		call     func(c *Client) (int, error)
+	}{
+		{
+			name:     "all groups",
+			wantPath: "/api/v1/catalog/modifier-groups",
+			body:     `[{"id":"g1","name":"Acı","selection_type":"single","min_selections":1,"max_selections":null,"is_required":true,"sort_order":1}]`,
+			call: func(c *Client) (int, error) {
+				groups, err := c.ListModifierGroups(t.Context())
+				if err == nil && (groups[0].MaxSelections != nil || !groups[0].IsRequired || groups[0].SelectionType != "single") {
+					t.Fatalf("group decoded wrong: %+v", groups[0])
+				}
+				return len(groups), err
+			},
+		},
+		{
+			name:     "product group ids",
+			wantPath: "/api/v1/catalog/products/p-1/modifier-groups",
+			body:     `["g1","g2"]`,
+			call: func(c *Client) (int, error) {
+				ids, err := c.ListProductModifierGroupIDs(t.Context(), "p-1")
+				return len(ids), err
+			},
+		},
+		{
+			name:     "modifiers of a group",
+			wantPath: "/api/v1/catalog/modifier-groups/g1/modifiers",
+			body:     `[{"id":"m1","group_id":"g1","name":"Lavaş","price_delta":500,"is_active":true,"sort_order":1},{"id":"m2","group_id":"g1","name":"Eski","price_delta":-100,"is_active":false,"sort_order":2}]`,
+			call: func(c *Client) (int, error) {
+				mods, err := c.ListModifiers(t.Context(), "g1")
+				if err == nil && (mods[0].PriceDelta != 500 || mods[1].PriceDelta != -100 || mods[1].IsActive) {
+					t.Fatalf("modifiers decoded wrong: %+v", mods)
+				}
+				return len(mods), err
+			},
+		},
+	}
+	wantCounts := []int{1, 2, 2}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != tt.wantPath {
+					t.Fatalf("request = %s %s, want GET %s", r.Method, r.URL.Path, tt.wantPath)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, &memStore{token: "tok", saved: true})
+			got, err := tt.call(c)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if got != wantCounts[i] {
+				t.Fatalf("decoded %d items, want %d", got, wantCounts[i])
+			}
+		})
+	}
+}
+
+func TestClient_PlaceOrder_SendsModifierIDs(t *testing.T) {
+	var body struct {
+		Items []struct {
+			ModifierIDs []string `json:"modifier_ids"`
+			Note        string   `json:"note"`
+		} `json:"items"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Order{ID: "order-1"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.PlaceOrder(t.Context(), "branch-1", "check-1", []OrderItemInput{
+		{ProductID: "p1", Quantity: 1, Note: "Acılı", ModifierIDs: []string{"m1", "m2"}},
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+	if len(body.Items) != 1 || len(body.Items[0].ModifierIDs) != 2 || body.Items[0].ModifierIDs[1] != "m2" || body.Items[0].Note != "Acılı" {
+		t.Fatalf("request items = %+v", body.Items)
+	}
+}

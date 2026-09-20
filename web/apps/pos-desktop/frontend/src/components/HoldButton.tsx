@@ -31,6 +31,10 @@ type HoldButtonProps = {
  * around the button fills as the press is held; releasing early cancels
  * with no side effect. Disabled under prefers-reduced-motion via CSS only
  * (the hold itself is unaffected — see useHoldToConfirm).
+ *
+ * Keyboard/assistive path: Enter or Space confirms immediately (see
+ * useHoldToConfirm's isKeyboardActivation) — the hold exists to stop a
+ * stray touch, which a key press cannot be.
  */
 export function HoldButton({
   label,
@@ -51,6 +55,7 @@ export function HoldButton({
       type="button"
       disabled={disabled}
       className={`relative flex min-h-14 w-full select-none items-center justify-center gap-2 rounded-lg px-4 py-3 text-base font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${classes.base}`}
+      aria-keyshortcuts="Enter Space"
       {...(disabled ? {} : handlers)}
     >
       {!disabled && (

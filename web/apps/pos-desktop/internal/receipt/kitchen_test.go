@@ -407,3 +407,43 @@ func TestShortOrderID(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildKitchenTicket_PrintsSelectedOptionsUnderTheItem pins the contract
+// the POS option picker relies on: chosen options travel in the item note as
+// "Acılı | Lavaş(+5) | Soğansız", and the kitchen ticket prints that under the
+// item, wrapped rather than truncated, with the Turkish letters intact.
+func TestBuildKitchenTicket_PrintsSelectedOptionsUnderTheItem(t *testing.T) {
+	const note = "Acılı | Lavaş(+5) | Peynir(+15) | Soğansız, Az pişmiş"
+	job := BuildKitchenTicket(Config{Width: escpos.Width32}, "Masa 7", "abcdef12", time.Now(),
+		[]KitchenItem{{ProductName: "Lahmacun", Quantity: 2, Note: note}})
+
+	lines, _ := decodeJob(t, job)
+	texts := lineTexts(lines)
+	itemAt := -1
+	for i, text := range texts {
+		if text == "2x  Lahmacun" {
+			itemAt = i
+			break
+		}
+	}
+	if itemAt < 0 {
+		t.Fatalf("item line missing from %q", texts)
+	}
+
+	var noteLines []string
+	for _, l := range lines[itemAt+1:] {
+		if l.bold || l.double {
+			break
+		}
+		noteLines = append(noteLines, strings.TrimSpace(string(l.text)))
+	}
+	joined := strings.Join(noteLines, " ")
+	for _, want := range []string{"Acılı", "Lavaş(+5)", "Peynir(+15)", "Soğansız,", "Az pişmiş"} {
+		if !strings.Contains(joined, string(escpos.EncodeCP857(want))) {
+			t.Errorf("option %q missing from the note lines %q", want, noteLines)
+		}
+	}
+	if !strings.HasPrefix(texts[itemAt+1], string(escpos.EncodeCP857("    > Acılı"))) {
+		t.Errorf("first note line = %q, want it marked with %q", texts[itemAt+1], "    > Acılı")
+	}
+}

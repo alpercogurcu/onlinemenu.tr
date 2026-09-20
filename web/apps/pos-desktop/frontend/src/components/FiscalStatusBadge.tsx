@@ -22,7 +22,7 @@ import { BanIcon, CheckIcon, ClockIcon, EyeOffIcon, TriangleAlertIcon } from './
 const PRESENTATION: Record<FiscalStatus, { label: string; className: string; Icon: typeof ClockIcon }> = {
   pending: {
     label: 'Mali kayıt bekliyor',
-    className: 'bg-amber/15 text-amber',
+    className: 'bg-warn/15 text-warn',
     Icon: ClockIcon,
   },
   completed: {
@@ -55,7 +55,7 @@ const UNKNOWN_TITLE =
 
 /**
  * Requirement 6: a payment that settles faster than PENDING_BADGE_DELAY_MS
- * never renders the amber "bekliyor" badge — it goes straight to green. This is
+ * never renders the warn-colored "bekliyor" badge — it goes straight to green. This is
  * a *delayed render*, not an optimistic one: the green badge still only appears
  * once the server has actually reported `completed`.
  *

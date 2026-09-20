@@ -3,6 +3,17 @@ import { useCallback, useRef, useState } from 'react'
 const HOLD_DURATION_MS = 600
 
 /**
+ * A click event whose `detail` is 0 was not produced by a pointer: it comes
+ * from Enter/Space on a focused button (or from assistive tech). A pointer
+ * press must be held for HOLD_DURATION_MS, but a keyboard press is already a
+ * deliberate act — there is no accidental graze to guard against — so it
+ * confirms immediately.
+ */
+export function isKeyboardActivation(clickDetail: number): boolean {
+  return clickDetail === 0
+}
+
+/**
  * Press-and-hold-to-confirm, per the design plan: closing/canceling a check
  * uses a 600ms hold (ring fills around the button) instead of a modal
  * dialog — releasing early cancels with no side effect. Used for both
@@ -50,6 +61,9 @@ export function useHoldToConfirm(onConfirm: () => void) {
       onPointerUp: cancel,
       onPointerLeave: cancel,
       onPointerCancel: cancel,
+      onClick: (event: { detail: number }) => {
+        if (isKeyboardActivation(event.detail)) onConfirm()
+      },
     },
   }
 }

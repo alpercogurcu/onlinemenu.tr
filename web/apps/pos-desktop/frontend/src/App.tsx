@@ -56,8 +56,10 @@ import {
   addProductToPending,
   confirmedOrdersTotal,
   pendingTotal as sumPendingTotal,
+  changePendingQuantity,
   removePendingLine,
   toOrderItemInputs,
+  type LineOptions,
   type PendingLine,
 } from './lib/cart'
 import { describeError } from './lib/errors'
@@ -678,13 +680,17 @@ function App() {
     }
   }
 
-  function handleAddProduct(product: main.ProductDTO) {
+  function handleAddProduct(product: main.ProductDTO, options?: LineOptions) {
     if (!selectedCheck) return
-    setPendingLines((lines) => addProductToPending(lines, product))
+    setPendingLines((lines) => addProductToPending(lines, product, options))
   }
 
   function handleRemovePendingLine(clientId: string) {
     setPendingLines((lines) => removePendingLine(lines, clientId))
+  }
+
+  function handleChangePendingQuantity(clientId: string, delta: number) {
+    setPendingLines((lines) => changePendingQuantity(lines, clientId, delta))
   }
 
   async function handleSendOrder() {
@@ -870,16 +876,14 @@ function App() {
         </span>
         <div className="flex items-center gap-4">
           {/*
-            Bağlı yazıcı sessizdir — yalnızca kopuk/hata durumunda amber bir
-            rozet gösterilir (kırmızı hiçbir zaman: bu app'te kırmızı yalnız
-            void/iptal içindir, bkz. style.css). Bu satır o kuralın tek
-            istisnasıdır — task-lead'in açık talebiyle amber kullanıldı;
-            ui-designer bu rengin "para/ana aksiyon" anlamıyla çakışıp
-            çakışmadığını gözden geçirebilir (bkz. rapor).
+            Bağlı yazıcı sessizdir — yalnızca kopuk/hata durumunda uyarı
+            (warn) rengiyle bir rozet gösterilir (kırmızı hiçbir zaman: bu
+            app'te kırmızı yalnız void/iptal içindir, bkz. style.css). Amber
+            para/ana aksiyon anlamına ayrıldığı için uyarı ayrı bir token'dır.
           */}
           {kitchenPrinter && kitchenPrinter.status !== 'connected' && (
             <span
-              className="rounded-full bg-amber/20 px-2 py-0.5 text-xs font-semibold text-ink"
+              className="rounded-full border border-warn bg-warn/20 px-2 py-0.5 text-xs font-semibold text-ink"
               title={kitchenPrinter.error ?? ''}
             >
               Mutfak yazıcısı {kitchenPrinter.status === 'error' ? 'hata' : 'bağlı değil'}
@@ -887,7 +891,7 @@ function App() {
           )}
           {printer && printer.status !== 'connected' && (
             <span
-              className="rounded-full bg-amber/20 px-2 py-0.5 text-xs font-semibold text-ink"
+              className="rounded-full border border-warn bg-warn/20 px-2 py-0.5 text-xs font-semibold text-ink"
               title={printer.error ?? ''}
             >
               Yazıcı {printer.status === 'error' ? 'hata' : 'bağlı değil'}
@@ -902,11 +906,11 @@ function App() {
                 : 'Kasiyer değiştirmek için önce kasa açık olmalı — kasa oturumu, katılımın bağlı olduğu şey.'
             }
             onClick={() => setCashierSwitchModalOpen(true)}
-            className="min-h-8 rounded px-2 text-ink-dim disabled:opacity-40"
+            className="min-h-12 rounded px-3 text-ink-dim disabled:opacity-40"
           >
             Kasiyer Değiştir
           </button>
-          <button type="button" onClick={handleLogout} className="min-h-8 rounded px-2 text-ink-dim">
+          <button type="button" onClick={handleLogout} className="min-h-12 rounded px-3 text-ink-dim">
             Çıkış
           </button>
         </div>
@@ -920,12 +924,12 @@ function App() {
       />
 
       {printError && (
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
           <span>Fiş yazdırılamadı: {printError}</span>
           <button
             type="button"
             onClick={handleReprintReceipt}
-            className="min-h-8 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+            className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
           >
             Fişi yeniden yazdır
           </button>
@@ -936,28 +940,28 @@ function App() {
         Mutfak fişi hatası — sipariş verildi ama fişi mutfağa ulaşmadı: yemek
         yapılmayacak demektir, bu yüzden "Yeniden yazdır" ya da bilinçli
         "Yoksay" (mutfağa sözlü iletildi) seçilene kadar görünür kalır. Sipariş
-        kendisi başarılıdır; hata onu geri almaz. Amber, kırmızı değil (bkz.
+        kendisi başarılıdır; hata onu geri almaz. Uyarı rengi (warn), kırmızı değil (bkz.
         ErrorBanner: kırmızı yalnız void/iptal içindir).
       */}
       {kitchenFailures.map((failure) => (
         <div
           key={failure.orderId}
           role="alert"
-          className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
         >
           <span>{describeKitchenFailure(failure)}</span>
           <span className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={() => printKitchenTicketFor(failure.orderId, failure.tableLabel)}
-              className="min-h-8 rounded bg-amber px-3 font-semibold text-amber-ink"
+              className="min-h-12 rounded bg-amber px-3 font-semibold text-amber-ink"
             >
               Yeniden yazdır
             </button>
             <button
               type="button"
               onClick={() => setKitchenFailures((prev) => removeKitchenFailure(prev, failure.orderId))}
-              className="min-h-8 rounded px-2 text-ink-dim"
+              className="min-h-12 rounded px-3 text-ink-dim"
             >
               Yoksay
             </button>
@@ -970,7 +974,7 @@ function App() {
         ödemesi de olabilir, bkz. unreportedRemoteFailures). Metin hangi
         istasyon olduğunu İDDİA ETMEZ: şube akışı bunu ayırt etmez, kasiyere
         yanlış yere baktırmaktansa adisyonu söylemek daha yararlıdır.
-        Amber, kırmızı değil: bu app'te kırmızı yalnız void/iptal içindir
+        Uyarı rengi (warn), kırmızı değil: bu app'te kırmızı yalnız void/iptal içindir
         (bkz. style.css) ve buradaki ödeme iptal edilmiş değil, yeniden
         alınması gereken bir ödemedir. Ham `failure_reason` cihaz çıktısıdır —
         kasiyere Türkçe mesaj gösterilir, ham metin yalnız title olarak
@@ -979,7 +983,7 @@ function App() {
       {visibleRemoteFailures.map((failure) => (
         <div
           key={failure.paymentId}
-          className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
           title={failure.failureReason ?? ''}
         >
           <span>Mali kayıt hatası: {describeRemoteFailure()}</span>
@@ -988,7 +992,7 @@ function App() {
             onClick={() =>
               setDismissedFailureIds((prev) => new Set(prev).add(failure.paymentId))
             }
-            className="min-h-8 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+            className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
           >
             Anladım
           </button>
@@ -1023,6 +1027,7 @@ function App() {
           confirmedOrders={confirmedOrders}
           pendingLines={pendingLines}
           onRemovePendingLine={handleRemovePendingLine}
+          onChangePendingQuantity={handleChangePendingQuantity}
           onSendOrder={handleSendOrder}
           onReprintKitchenTicket={(orderId) => printKitchenTicketFor(orderId, selectedCheck?.table_label ?? '')}
           sendingOrder={sendingOrder}

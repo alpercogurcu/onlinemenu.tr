@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
-import { ListProducts } from '../../wailsjs/go/main/App'
-import type { main } from '../../wailsjs/go/models'
+import { ListProductModifierGroups, ListProducts } from '../../wailsjs/go/main/App'
+import { main } from '../../wailsjs/go/models'
+import type { LineOptions } from '../lib/cart'
 import { formatMoney } from '../lib/format'
 import { ErrorBanner } from './ErrorBanner'
+import { SlidersIcon, TriangleAlertIcon } from './icons'
+import { OptionPicker } from './OptionPicker'
 
 type ProductGridProps = {
   categories: main.CategoryDTO[]
   disabled: boolean
-  onAddProduct: (product: main.ProductDTO) => void
+  onAddProduct: (product: main.ProductDTO, options?: LineOptions) => void
 }
 
 /**
@@ -15,12 +18,20 @@ type ProductGridProps = {
  * follows the category's product order (no client-side sort) so the
  * cashier builds muscle memory for tile position — per the design plan
  * ("SABİT sıralı tile'lar — hafıza kası").
+ *
+ * A product without options is added with one tap. A product with option
+ * groups opens the OptionPicker instead (the tile carries a slider badge so the
+ * cashier knows before tapping). If a product's options could not be fetched it
+ * is still added immediately — selling never waits on the catalog — and the
+ * receipt line warns; the grid then quietly re-fetches that product's options
+ * so the next tap can offer them.
  */
 export function ProductGrid({ categories, disabled, onAddProduct }: ProductGridProps) {
   const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null)
   const [products, setProducts] = useState<main.ProductDTO[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [pickerProduct, setPickerProduct] = useState<main.ProductDTO | null>(null)
 
   useEffect(() => {
     if (categories.length > 0 && !activeCategoryId) {
@@ -37,6 +48,30 @@ export function ProductGrid({ categories, disabled, onAddProduct }: ProductGridP
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false))
   }, [activeCategoryId])
+
+  function refreshOptions(product: main.ProductDTO) {
+    ListProductModifierGroups(product.id)
+      .then((groups) => {
+        setProducts((current) =>
+          current.map((p) =>
+            p.id === product.id ? main.ProductDTO.createFrom({ ...p, modifier_groups: groups, options_unavailable: false }) : p,
+          ),
+        )
+      })
+      // Best-effort self-healing only: the sale already went ahead without
+      // options and the line carries the warning, so a second failure changes
+      // nothing the cashier can act on.
+      .catch(() => undefined)
+  }
+
+  function handleTileTap(product: main.ProductDTO) {
+    if (product.modifier_groups.length > 0) {
+      setPickerProduct(product)
+      return
+    }
+    if (product.options_unavailable) refreshOptions(product)
+    onAddProduct(product)
+  }
 
   return (
     <section className="flex h-full flex-1 flex-col overflow-hidden bg-surface">
@@ -67,10 +102,22 @@ export function ProductGrid({ categories, disabled, onAddProduct }: ProductGridP
               key={product.id}
               type="button"
               disabled={disabled}
-              onClick={() => onAddProduct(product)}
-              className="flex min-h-14 flex-col justify-between rounded-lg border border-line bg-panel p-3 text-left disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => handleTileTap(product)}
+              className="relative flex min-h-14 flex-col justify-between rounded-lg border border-line bg-panel p-3 text-left disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <span className="line-clamp-2 text-sm font-medium text-ink">{product.name}</span>
+              {product.modifier_groups.length > 0 && (
+                <span className="absolute right-2 top-2 text-ink-dim" title="Seçenekli ürün">
+                  <SlidersIcon size={16} />
+                  <span className="sr-only">Seçenekli ürün</span>
+                </span>
+              )}
+              {product.options_unavailable && (
+                <span className="absolute right-2 top-2 text-warn" title="Seçenekler alınamadı">
+                  <TriangleAlertIcon size={16} />
+                  <span className="sr-only">Seçenekler alınamadı</span>
+                </span>
+              )}
+              <span className="line-clamp-2 pr-6 text-sm font-medium text-ink">{product.name}</span>
               <span className="money text-sm font-semibold text-amber">
                 {formatMoney(product.price_amount)}
               </span>
@@ -83,6 +130,17 @@ export function ProductGrid({ categories, disabled, onAddProduct }: ProductGridP
           </p>
         )}
       </div>
+
+      {pickerProduct && (
+        <OptionPicker
+          product={pickerProduct}
+          onCancel={() => setPickerProduct(null)}
+          onConfirm={(options) => {
+            onAddProduct(pickerProduct, options)
+            setPickerProduct(null)
+          }}
+        />
+      )}
     </section>
   )
 }

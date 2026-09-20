@@ -15,6 +15,15 @@
  * this app implements: grafit/panel/amber/teal palette, red reserved
  * exclusively for void/cancel actions (meaning-preserving — no other UI
  * element may use it).
+ *
+ * One color, one meaning (docs/pos-ux-spec.md §2 ilke 7):
+ *   amber    = money / primary action
+ *   teal     = done / paid
+ *   danger   = void / cancel
+ *   warn     = something needs attention (failed print, pending fiscal record)
+ *   occupied = a table with an open check (slate — deliberately NOT amber,
+ *              which used to mean occupied, primary action AND warning)
+ * Every colored state must also carry text or an icon (never color alone).
  */
 @theme {
   --color-surface: #14161a;
@@ -26,6 +35,9 @@
   --color-amber-ink: #14161a;
   --color-teal: #2fbf9b;
   --color-danger: #e5484d;
+  --color-warn: #f0883e;
+  --color-occupied: #4a5a70;
+  --color-occupied-line: #7d90aa;
 
   --font-display: "Barlow Semi Condensed", sans-serif;
   --font-body: "Inter Variable", "Inter", sans-serif;
@@ -62,6 +74,8 @@ body {
 
 button {
   font-family: inherit;
+  /* Drops the 300ms tap delay and double-tap-zoom on the touchscreen. */
+  touch-action: manipulation;
 }
 
 /* --- Thermal receipt torn-edge (signature element of the right rail) --- */

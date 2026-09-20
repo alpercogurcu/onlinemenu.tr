@@ -30,12 +30,12 @@ export function CashSessionBanner({ checked, session, stale, onOpen }: CashSessi
 
   if (!session) {
     return (
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
         <span>Bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı.</span>
         <button
           type="button"
           onClick={onOpen}
-          className="min-h-10 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+          className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
         >
           Kasa Aç
         </button>
@@ -45,12 +45,12 @@ export function CashSessionBanner({ checked, session, stale, onOpen }: CashSessi
 
   if (stale) {
     return (
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber/10 px-4 py-2 text-sm text-ink">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink">
         <span>Kasa sayımı bayatladı — kasa bakiyesi değişti, yeniden sayılmalı.</span>
         <button
           type="button"
           onClick={onOpen}
-          className="min-h-10 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
+          className="min-h-12 shrink-0 rounded bg-amber px-3 font-semibold text-amber-ink"
         >
           Kasayı Aç
         </button>
@@ -59,12 +59,12 @@ export function CashSessionBanner({ checked, session, stale, onOpen }: CashSessi
   }
 
   return (
-    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-1.5 text-xs text-ink-dim">
+    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-0 text-xs text-ink-dim">
       <span>
         Kasa açık — beklenen kapanış {formatMoney(session.expected_close)}
         {session.status === 'closing_control' ? ' (sayım gönderildi)' : ''}
       </span>
-      <button type="button" onClick={onOpen} className="min-h-8 shrink-0 rounded px-2 font-semibold text-ink">
+      <button type="button" onClick={onOpen} className="min-h-12 shrink-0 rounded px-3 font-semibold text-ink">
         Kasa
       </button>
     </div>

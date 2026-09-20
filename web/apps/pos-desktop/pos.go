@@ -33,6 +33,37 @@ type ProductDTO struct {
 	Unit        string `json:"unit"`
 	TaxRateBPS  int    `json:"tax_rate_bps"`
 	SortOrder   int16  `json:"sort_order"`
+
+	// ModifierGroups are the product's selectable option groups, resolved
+	// server-side-of-the-bridge (see options.go) so a tile tap never waits on
+	// the network. Empty (never null) for a plain product.
+	ModifierGroups []ModifierGroupDTO `json:"modifier_groups"`
+	// OptionsUnavailable is set when the option lookup failed: the product is
+	// then added without options and the receipt line warns the cashier.
+	OptionsUnavailable bool `json:"options_unavailable"`
+}
+
+// ModifierGroupDTO is one option group of a product (e.g. "Acı", "Ekstra").
+// MaxSelections is 0 for "no cap". IsRequired already folds in a
+// min_selections > 0 rule.
+type ModifierGroupDTO struct {
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	SelectionType string        `json:"selection_type"`
+	MinSelections int           `json:"min_selections"`
+	MaxSelections int           `json:"max_selections"`
+	IsRequired    bool          `json:"is_required"`
+	SortOrder     int16         `json:"sort_order"`
+	Modifiers     []ModifierDTO `json:"modifiers"`
+}
+
+// ModifierDTO is one selectable option; PriceDelta is the signed price
+// difference in kuruş.
+type ModifierDTO struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	PriceDelta int64  `json:"price_delta"`
+	SortOrder  int16  `json:"sort_order"`
 }
 
 // CheckDTO mirrors apiclient.Check.
@@ -100,6 +131,10 @@ type OrderItemInputDTO struct {
 	Quantity           int    `json:"quantity"`
 	UnitPriceAmount    int64  `json:"unit_price_amount"`
 	Note               string `json:"note"`
+	// ModifierIDs are the chosen options; UnitPriceAmount must equal the
+	// product's price plus the sum of their price deltas (the server
+	// validates this).
+	ModifierIDs []string `json:"modifier_ids"`
 }
 
 // PaymentDTO mirrors apiclient.Payment.
@@ -146,6 +181,7 @@ func (a *App) ListProducts(categoryID string) ([]ProductDTO, error) {
 			SortOrder:   p.SortOrder,
 		}
 	}
+	a.optionsResolver().enrich(a.ctx, out)
 	return out, nil
 }
 
@@ -246,6 +282,7 @@ func (a *App) PlaceOrder(branchID, checkID string, items []OrderItemInputDTO) (O
 			Quantity:           it.Quantity,
 			UnitPriceAmount:    it.UnitPriceAmount,
 			Note:               it.Note,
+			ModifierIDs:        it.ModifierIDs,
 		}
 	}
 	o, err := a.api.PlaceOrder(a.ctx, branchID, checkID, in)

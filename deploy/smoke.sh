@@ -13,14 +13,23 @@ MENU_URL="${MENU_URL:?MENU_URL gerekli (ör. https://menu.example.com)}"
 
 status=0
 
+# Next.js konteynerleri `up -d` sonrası 20-40 sn boyunca 502 döner; ilk denemede
+# FAIL basmak her yayında yanlış alarm üretiyordu. SMOKE_WAIT_SECONDS (varsayılan
+# 90) boyunca 3 sn aralıkla yeniden dener.
 check() {
-  local name="$1" url="$2"
-  if curl -fsS --max-time 10 --connect-timeout 5 -o /dev/null "$url"; then
-    echo "OK   ${name} (${url})"
-  else
-    echo "FAIL ${name} (${url})"
-    status=1
-  fi
+  local name="$1" url="$2" deadline=$(( $(date +%s) + ${SMOKE_WAIT_SECONDS:-90} ))
+  while :; do
+    if curl -fsS --max-time 10 --connect-timeout 5 -o /dev/null "$url"; then
+      echo "OK   ${name} (${url})"
+      return
+    fi
+    if (( $(date +%s) >= deadline )); then
+      echo "FAIL ${name} (${url})"
+      status=1
+      return
+    fi
+    sleep 3
+  done
 }
 
 check "api /healthz"  "${API_URL%/}/healthz"

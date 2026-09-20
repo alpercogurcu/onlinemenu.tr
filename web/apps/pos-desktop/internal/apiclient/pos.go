@@ -163,12 +163,14 @@ type Check struct {
 }
 
 // ListOpenChecks calls GET /api/v1/pos/checks and filters to status "open"
-// AND (when branchID is non-empty) to that branch. The backend endpoint
-// (listChecks) returns every check for the WHOLE TENANT regardless of
-// status or branch (verified against pos/repo/check_repo.go List — no WHERE
-// clause beyond RLS's tenant scoping, ordered open-first); this client
-// filters client-side rather than assuming a query param the handler
-// doesn't have.
+// AND (when branchID is non-empty) to that branch.
+//
+// Since the 2026-09-20 branch-isolation fix the backend already forces a
+// branch-scoped principal's own branch onto this list (pos/http listChecks +
+// service.BranchScopeFilter), so for a counter station the branch filter here
+// is now belt-and-braces. It stays because it is still load-bearing for a
+// chain-wide session (branchID != "" while OPA resolves scope "tenant"), and
+// because the endpoint remains status-agnostic — "open" is filtered here.
 //
 // The branch filter keeps the station from OFFERING a check it cannot use:
 // PlaceOrder/RegisterCashPayment always send the calling station's own

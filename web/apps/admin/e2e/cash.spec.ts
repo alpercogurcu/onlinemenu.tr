@@ -145,6 +145,27 @@ async function closeCheck(api: Api, checkId: string, key: string) {
   return api.post(`/api/v1/pos/checks/${checkId}/close`, undefined, key)
 }
 
+// A closed adisyon can no longer be cancelled or have its orders touched
+// (409 check_not_open), and a live order under it would stay on the shared
+// kitchen board forever. Paid food is served food, so before a successful
+// close the spec walks whatever is still live to "delivered" (kitchen chain),
+// which keeps the check total and the day-end figures untouched.
+async function serveLiveOrders(kitchen: Api, checkId: string): Promise<void> {
+  const chain = ["accepted", "preparing", "ready", "delivered"]
+  const orders = await json<{ id: string; status: string }[]>(await kitchen.get(`/api/v1/pos/checks/${checkId}/orders`), 200)
+  for (const order of orders) {
+    let at = chain.indexOf(order.status)
+    if (order.status === "pending") {
+      await json(await kitchen.post(`/api/v1/pos/orders/${order.id}/accept`), 200)
+      at = 0
+    }
+    if (at < 0) continue
+    for (const status of chain.slice(at + 1)) {
+      await json(await kitchen.post(`/api/v1/pos/orders/${order.id}/advance`, { status }), 200)
+    }
+  }
+}
+
 async function saleDetails(api: Api, from: string, to: string): Promise<SaleDetails> {
   const query = new URLSearchParams({ branch_id: BRANCH_ID, from, to })
   return json<SaleDetails>(await api.get(`/api/v1/pos/reports/sale-details?${query}`), 200)
@@ -311,6 +332,7 @@ test.describe("kasa günü", () => {
     expect(after!.cash_payments_taken - before!.cash_payments_taken).toBe(32_000)
     expect(after!.expected_close - before!.expected_close).toBe(32_000)
 
+    await serveLiveOrders(manager, saleCheckId)
     const closed = await json<{ status: string; closed_at: string | null }>(
       await closeCheck(cashier, saleCheckId, `e2e-${RUN}-k1-close`),
       200,
@@ -365,6 +387,7 @@ test.describe("kasa günü", () => {
 
     const rest = await payCash(cashier, correctionCheckId, "Lahmacun (kalan)", 4_000, `e2e-${RUN}-k2-pay-2`)
     await waitCompleted(manager, rest.id)
+    await serveLiveOrders(manager, correctionCheckId)
     const closed = await json<{ status: string }>(await closeCheck(cashier, correctionCheckId, `e2e-${RUN}-k2-close`), 200)
     expect(closed.status).toBe("closed")
 
@@ -488,6 +511,7 @@ test.describe("kasa günü", () => {
       201,
     )
     await waitCompleted(manager, card.id)
+    await serveLiveOrders(manager, checkId)
     const closed = await json<{ status: string }>(await closeCheck(cashier, checkId, `e2e-${RUN}-k3-close-card`), 200)
     expect(closed.status).toBe("closed")
     openedChecks.pop()

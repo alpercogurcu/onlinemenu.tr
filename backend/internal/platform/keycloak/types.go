@@ -21,6 +21,7 @@ type keycloakUserRepresentation struct {
 	Username      string `json:"username"`
 	Email         string `json:"email"`
 	FirstName     string `json:"firstName,omitempty"`
+	LastName      string `json:"lastName,omitempty"`
 	Enabled       bool   `json:"enabled"`
 	EmailVerified bool   `json:"emailVerified"`
 }

@@ -5,7 +5,9 @@
 // Spec bu yüzden mevcut QR'ı rotate ederek taze token alır — hiçbir token
 // repoda veya ortam değişkeninde tutulmaz.
 //
-// BULGU (2026-09-20): prod'da hiç `menus` kaydı yok ve misafir menüsü
+// BULGU (2026-09-20, ÇÖZÜLDÜ — prod'a kalıcı "Ana Menü" kuruldu, bkz.
+// docs/b2b-import-plan.md §10.1; aktif menü varsa beforeAll geçici menü
+// KURMAZ): prod'da hiç `menus` kaydı yoktu ve misafir menüsü
 // read model'i menu_items'tan beslenir
 // (catalog/repo/storefront_menu_repo.go:104 `visible_items` CTE) — yani QR
 // menüsü bugün BOŞ döner. docs/b2b-import-plan.md §5 "QR menüsü menüsüz

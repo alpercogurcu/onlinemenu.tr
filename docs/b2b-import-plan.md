@@ -57,7 +57,7 @@ küme `product_type='pos_sale'` ürünleridir.
 | şube fiyatı ≠ taban | `branch_product_overrides(is_available=true, price_amount)` | eşitse satır yazılmaz; her ürün her şubede satılır (b2b'de kapama kavramı yok) |
 | varyant/opsiyon | — | b2b'de 0 kayıt → **yapılacak iş yok** (modifier_groups'a çeviri gerekmez) |
 | kategori | `Burgerler` (11) · `Tavuk Burgerler` (5) · `Çocuk Burgerler` (2, `Kıds*`) | isim kuralı script'te; sort 30/40/50 (Soru 3) |
-| — | `menus` / `menu_items` **aktarılmaz** | prod'da 0 menü; POS satışı ve QR menüsü menüsüz çözülür, şube fiyatı override'la yürür (ADR-DATA-009 §2) |
+| — | `menus` / `menu_items`: tenant geneli **"Ana Menü"** (aktif, `branch_id` NULL) + tüm aktif ürünler (`price_override` NULL) | Misafir QR menüsü read model'i `menu_items`'tan beslenir (`storefront_menu_repo.go` `visible_items` CTE); menü yoksa `{"categories":[]}` döner. Şube override'ı menüyü **ikame etmez**, yalnız menüdeki fiyatı ezer (override > `menu_items.price_override` > tenant fiyatı). Deterministik id `uuid_v5(tenant_id,'b2b:menu:ana-menu')`; script'te `menu_only=1` ile yalnız bu adım koşulabilir. İlk taslaktaki "QR menüsü menüsüz çözülür" varsayımı **yanlıştı** (deployment.md §12.6 B1) |
 | personel | Keycloak + `persons/memberships` — **API** | §6 |
 
 **Çakışmalar/tuzaklar**
@@ -125,3 +125,11 @@ Kaynak liste, repoya girmeyecek biçimde alınır: `SELECT full_name, email, rol
 (Yönetici 1, Shift Müdürü 6, Kasiyer 2, Depo 2, Şoför 1; auditor atlandı, 1 kişi OM'de zaten var). Koşmadan önce `TOKEN` (Yönetici bağlam token'ı) gerekir.
 
 **Geri alma notu:** `-v rollback=1` demo ürünleri yeniden aktifleştirmez ve "Serdivan" adını geri çevirmez (elle).
+
+### 10.1 Ana Menü adımı (2026-09-20, prod kabul bulgusu B1)
+
+- **Sorun:** İlk koşuda menü aktarılmamıştı → prod'da QR okutulunca oturum açılıyor ama `GET /api/public/v1/menu` `{"categories":[]}` dönüyordu (§5'teki eski "menüsüz çözülür" cümlesi hatalıydı).
+- **Karar (ürün):** tenant geneli, aktif **"Ana Menü"** + tüm aktif ürünler; fiyat override'ı yok (tenant fiyatı, şube override'ı okuma anında ezer). Kalan pasif `PRODTEST Menü` olduğu gibi bırakıldı.
+- **Script:** `import-from-b2b.sql` artık menüyü de kurar (idempotent: menü `ON CONFLICT (id) DO NOTHING`, kalemler `ON CONFLICT (menu_id, product_id) DO NOTHING` → tekrar koşu yeni ürünü ekler, sahibin gizlediği kalemi geri açmaz; import dışı "Ana Menü" adlı menü varsa **durur**). `-v menu_only=1` ürün/şube/fiyata dokunmadan yalnız bu adımı koşar (payload/`B2B_JSON` gerekmez). `-v rollback=1` menüyü de siler.
+- **Prod'da uygulama:** kuru koşu (ROLLBACK) → gerçek koşu, `app_migrator`, tek transaction (`menu_only=1 dry_run=0`). Sonuç: 1 menü ("Ana Menü", aktif) + **18** kalem (18 aktif ürünün tamamı; 3 pasif demo dışarıda). Doğrulama: `e2e-prod` (e) — İzmit masasının QR'ı ile American Smash **490 TL**, Serdivan QR'ı **470 TL**.
+- **Bakım notu:** Sonradan admin'den eklenen yeni ürün otomatik menüye girmez; QR'da görünmesi için menüye eklenmeli (ya da script `menu_only=1` ile tekrar koşulur).

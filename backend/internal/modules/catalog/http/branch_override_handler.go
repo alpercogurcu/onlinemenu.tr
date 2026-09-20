@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -142,24 +143,29 @@ func (h *Handler) deleteBranchOverride(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// branchIDFromQuery reads the optional ?branch_id= of the product listings.
+// branchIDFromQuery resolves the branch whose overrides the product listings
+// apply (uuid.Nil = tenant default prices).
 //
-// Absent means "tenant default", which is what every caller got before
-// ADR-DATA-009 — the parameter is additive, never required. Present means the
-// caller must be entitled to that branch, so the same layer-3 guard runs.
+// An explicit ?branch_id= must pass the layer-3 guard. When it is absent, a
+// principal that is not chain-wide (OPA scope other than "tenant") defaults to
+// its OWN branch: a cashier that forgets the parameter would otherwise be
+// shown tenant prices its branch never charges, and the order endpoint would
+// then refuse the sale with price_mismatch. Chain-wide managers keep the
+// tenant default they had before ADR-DATA-009, and a staff principal with no
+// branch has nothing to default to.
 func (h *Handler) branchIDFromQuery(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	principal, err := auth.FromContext(r.Context())
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return uuid.Nil, false
+	}
 	raw := r.URL.Query().Get("branch_id")
 	if raw == "" {
-		return uuid.Nil, true
+		return defaultBranchID(r.Context(), principal), true
 	}
 	branchID, err := uuid.Parse(raw)
 	if err != nil {
 		http.Error(w, "invalid branch_id", http.StatusBadRequest)
-		return uuid.Nil, false
-	}
-	principal, err := auth.FromContext(r.Context())
-	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return uuid.Nil, false
 	}
 	if err := service.RequireBranchAccess(r.Context(), principal, branchID); err != nil {
@@ -167,4 +173,14 @@ func (h *Handler) branchIDFromQuery(w http.ResponseWriter, r *http.Request) (uui
 		return uuid.Nil, false
 	}
 	return branchID, true
+}
+
+func defaultBranchID(ctx context.Context, principal auth.Principal) uuid.UUID {
+	if scope, ok := auth.ScopeFromContext(ctx); ok && scope == "tenant" {
+		return uuid.Nil
+	}
+	if principal.IsStaff() {
+		return principal.BranchID
+	}
+	return uuid.Nil
 }

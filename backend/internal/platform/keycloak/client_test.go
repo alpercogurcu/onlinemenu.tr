@@ -28,6 +28,7 @@ type fakeKeycloakServer struct {
 	users        map[string]keycloak.User // keyed by email
 	nextID       int
 	createStatus int // override for the next CreateUser response; 0 = default 201
+	createBodies []map[string]any
 	failNotify   bool
 }
 
@@ -58,10 +59,10 @@ func newFakeKeycloakServer() *fakeKeycloakServer {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]map[string]any{})
 		case http.MethodPost:
-			var body struct {
-				Email string `json:"email"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			var raw map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&raw)
+			f.createBodies = append(f.createBodies, raw)
+			body := struct{ Email string }{Email: fmt.Sprint(raw["email"])}
 
 			if f.createStatus != 0 {
 				w.WriteHeader(f.createStatus)
@@ -145,6 +146,42 @@ func TestClient_CreateUser_ThenFindByEmail(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, created.ID, found.ID)
+}
+
+// TestClient_CreateUser_SplitsFullNameIntoFirstAndLastName pins the realm
+// user-profile contract: `lastName` is mandatory for the `user` role, so an
+// account created without it stays "not fully set up" and cannot sign in.
+func TestClient_CreateUser_SplitsFullNameIntoFirstAndLastName(t *testing.T) {
+	tests := []struct {
+		name      string
+		fullName  string
+		wantFirst string
+		wantLast  string
+	}{
+		{"two words", "Ada Lovelace", "Ada", "Lovelace"},
+		{"last word is the surname, like keycloak-harden.sh", "Ahmet Can Yılmaz", "Ahmet Can", "Yılmaz"},
+		{"single word falls back to a placeholder", "Madonna", "Madonna", "-"},
+		{"surrounding and repeated whitespace is collapsed", "  Ada   Lovelace  ", "Ada", "Lovelace"},
+		{"empty name still yields a complete profile", "   ", "-", "-"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeKeycloakServer()
+			defer f.srv.Close()
+
+			_, err := f.client().CreateUser(context.Background(), keycloak.CreateUserRequest{
+				Email:    "person@example.com",
+				FullName: tc.fullName,
+			})
+			require.NoError(t, err)
+
+			require.Len(t, f.createBodies, 1)
+			assert.Equal(t, tc.wantFirst, f.createBodies[0]["firstName"])
+			assert.Equal(t, tc.wantLast, f.createBodies[0]["lastName"])
+			assert.Equal(t, "person@example.com", f.createBodies[0]["email"])
+			assert.Equal(t, "person@example.com", f.createBodies[0]["username"])
+		})
+	}
 }
 
 // TestClient_CreateUser_Conflict_ReturnsErrUserAlreadyExists proves the race

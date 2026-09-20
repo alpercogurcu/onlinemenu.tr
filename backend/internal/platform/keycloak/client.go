@@ -316,10 +316,12 @@ func (c *Client) CreateUser(ctx context.Context, req CreateUserRequest) (User, e
 		return User{}, ErrNotConfigured
 	}
 
+	firstName, lastName := splitFullName(req.FullName)
 	body := keycloakUserRepresentation{
 		Username:      req.Email,
 		Email:         req.Email,
-		FirstName:     req.FullName,
+		FirstName:     firstName,
+		LastName:      lastName,
 		Enabled:       true,
 		EmailVerified: false,
 	}
@@ -338,6 +340,25 @@ func (c *Client) CreateUser(ctx context.Context, req CreateUserRequest) (User, e
 		return User{}, fmt.Errorf("keycloak: create user: %w", err)
 	}
 	return User{ID: id, Username: req.Email, Email: req.Email, Enabled: true}, nil
+}
+
+// missingNamePart fills a name half the realm demands but the caller did not
+// supply: the realm's user profile makes both firstName and lastName mandatory,
+// and an account missing either stays "not fully set up" and cannot sign in.
+const missingNamePart = "-"
+
+// splitFullName splits at the LAST space so given names stay together and the
+// final word is the surname ("Ahmet Can Yılmaz" → "Ahmet Can" / "Yılmaz"),
+// matching deploy/scripts/keycloak-harden.sh.
+func splitFullName(fullName string) (first, last string) {
+	words := strings.Fields(fullName)
+	switch len(words) {
+	case 0:
+		return missingNamePart, missingNamePart
+	case 1:
+		return words[0], missingNamePart
+	}
+	return strings.Join(words[:len(words)-1], " "), words[len(words)-1]
 }
 
 // TriggerPasswordSetup implements AdminAPI.

@@ -13,6 +13,7 @@
 --     -v dry_run=1                       `# 1 (default) = ROLLBACK at the end, 0 = COMMIT` \
 --     -v rollback=0                      `# 1 = undo mode: delete only rows this import created` \
 --     -v deactivate_demo=0               `# 1 = set the 3 seed demo products (Adana Kebap/Ayran/Lahmacun) inactive` \
+--     -v menu_only=0                     `# 1 = ONLY the "Ana Menü" step below; no payload needed, branches/products/prices untouched` \
 --     -f deploy/scripts/import-from-b2b.sql
 --   (or pass the document directly: -v payload="$(cat b2b-export.json)")
 --
@@ -27,8 +28,14 @@
 --                    price_amount only; is_available is never overwritten (owner may close a product later).
 -- Branch rules (owner decision 2026-09-20): ADA/IZM/KRK → ownership_type=franchise; SRD → sube; the
 -- manufacturing branch is renamed 'İmalat Merkezi (Serdivan)' (operation_type=imalat, ownership sube).
+--   menus            "Ana Menü" (tenant-wide, active) with id = uuid_v5(tenant_id, 'b2b:menu:ana-menu'), ON CONFLICT
+--                    (id) DO NOTHING. Guest QR menu (storefront) reads ONLY menu_items — no menu, no QR menu.
+--   menu_items       every ACTIVE tenant product, no price_override (tenant price; a branch override still wins
+--                    at read time), ON CONFLICT (menu_id, product_id) DO NOTHING — a re-run adds newly imported
+--                    products but never re-activates an item the owner hid. Other menus (e.g. an inactive
+--                    "PRODTEST Menü") are never touched; another menu NAMED "Ana Menü" aborts the run.
 -- Undo (-v rollback=1): deletes exactly the rows whose ids are the deterministic uuid_v5 ids
--- (overrides, products, new categories, new branches + their settings). The adopted placeholder
+-- (menu, overrides, products, new categories, new branches + their settings). The adopted placeholder
 -- branch is NOT renamed back. Only valid before the first real sale — once orders reference the
 -- products/branches the FK errors abort the undo (fail-closed); deactivate instead.
 -- NOTE: rows are written directly, so no catalog.branch_override.changed.v1 outbox event is emitted
@@ -65,9 +72,17 @@
 \else
   \set deactivate_demo 0
 \endif
+\if :{?menu_only}
+\else
+  \set menu_only 0
+\endif
 \if :{?payload}
 \else
-  \set payload `cat "$B2B_JSON"`
+  \if :menu_only
+    \set payload '{"branches":[],"products":[],"branch_prices":[]}'
+  \else
+    \set payload `cat "$B2B_JSON"`
+  \endif
 \endif
 
 BEGIN;
@@ -77,6 +92,7 @@ SELECT t.id                          AS tenant_id,
        :'existing_branch_code'::text AS existing_code,
        (:'include_manufacturing')::int AS incl_mfg,
        (:'deactivate_demo')::int AS deact_demo,
+       (:'menu_only')::int AS menu_only,
        :'payload'::jsonb             AS doc
 FROM tenants t
 WHERE t.slug = :'tenant_slug';
@@ -89,7 +105,7 @@ BEGIN
     IF to_regclass('public.branch_product_overrides') IS NULL THEN
         RAISE EXCEPTION 'import: branch_product_overrides yok — DATA-009 migration önce koşulmalı';
     END IF;
-    IF jsonb_array_length((SELECT doc->'products' FROM imp_in)) = 0 THEN
+    IF (SELECT menu_only FROM imp_in) = 0 AND jsonb_array_length((SELECT doc->'products' FROM imp_in)) = 0 THEN
         RAISE EXCEPTION 'import: payload içinde ürün yok (b2b-export.json boş/bozuk?)';
     END IF;
     IF EXISTS (
@@ -165,6 +181,8 @@ SELECT (p->>'b2b_id')::uuid AS b2b_id,
        uuid_generate_v5(i.tenant_id, 'b2b:product:' || (p->>'b2b_id')) AS om_id
 FROM imp_in i, jsonb_array_elements(i.doc->'products') p;
 
+\if :menu_only
+\else
 \if :rollback
   DELETE FROM branch_product_overrides
    WHERE product_id IN (SELECT om_id FROM imp_product)
@@ -267,6 +285,41 @@ ON CONFLICT (tenant_id, branch_id, product_id) DO UPDATE
     WHERE branch_product_overrides.price_amount IS DISTINCT FROM EXCLUDED.price_amount;
 
 \endif
+\endif
+
+-- ---------------------------------------------------------------------------------------------
+-- "Ana Menü": the guest QR menu (storefront_menu_repo.go, visible_items CTE) starts FROM menu_items,
+-- so a tenant without a menu serves {"categories":[]} even though its catalog is full. Tenant-wide
+-- (branch_id NULL) so every branch resolves it; per-branch prices come from branch_product_overrides
+-- at read time (override > menu price_override > tenant price), hence price_override stays NULL.
+-- ---------------------------------------------------------------------------------------------
+\if :rollback
+  DELETE FROM menus
+   WHERE id IN (SELECT uuid_generate_v5(tenant_id, 'b2b:menu:ana-menu') FROM imp_in);
+\else
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM menus m, imp_in i
+        WHERE m.tenant_id = i.tenant_id AND lower(m.name) = 'ana menü'
+          AND m.id <> uuid_generate_v5(i.tenant_id, 'b2b:menu:ana-menu')
+    ) THEN
+        RAISE EXCEPTION 'import: OM''de import dışı "Ana Menü" var — çift menü oluşmasın diye durduruldu';
+    END IF;
+END
+$$;
+
+INSERT INTO menus (id, tenant_id, branch_id, name, is_active, sort_order)
+SELECT uuid_generate_v5(i.tenant_id, 'b2b:menu:ana-menu'), i.tenant_id, NULL, 'Ana Menü', TRUE, 0
+FROM imp_in i
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO menu_items (menu_id, product_id, tenant_id, price_override, is_active, sort_order)
+SELECT uuid_generate_v5(i.tenant_id, 'b2b:menu:ana-menu'), p.id, i.tenant_id, NULL, TRUE, 0
+FROM products p, imp_in i
+WHERE p.tenant_id = i.tenant_id AND p.is_active
+ON CONFLICT (menu_id, product_id) DO NOTHING;
+\endif
 
 -- ---------------------------------------------------------------------------------------------
 -- Proof of what this run touched
@@ -285,7 +338,16 @@ SELECT (SELECT count(*) FROM imp_branch)  AS branches,
            AND branch_id IN (SELECT om_id FROM imp_branch)) AS overrides,
        (SELECT count(*) FROM products x, imp_in i WHERE x.tenant_id = i.tenant_id AND x.is_active) AS active_products,
        (SELECT count(*) FROM products x, imp_in i WHERE x.tenant_id = i.tenant_id AND NOT x.is_active) AS inactive_products,
-       (SELECT count(*) FROM branch_settings s, imp_in i WHERE s.tenant_id = i.tenant_id) AS branch_settings;
+       (SELECT count(*) FROM branch_settings s, imp_in i WHERE s.tenant_id = i.tenant_id) AS branch_settings,
+       (SELECT count(*) FROM menus m, imp_in i
+         WHERE m.id = uuid_generate_v5(i.tenant_id, 'b2b:menu:ana-menu') AND m.is_active) AS ana_menu,
+       (SELECT count(*) FROM menu_items mi, imp_in i
+         WHERE mi.menu_id = uuid_generate_v5(i.tenant_id, 'b2b:menu:ana-menu')) AS ana_menu_items,
+       (SELECT count(*) FROM products x, imp_in i
+         WHERE x.tenant_id = i.tenant_id AND x.is_active
+           AND NOT EXISTS (SELECT 1 FROM menu_items mi
+                            WHERE mi.product_id = x.id
+                              AND mi.menu_id = uuid_generate_v5(i.tenant_id, 'b2b:menu:ana-menu'))) AS active_products_not_in_menu;
 
 \if :dry_run
   ROLLBACK;

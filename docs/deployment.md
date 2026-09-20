@@ -571,6 +571,9 @@ menüsüz çözülür" satırı yanlıştır — şube fiyat override'ı menüy�
 yalnız menüdeki fiyatı değiştiriyor. Kabul testi (e) bunu kanıtlayabilmek için
 geçici bir menü kurup sonunda pasifleştirir. **Karar gerekiyor:** pilot için
 kalıcı bir tenant-geneli menü açılmalı, yoksa QR siparişi hiç çalışmaz.
+**Durum (2026-09-20): ÇÖZÜLDÜ.** Karar: tenant geneli "Ana Menü" + tüm aktif ürünler.
+`import-from-b2b.sql` menü adımını içerir (`menu_only=1`); prod'da uygulandı (1 menü,
+18 kalem); İzmit QR'ı 490 TL, Serdivan 470 TL. Ayrıntı: `docs/b2b-import-plan.md` §10.1.
 
 **B2 — Personel daveti Keycloak'ta `lastName` yazmıyor; hesap "not fully set up" kalıyor.**
 `backend/internal/platform/keycloak/client.go:322` `FirstName: req.FullName`
@@ -583,6 +586,11 @@ ile reddediliyor, tarayıcı girişinde ise kullanıcı panele varmadan önce
 test için `lastName` elle dolduruldu. Öneri: ad/soyadı `full_name`'den ayırın
 (`seed`/`keycloak-harden.sh` zaten `rsplit(" ", 1)` yapıyor) ya da realm'de
 `lastName` zorunluluğunu kaldırın.
+**Durum (2026-09-20): kod düzeltildi.** `platform/keycloak` `CreateUser` artık `full_name`'i
+son boşluktan böler (`keycloak-harden.sh` ile aynı: "Ahmet Can Yılmaz" → ad "Ahmet Can",
+soyad "Yılmaz"); tek kelimeli/boş ad için realm kuralını karşılamak üzere eksik yarı `-`
+yazılır. Test: `client_test.go` `TestClient_CreateUser_SplitsFullNameIntoFirstAndLastName`.
+Prod'a deploy'a kadar yeni davetler etkilenir.
 
 **B3 — Katalog listesinde `branch_id` opsiyonel; şube kapsamlı kullanıcıya tenant fiyatı dönüyor.**
 `backend/internal/modules/catalog/http/branch_override_handler.go:145-154`:
@@ -594,6 +602,10 @@ fiyatlandırdığı için yanlış tahsilat oluşmuyor (422 `price_mismatch`), a
 parametreyi unutan bir POS/istemci ekranda yanlış fiyat gösterir ve kasiyer
 siparişi geçiremez. Öneri: şube kapsamlı principal için varsayılanı kendi
 şubesi yapmak.
+**Durum (2026-09-20): kod düzeltildi.** `catalog/http` `branchIDFromQuery`: `branch_id`
+yoksa OPA scope'u `tenant` olmayan (kasiyer/garson/mutfak/…) staff principal için
+varsayılan kendi şubesi; zincir yöneticisi ve şubesiz principal eski davranışta
+(tenant fiyatı). Test: `branch_default_test.go`.
 
 **B4 — Ters proxy hız sınırı tek IP başına 10 r/s ve 429 değil 503 dönüyor.**
 Direktif repoda: `deploy/nginx/diverserver.conf:152`

@@ -534,3 +534,53 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// TestSeedPermissions_WaiterGrantsAreAllEnforced closes the hole the registry
+// leaves open for widely-shared pairs. The registry asserts ONE holder per pair
+// (usually cashier), so a role that inherits the same seed row through a
+// different rego rule set could hold a dead grant unnoticed — exactly what
+// identity/000017 warned about for the waiter. Here every pair the waiter is
+// actually seeded with must resolve to an action OPA allows for the waiter.
+func TestSeedPermissions_WaiterGrantsAreAllEnforced(t *testing.T) {
+	// Registry CheckAction is per pair, not per role; for the pairs below it is
+	// the same action the waiter would use, except where noted.
+	waiterActions := map[permissionPair][]string{
+		{"tables", "read"}:   {"pos.table.read"},
+		{"checks", "read"}:   {"pos.check.read"},
+		{"checks", "create"}: {"pos.check.open"},
+		{"orders", "read"}:   {"pos.order.read"},
+		{"orders", "create"}: {"pos.order.place"},
+		{"catalog", "read"}: {
+			"catalog.category.read", "catalog.product.read", "catalog.modifier_group.read",
+			"catalog.modifier.read", "catalog.menu.read", "catalog.menu_item.read",
+		},
+	}
+
+	seeded := map[permissionPair]bool{}
+	for _, row := range parseSeedRolePermissions(t) {
+		if row.RoleKey == "waiter" {
+			seeded[permissionPair{Resource: row.Resource, Action: row.Action}] = true
+		}
+	}
+	require.NotEmpty(t, seeded, "waiter has no seeded role_permissions")
+
+	engine := newTestEngine(t)
+	principal := Principal{
+		PersonID: uuid.New(), Ctx: ContextStaff, TenantID: uuid.New(), BranchID: uuid.New(),
+		RoleIDs: []uuid.UUID{uuid.MustParse(reverseRoleUUID("waiter"))},
+	}
+
+	for pair := range seeded {
+		actions, ok := waiterActions[pair]
+		require.Truef(t, ok, "waiter is seeded with %s but this test has no action mapping for it — "+
+			"classify the new grant (and make sure authz.rego lets the waiter use it)", pair)
+		for _, action := range actions {
+			decision, err := engine.Decide(context.Background(), action, principal)
+			require.NoError(t, err)
+			require.Truef(t, decision.Allow, "waiter is seeded with %s but OPA denies %s — dead grant", pair, action)
+		}
+	}
+	for pair := range waiterActions {
+		require.Truef(t, seeded[pair], "expected waiter to hold %s per the order-taking decision (identity/000019)", pair)
+	}
+}

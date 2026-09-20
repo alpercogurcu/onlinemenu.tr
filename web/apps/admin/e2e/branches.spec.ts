@@ -565,7 +565,10 @@ test.describe("çoklu şube", () => {
     expect(done.status).toBe("closed")
     expect(await activeSession(manager, branchB)).toBeNull()
 
-    // Waiter holds no payment permission on their own branch either.
+    // Waiter takes orders on their own branch, but holds no payment permission.
+    const waiterCheck = await openCheck(waiterB, branchB, `E2E-W-${RUN}`)
+    liveChecks.push(waiterCheck)
+    await placeOrderOk(waiterB, branchB, waiterCheck, PRODUCTS.ayran, `e2e-${RUN}-b1-waiter-order`)
     await expectStatus(
       await waiterB.post("/api/v1/payments", saleBody(branchB, checkId, "terminal", PRODUCTS.ayran), `e2e-${RUN}-b1-waiter-pay`),
       403,
@@ -709,6 +712,8 @@ test.describe("çoklu şube", () => {
     ]
     // Kitchen and waiter hold fewer grants: what they are refused must not
     // carry a cost key in the refusal either, and what they may read must be 200.
+    // The waiter takes orders, so it reads the catalog, adisyons and orders of
+    // its own branch; it holds no payment permission (settlement stays 403).
     const kitchen = [
       { path: "/api/v1/catalog/products", ok: true },
       { path: `/api/v1/catalog/products/${PRODUCTS.adana.id}`, ok: true },
@@ -721,9 +726,14 @@ test.describe("çoklu şube", () => {
       { path: `/api/v1/pos/tables?branch_id=${branchB}`, ok: true },
       { path: `/api/v1/pos/zones?branch_id=${branchB}`, ok: true },
       { path: tenantBranchesPath(tenantId), ok: true },
-      { path: "/api/v1/catalog/products", ok: false },
-      { path: `/api/v1/catalog/products/${PRODUCTS.adana.id}`, ok: false },
-      { path: category, ok: false },
+      { path: "/api/v1/catalog/products", ok: true },
+      { path: `/api/v1/catalog/products/${PRODUCTS.adana.id}`, ok: true },
+      { path: category, ok: true },
+      { path: `/api/v1/pos/checks?branch_id=${branchB}`, ok: true },
+      { path: `/api/v1/pos/checks/${checkId}`, ok: true },
+      { path: `/api/v1/pos/checks/${checkId}/orders`, ok: true },
+      { path: `/api/v1/pos/orders/${orderId}`, ok: true },
+      { path: `/api/v1/payments/checks/${checkId}/settlement`, ok: false },
     ]
 
     const sweep = async (api: Api, who: string, paths: { path: string; ok: boolean }[]) => {
@@ -790,6 +800,11 @@ test.describe("çoklu şube", () => {
     // machine-readable code (the request names B, the check belongs to A).
     await expectStatus(await cashierB.post("/api/v1/pos/checks", { branch_id: BRANCH_A, table_label: `E2E-evil-${RUN}`, pax: 1 }), 403)
     await expectStatus(await placeOrder(cashierB, BRANCH_A, victimCheck, PRODUCTS.ayran, `e2e-${RUN}-v-evil-a`), 403)
+    // The waiter's new order-taking grant must stay inside its own branch too.
+    await expectStatus(await waiterB.post("/api/v1/pos/checks", { branch_id: BRANCH_A, table_label: `E2E-evil-w-${RUN}`, pax: 1 }), 403)
+    await expectStatus(await placeOrder(waiterB, BRANCH_A, victimCheck, PRODUCTS.ayran, `e2e-${RUN}-v-evil-wa`), 403)
+    await expectRefused(await waiterB.get(`/api/v1/pos/checks/${victimCheck}`))
+    await expectRefused(await waiterB.get(`/api/v1/pos/orders/${victimOrder}`))
     const mismatch = await placeOrder(cashierB, branchB, victimCheck, PRODUCTS.ayran, `e2e-${RUN}-v-evil-b`)
     await expectStatus(mismatch, 409)
     expect(await mismatch.json()).toMatchObject({ code: "check_branch_mismatch" })

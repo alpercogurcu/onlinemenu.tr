@@ -127,13 +127,28 @@ test.describe("(d) masa ve adisyon işlemleri (İzmit)", () => {
     expect(foreign.status()).toBeGreaterThanOrEqual(400)
   })
 
-  test(`${TAG}: garson masa planını okur ama adisyon açamaz`, async () => {
+  test(`${TAG}: garson adisyon açıp sipariş alır; kapatma, iptal, ret ve ödeme yetkisi yok`, async () => {
     const waiter = await principal(shared, ACCOUNTS.waiterIzmit())
-    // Garson rolünün tek yetkisi pos.table.read (identity/000017).
+    // Garson sipariş alır: pos.table.read + check açma/okuma + sipariş
+    // verme/okuma + katalog okuma (identity/000019, authz.rego pos_waiter_actions).
     await expectStatus(await waiter.api.get(`/api/v1/pos/tables?branch_id=${branchId}`), 200)
-    await expectStatus(
-      await waiter.api.post("/api/v1/pos/checks", { branch_id: branchId, table_label: `${RUN}-d-garson`, pax: 1 }),
-      403,
-    )
+
+    const free = (await allTables(cashier.api, branchId)).find((t) => t.status === "empty")
+    expect(free, "İzmit'te en az bir boş masa olmalı").toBeTruthy()
+    touchedTables.push((free as { id: string }).id)
+
+    const check = await openCheck(waiter.api, branchId, `${RUN}-d-garson`, (free as { id: string }).id)
+    opened.push(check.id)
+    const order = await placeOrderOk(waiter.api, branchId, check.id, [line(product)])
+    await expectStatus(await waiter.api.get(`/api/v1/pos/orders/${order.id}`), 200)
+    await expectStatus(await waiter.api.get(`/api/v1/pos/checks/${check.id}`), 200)
+
+    // Sınır: kabul/ret/iptal kasiyerde, kapatma ve ödeme para hareketi.
+    await expectStatus(await waiter.api.postNew(`/api/v1/pos/orders/${order.id}/accept`, {}), 403)
+    await expectStatus(await waiter.api.postNew(`/api/v1/pos/orders/${order.id}/reject`, { reason: "garson" }), 403)
+    await expectStatus(await waiter.api.postNew(`/api/v1/pos/orders/${order.id}/cancel`, {}), 403)
+    await expectStatus(await waiter.api.postNew(`/api/v1/pos/checks/${check.id}/close`, {}), 403)
+    await expectStatus(await waiter.api.postNew(`/api/v1/pos/checks/${check.id}/cancel`, {}), 403)
+    await expectStatus(await waiter.api.postNew("/api/v1/payments", {}), 403)
   })
 })

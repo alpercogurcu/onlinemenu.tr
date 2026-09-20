@@ -679,6 +679,14 @@ girmesi beklenecekse rego (`catalog_read_actions`'a `waiter` eklemek) ve seed
 (`catalog:read` izni) **birlikte** güncellenmeli; yalnız birini değiştirmek
 ADR-SEC-005'in uyardığı "ölü grant" durumunu yaratır. Kabul paketi mevcut
 davranışı sabitliyor (`a-branch-pricing.spec.ts` "garson katalog okuyamaz").
+**Durum (2026-09-20): kod hazır, prod deploy'u bekliyor.** Ürün kararı: garson sipariş
+alır. `authz.rego`: `catalog_read_actions`'a `waiter` + yeni `pos_waiter_actions`
+(`pos.check.read/open`, `pos.order.read/place`); seed: `identity/000019_waiter_order_permissions`
+(`checks:read+create`, `orders:read+create`, `catalog:read`; mevcut tenant klonlarına backfill).
+Garson HÂLÂ yapamaz: kabul/ret/iptal/advance, adisyon kapatma/iptal/taşıma/birleştirme,
+ödeme, kasa, rapor, QR, katalog yazma. Kabul paketindeki iki test (`a-branch-pricing`
+garson katalog, `d-table-ops` garson adisyon) yeni davranışa çevrildi — prod'a
+migration + rego deploy edildikten sonra koşulmalı.
 
 ### 12.7 Bu turda prod'a eklenenler ve geri alma
 

@@ -318,29 +318,45 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
     }
   })
 
-  test("garson kabul ve ret yetkisine sahip değil", async ({ request }) => {
+  test("garson adisyon açıp sipariş alır; kabul, ret, iptal, kapatma ve ödeme yetkisi yok", async ({ request }) => {
     const label = `E2E-GRS-${Date.now().toString(36)}`
     const manager = await headersFor(request, USERS.manager)
     const waiter = await headersFor(request, USERS.waiter)
-    const checkId = await openCheck(request, manager, label)
+    const checkId = await openCheck(request, waiter, label)
 
     try {
-      const orderId = await placeOrder(request, manager, checkId, [1])
+      const orderId = await placeOrder(request, waiter, checkId, [1])
 
+      // What the waiter placed, it can read back.
+      expect((await getOrder(request, waiter, orderId)).status).toBe("pending")
+      expect(await listCheckOrders(request, waiter, checkId)).toHaveLength(1)
+      expect((await getCheck(request, waiter, checkId)).status).toBe("open")
+
+      // Judging or undoing an order stays with the counter.
       const reject = await request.post(`${POS}/orders/${orderId}/reject`, {
         headers: waiter,
         data: { reason: "garson reddi" },
       })
       expect(reject.status()).toBe(403)
+      expect((await request.post(`${POS}/orders/${orderId}/accept`, { headers: waiter })).status()).toBe(403)
+      expect((await cancelOrder(request, waiter, orderId)).status()).toBe(403)
+      expect((await advance(request, waiter, orderId, "preparing")).status()).toBe(403)
 
-      const accept = await request.post(`${POS}/orders/${orderId}/accept`, { headers: waiter })
-      expect(accept.status()).toBe(403)
-
-      // The waiter holds no pos.order.* grant at all, not even read.
-      const read = await request.get(`${POS}/orders/${orderId}`, { headers: waiter })
-      expect(read.status()).toBe(403)
+      // Neither may it settle or rewrite the bill, or take money.
+      const close = await request.post(`${POS}/checks/${checkId}/close`, {
+        headers: { ...waiter, "Idempotency-Key": `e2e-orders-${randomUUID()}` },
+        data: {},
+      })
+      expect(close.status()).toBe(403)
+      expect((await request.post(`${POS}/checks/${checkId}/cancel`, { headers: waiter, data: {} })).status()).toBe(403)
+      const pay = await request.post(`${API_URL}/api/v1/payments`, {
+        headers: { ...waiter, "Idempotency-Key": `e2e-orders-${randomUUID()}` },
+        data: {},
+      })
+      expect(pay.status()).toBe(403)
 
       expect((await getOrder(request, manager, orderId)).status).toBe("pending")
+      expect((await getCheck(request, manager, checkId)).status).toBe("open")
     } finally {
       await cleanup(request, manager, checkId)
     }

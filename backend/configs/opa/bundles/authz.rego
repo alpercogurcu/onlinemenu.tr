@@ -38,13 +38,8 @@ system_roles := {
 	# seeds the role, with no further rego change required. Flagged as a
 	# required identity-module follow-up in the sprint report.
 	"warehouse": "00000001-0000-0000-0000-000000000007",
-	# "waiter" (garson) is forward-declared for the same reason as
-	# "warehouse" above (ADR-DATA-006 masa planı: pos.table.read must include
-	# waiter per the sprint spec) but is likewise NOT yet seeded in
-	# identity/000006_seed_system_roles.up.sql — db-schema.md's BRANCH_USERS
-	# role enum already lists it, seeding it is an identity-module follow-up
-	# outside this task's file scope. Inert until seeded, takes effect with no
-	# further rego change once it is.
+	# "waiter" (garson): seeded by identity/000017 (template + tenant clones),
+	# order-taking grants by identity/000019.
 	"waiter": "00000001-0000-0000-0000-000000000008",
 }
 
@@ -92,9 +87,11 @@ catalog_read_actions := {
 	"catalog.menu_item.read",
 }
 
+# waiter reads the catalog because taking an order means browsing products,
+# variants and their prices; it stays READ-ONLY (every write is manager-only).
 allow if {
 	input.action in catalog_read_actions
-	any_role({"cashier", "shift_manager", "kitchen", "bar"})
+	any_role({"cashier", "shift_manager", "waiter", "kitchen", "bar"})
 }
 
 # -- Catalog: branch product overrides (ADR-DATA-009). "catalog.branch_override.manage"
@@ -225,6 +222,25 @@ allow if {
 	any_role({"cashier", "shift_manager"})
 }
 
+# -- Waiter: takes orders at the table (product decision "garson akıcı sipariş
+# alabilsin"). Open an adisyon, place orders on it, read them back. Everything
+# that moves money (close, payment, cash drawer), rewrites the bill (cancel,
+# transfer, merge, move_items) or judges an order (accept/reject/advance) stays
+# with the counter roles above — a waiter is deliberately NOT in
+# pos_counter_actions. Seed counterpart: identity/000019 grants waiter
+# checks:read+create, orders:read+create, catalog:read; keep both in step.
+pos_waiter_actions := {
+	"pos.check.read",
+	"pos.check.open",
+	"pos.order.read",
+	"pos.order.place",
+}
+
+allow if {
+	input.action in pos_waiter_actions
+	has_role("waiter")
+}
+
 # -- Kitchen/bar: read tickets and advance them through preparing/ready; they
 # never open/close checks or accept/reject intake — that stays with the
 # counter roles above (mirrors role_permissions seed: orders read+update only).
@@ -317,11 +333,9 @@ allow if {
 # printed secret and stays with management.
 #
 # "waiter" is deliberately absent even though it appears in
-# pos_table_read_actions: the role is forward-declared in system_roles but NOT
-# seeded by identity/000006, so it cannot hold a role_permissions row, and
-# permission_wiring_test.go asserts CheckRole against roles the seed migrations
-# actually grant. Listing it here would be inert-but-misleading — it would read
-# as a granted permission that no principal can hold.
+# pos_table_read_actions: taking orders does not need the QR inventory, and a
+# retired-vs-live QR code is counter/management information. Widening it is a
+# product decision, not an oversight.
 storefront_qr_read_actions := {"storefront.qr.read"}
 
 allow if {

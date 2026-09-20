@@ -31,7 +31,7 @@ test.describe("rol bazlı ekranlar", () => {
     expect(new URL(page.url()).pathname).toBe("/catalog/products/new")
   })
 
-  test("garson masaları görür, QR ve katalog yetkisi yok", async ({ page }) => {
+  test("garson masaları ve kataloğu görür; QR ve ürün ekleme yetkisi yok", async ({ page }) => {
     await loginAs(page, USERS.waiter)
     await gotoSpa(page, "/pos/tables")
     await expect(page.getByText("Masa 1", { exact: true })).toBeVisible()
@@ -41,8 +41,19 @@ test.describe("rol bazlı ekranlar", () => {
     await expect(qrButtons.first()).toBeDisabled()
     await expect(page.getByRole("button", { name: /QR/i, disabled: false })).toHaveCount(0)
 
+    // Taking orders needs the catalog: the list loads (read-only grant)…
     await gotoSpa(page, "/catalog/products")
-    await expect(page.getByText("Yüklenemedi.")).toBeVisible()
+    await expect(page.getByRole("table")).toBeVisible()
+    await expect(page.getByText("Yüklenemedi.")).toHaveCount(0)
+
+    // …but every write is manager-only: saving a new product is refused.
+    await page.getByRole("button", { name: "Ürün ekle" }).click()
+    await page.waitForURL((url) => url.pathname === "/catalog/products/new")
+    await page.locator("#product-name").fill("e2e-garson-urun")
+    await page.locator("#product-price").fill("10")
+    await page.getByRole("button", { name: "Kaydet" }).click()
+    await expect(errorToast(page)).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe("/catalog/products/new")
   })
 
   test("mutfak KDS'yi canlı görür, kullanıcı listesine erişemez", async ({ page }) => {

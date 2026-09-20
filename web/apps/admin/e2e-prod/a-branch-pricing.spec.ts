@@ -9,6 +9,7 @@ import {
   ACCOUNTS,
   type Api,
   RUN,
+  TAG,
   branchesBySlug,
   cleanupCheck,
   json,
@@ -84,17 +85,21 @@ test.describe("(a) şube fiyatı", () => {
     expect(managerDefault?.branch_price_overridden).toBe(false)
   })
 
-  test("garson katalog okuyamaz (OPA catalog_read_actions garsonu kapsamaz)", async ({ request }) => {
-    // Kayıt: `catalog_read_actions` yalnız cashier/shift_manager/kitchen/bar
-    // içerir (backend/configs/opa/bundles/authz.rego:86-98) ve garsonun tek
-    // izni `tables:read`'tir (migrations/identity/000017). İki katman da aynı
-    // yönde reddediyor; bu test davranışı sabitler, doğru olduğunu iddia etmez
-    // — garsonun menü okuması gerekiyorsa bu bir rego + seed kararıdır.
+  test("garson katalogu okur (varsayılan kendi şubesi) ama yazamaz", async ({ request }) => {
+    // Sipariş alan garson menüyü görmek zorundadır: catalog_read_actions'a waiter
+    // (authz.rego) ve garsona catalog:read seed'i (identity/000019) birlikte
+    // eklendi. Yazma yetkisi yine yalnız yöneticidedir.
     const waiter = await principal(request, ACCOUNTS.waiterSerdivan())
     for (const path of ["/api/v1/catalog/categories", "/api/v1/catalog/products", "/api/v1/catalog/menus"]) {
       const res = await waiter.api.get(path)
-      expect(res.status(), `${path} garsona kapalı olmalı`).toBe(403)
+      expect(res.status(), `${path} garsona açık olmalı`).toBe(200)
     }
+    // branch_id verilmeden de garsonun kendi şubesinin fiyatı gelir.
+    const smash = (await products(waiter.api)).find((p) => p.name === SMASH)
+    expect(smash?.price_amount).toBe(47_000)
+    // Yazma: ürün eklemek yönetici işidir.
+    const create = await waiter.api.post("/api/v1/catalog/products", { name: `${TAG}-garson-urun`, price_amount: 1000 })
+    expect(create.status()).toBe(403)
     // Kontrol grubu: masa planını okuyabiliyor.
     expect((await waiter.api.get(`/api/v1/pos/tables?branch_id=${waiter.ctx.branch_id}`)).status()).toBe(200)
   })

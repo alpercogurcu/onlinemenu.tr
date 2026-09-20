@@ -47,6 +47,7 @@ import (
 	"go.uber.org/goleak"
 	"go.uber.org/zap"
 
+	catalogpub "onlinemenu.tr/internal/modules/catalog/public"
 	paymentpub "onlinemenu.tr/internal/modules/payment/public"
 	"onlinemenu.tr/internal/modules/pos/domain"
 	"onlinemenu.tr/internal/modules/pos/repo"
@@ -311,7 +312,7 @@ func newTestEnvWithPool(t *testing.T, pool *db.Pool) *testEnv {
 
 	orderRepo := repo.NewOrderRepo()
 	checkRepo := repo.NewCheckRepo()
-	orders := service.NewOrderService(service.OrderParams{DB: pool, OrderRepo: orderRepo, CheckRepo: checkRepo, Logger: logger})
+	orders := service.NewOrderService(service.OrderParams{DB: pool, OrderRepo: orderRepo, CheckRepo: checkRepo, Pricer: wsPricer{}, Logger: logger})
 	checks := service.NewCheckService(service.CheckParams{DB: pool, CheckRepo: checkRepo, OrderRepo: orderRepo, SaleReader: zeroSaleReader{}, Logger: logger})
 
 	lc := &fakeLifecycle{}
@@ -468,7 +469,7 @@ func TestKitchenWS_Snapshot_Then_LiveOrderEvents(t *testing.T) {
 		CheckID:      &chk.ID,
 		OrderChannel: domain.OrderChannelDineIn,
 		Items: []domain.OrderItem{
-			{ProductID: uuid.New(), ProductName: "Adana", ProductCurrency: "TRY", Quantity: 2, UnitPriceAmount: 15000},
+			{ProductID: wsProduct("Adana", 15000), ProductName: "Adana", ProductCurrency: "TRY", Quantity: 2, UnitPriceAmount: 15000},
 		},
 	})
 	require.NoError(t, err)
@@ -557,7 +558,7 @@ func TestKitchenWS_Snapshot_IncludesReadyOrder(t *testing.T) {
 		CheckID:      &chk.ID,
 		OrderChannel: domain.OrderChannelDineIn,
 		Items: []domain.OrderItem{
-			{ProductID: uuid.New(), ProductName: "Lahmacun", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 8000},
+			{ProductID: wsProduct("Lahmacun", 8000), ProductName: "Lahmacun", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 8000},
 		},
 	})
 	require.NoError(t, err)
@@ -670,7 +671,7 @@ func TestKitchenWS_Snapshot_TableLabelsAreBatched(t *testing.T) {
 				CheckID:      &chk.ID,
 				OrderChannel: domain.OrderChannelDineIn,
 				Items: []domain.OrderItem{
-					{ProductID: uuid.New(), ProductName: "Pide", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 9000},
+					{ProductID: wsProduct("Pide", 9000), ProductName: "Pide", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 9000},
 				},
 			})
 			require.NoError(t, err)
@@ -793,4 +794,44 @@ func TestKitchenWS_HeartbeatTimeout_DropsConnection(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return env.hub.RoomSizeForTest(tenantID, branchID) == 0
 	}, 3*time.Second, 20*time.Millisecond, "an unresponsive connection must be dropped from its room after heartbeat timeout")
+}
+
+// ---------------------------------------------------------------------------
+// Catalog stand-in
+// ---------------------------------------------------------------------------
+
+// wsPricer answers OrderService's server-side price check (docs/pos-ux-spec.md
+// bulgu #14) for the products these tests register. The kitchen WS hub has
+// nothing to say about pricing; this exists so the orders it broadcasts can be
+// placed at all. The real pricer is covered by catalog/service's integration
+// tests and the admin e2e suite.
+type wsPricer struct{}
+
+func (wsPricer) PriceStaffCart(_ context.Context, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
+	out := make([]catalogpub.PricedLine, len(lines))
+	for i, l := range lines {
+		price, ok := wsTestPrices.Load(l.ProductID)
+		if !ok {
+			return nil, &catalogpub.ValidationError{Msg: "product is not orderable: " + l.ProductID.String()}
+		}
+		out[i] = catalogpub.PricedLine{
+			ProductID:       l.ProductID,
+			BasePriceAmount: price.(int64),
+			UnitPriceAmount: price.(int64),
+			Currency:        "TRY",
+			TaxRateBPS:      1000,
+			Quantity:        l.Quantity,
+		}
+	}
+	return out, nil
+}
+
+var wsTestPrices sync.Map
+
+// wsProduct registers a sellable product at the given unit price (kuruş).
+func wsProduct(name string, unitPrice int64) uuid.UUID {
+	id := uuid.New()
+	wsTestPrices.Store(id, unitPrice)
+	_ = name
+	return id
 }

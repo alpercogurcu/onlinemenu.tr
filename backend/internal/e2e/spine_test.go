@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"go.uber.org/goleak"
 	"go.uber.org/zap"
 
+	catalogpub "onlinemenu.tr/internal/modules/catalog/public"
 	paymentdomain "onlinemenu.tr/internal/modules/payment/domain"
 	paymentpub "onlinemenu.tr/internal/modules/payment/public"
 	paymentrepo "onlinemenu.tr/internal/modules/payment/repo"
@@ -42,7 +44,6 @@ var (
 	tenantID = uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001")
 	branchID = uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000001")
 	staffID  = uuid.MustParse("cccccccc-0000-0000-0000-000000000001")
-	prodID   = uuid.MustParse("dddddddd-0000-0000-0000-000000000001")
 )
 
 // staffPrincipal is a branch-scoped staff principal for branchID, used to
@@ -278,6 +279,7 @@ func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.Pa
 		OrderRepo: orderRepo,
 		CheckRepo: checkRepo,
 		TableRepo: posrepo.NewTableRepo(),
+		Pricer:    spinePricer{},
 		Logger:    log,
 	})
 
@@ -347,7 +349,7 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
 			{
-				ProductID:          prodID,
+				ProductID:          spineProduct(1500, 800),
 				ProductName:        "Adana Kebap",
 				ProductPriceAmount: 1500,
 				ProductCurrency:    "TRY",
@@ -356,7 +358,7 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 				UnitPriceAmount:    1500,
 			},
 			{
-				ProductID:          uuid.New(),
+				ProductID:          spineProduct(500, 800),
 				ProductName:        "Ayran",
 				ProductPriceAmount: 500,
 				ProductCurrency:    "TRY",
@@ -425,7 +427,7 @@ func TestPOSSpine_SettledCheckRejectsOrderAndPayment(t *testing.T) {
 			CheckID:      &checkID,
 			OrderChannel: posdomain.OrderChannelDineIn,
 			Items: []posdomain.OrderItem{
-				{ProductID: uuid.New(), ProductName: "Çay", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 500},
+				{ProductID: spineProduct(500, 800), ProductName: "Çay", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 500},
 			},
 		}
 	}
@@ -522,7 +524,7 @@ func TestPOSSpine_CloseWithInsufficientPayment(t *testing.T) {
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
 			{
-				ProductID:       prodID,
+				ProductID:       spineProduct(3000, 800),
 				ProductName:     "Lahmacun",
 				Quantity:        1,
 				UnitPriceAmount: 3000,
@@ -578,7 +580,7 @@ func TestPOSSpine_ClosePaysOnlyForActiveOrders(t *testing.T) {
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
 			{
-				ProductID:       prodID,
+				ProductID:       spineProduct(1500, 800),
 				ProductName:     "Ayran",
 				Quantity:        1,
 				UnitPriceAmount: 1500,
@@ -595,7 +597,7 @@ func TestPOSSpine_ClosePaysOnlyForActiveOrders(t *testing.T) {
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
 			{
-				ProductID:       uuid.New(),
+				ProductID:       spineProduct(3000, 800),
 				ProductName:     "Künefe",
 				Quantity:        1,
 				UnitPriceAmount: 3000,
@@ -650,7 +652,7 @@ func TestPOSSpine_CloseBlockedWhileFiscalPending(t *testing.T) {
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
 			{
-				ProductID:       prodID,
+				ProductID:       spineProduct(2500, 800),
 				ProductName:     "İskender",
 				Quantity:        1,
 				UnitPriceAmount: 2500,
@@ -719,4 +721,49 @@ func TestPOSSpine_IdempotentPayment(t *testing.T) {
 	total, err := paySvc.TotalPaidForCheck(ctx, tenantID, check.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5000), total)
+}
+
+// ---------------------------------------------------------------------------
+// Catalog stand-in for the server-side price check
+// ---------------------------------------------------------------------------
+
+// spinePricer answers OrderService's price check (docs/pos-ux-spec.md bulgu
+// #14) for the products these tests register. The spine's subject is the
+// check → order → payment → close chain, not the catalog; the real pricer is
+// covered by catalog/service's integration tests and the admin e2e suite.
+type spinePricer struct{}
+
+type spineProductRow struct {
+	price int64
+	tax   int
+}
+
+var spineProducts sync.Map
+
+// spineProduct registers a sellable product at a unit price (kuruş) and tax
+// rate, returning its id.
+func spineProduct(unitPrice int64, taxBPS int) uuid.UUID {
+	id := uuid.New()
+	spineProducts.Store(id, spineProductRow{price: unitPrice, tax: taxBPS})
+	return id
+}
+
+func (spinePricer) PriceStaffCart(_ context.Context, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
+	out := make([]catalogpub.PricedLine, len(lines))
+	for i, l := range lines {
+		row, ok := spineProducts.Load(l.ProductID)
+		if !ok {
+			return nil, &catalogpub.ValidationError{Msg: "product is not orderable: " + l.ProductID.String()}
+		}
+		p := row.(spineProductRow)
+		out[i] = catalogpub.PricedLine{
+			ProductID:       l.ProductID,
+			BasePriceAmount: p.price,
+			UnitPriceAmount: p.price,
+			Currency:        "TRY",
+			TaxRateBPS:      p.tax,
+			Quantity:        l.Quantity,
+		}
+	}
+	return out, nil
 }

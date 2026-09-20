@@ -119,6 +119,43 @@ type PricedLine struct {
 	Modifiers       []PricedModifier
 }
 
+// StaffCartLine is one line of a staff-placed (POS) order as submitted: what
+// was ordered and which options were chosen. Like CartLine it carries no
+// price — see StaffPricer.
+type StaffCartLine struct {
+	ProductID   uuid.UUID
+	Quantity    int
+	ModifierIDs []uuid.UUID
+}
+
+// StaffPricer re-derives what a staff-placed order line must cost, so the POS
+// cannot name its own price (docs/pos-ux-spec.md bulgu #14: until this
+// existed, pos/service.OrderService.Place copied the client's
+// unit_price_amount straight into the order, which made every POS terminal a
+// discount channel).
+//
+// It sits beside StorefrontMenuReader.PriceCart instead of reusing it because
+// the two answer different questions. PriceCart answers "what was this diner
+// shown", so a product outside the branch's active menu is not orderable at
+// all. A cashier sells from the product catalog itself: POS has always billed
+// products.price_amount (that is what the product list endpoint pos-desktop
+// reads returns), and making an active menu a precondition for every counter
+// sale would stop a tenant that has configured none from taking any order.
+// Aligning the two onto menu-resolved pricing is a product decision, not a
+// security fix, and is deliberately left out of this one.
+//
+// Modifier validation is NOT duplicated: both paths run the same rules (the
+// modifier must be attached to the product, may not repeat, may not exceed
+// its group's selection limit, may not drive the line negative) through one
+// shared implementation — those rules are the only server-side bound on how
+// far a client can move a line's price, and a second copy would drift.
+//
+// Returns exactly one PricedLine per input line, in input order, or a
+// *ValidationError; never a shortened slice, for the reason PriceCart gives.
+type StaffPricer interface {
+	PriceStaffCart(ctx context.Context, tenantID uuid.UUID, lines []StaffCartLine) ([]PricedLine, error)
+}
+
 // StorefrontMenuReader is the storefront module's only door into the catalog.
 //
 // Both methods resolve prices through one shared SQL predicate (see

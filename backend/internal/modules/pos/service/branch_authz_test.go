@@ -103,6 +103,7 @@ func newOrderService() *service.OrderService {
 		OrderRepo: repo.NewOrderRepo(),
 		CheckRepo: repo.NewCheckRepo(),
 		TableRepo: repo.NewTableRepo(),
+		Pricer:    staticPricer{},
 		Logger:    zap.NewNop(),
 	})
 }
@@ -198,7 +199,7 @@ func newTestOrder(t *testing.T, ctx context.Context, svc *service.OrderService, 
 		BranchID:     branchID,
 		OrderChannel: domain.OrderChannelTakeaway,
 		Items: []domain.OrderItem{
-			{ProductID: uuid.New(), ProductName: "Test Item", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 1000},
+			{ProductID: testProduct("Test Item", 1000), ProductName: "Test Item", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 1000},
 		},
 	})
 	require.NoError(t, err)
@@ -214,7 +215,7 @@ func TestOrderAuthz_Place(t *testing.T) {
 			BranchID:     branchID,
 			OrderChannel: domain.OrderChannelTakeaway,
 			Items: []domain.OrderItem{
-				{ProductID: uuid.New(), ProductName: "Test Item", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 1000},
+				{ProductID: testProduct("Test Item", 1000), ProductName: "Test Item", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 1000},
 			},
 		}
 	}

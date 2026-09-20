@@ -128,7 +128,8 @@
     "status": {
       "open": "Açık",
       "closed": "Kapalı",
-      "cancelled": "İptal"
+      "cancelled": "İptal",
+      "merged": "Birleştirildi"
     },
     "close": "Kapat",
     "cancel": "İptal",

@@ -179,19 +179,32 @@ allow if {
 # absence of a "warehouse" rule here is legible as an explicit choice, not
 # an oversight.
 
-# -- POS: check lifecycle (open/close/cancel) and order intake (place/accept/
-# reject) are counter-facing actions, owned by cashier/shift_manager (mirrors
-# role_permissions seed: checks/orders create+read+update for both).
+# -- POS: check lifecycle (open/close/cancel/transfer/merge) and order intake
+# (place/accept/reject/move_items) are counter-facing actions, owned by
+# cashier/shift_manager (mirrors role_permissions seed: checks/orders
+# create+read+update for both).
+#
+# transfer/merge/move_items (docs/pos-ux-spec.md §3c) deliberately add NO new
+# role_permissions rows: they are check-lifecycle transitions and order
+# mutations already covered by the seeded ('checks','update') and
+# ('orders','update') pairs, whose permission_wiring_test.go entries say so
+# verbatim ("seed 'update' covers the check lifecycle transitions"). Seeding
+# new pairs would only widen the vocabulary that guard has to classify
+# without changing who may do what — runtime enforcement is this policy, not
+# role_permissions (see auth.RequirePermission: it consults OPA only).
 pos_counter_actions := {
 	"pos.check.read",
 	"pos.check.open",
 	"pos.check.close",
 	"pos.check.cancel",
+	"pos.check.transfer",
+	"pos.check.merge",
 	"pos.order.read",
 	"pos.order.place",
 	"pos.order.accept",
 	"pos.order.reject",
 	"pos.order.advance",
+	"pos.order.move_items",
 }
 
 allow if {

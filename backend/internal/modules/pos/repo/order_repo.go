@@ -494,3 +494,184 @@ func scanOrder(s interface {
 	o.Status = domain.OrderStatus(status)
 	return o, nil
 }
+
+// ReassignToCheck re-points every order of sourceCheckID onto targetCheckID
+// and returns the ids it touched, so the caller can record one event per
+// moved order (docs/pos-ux-spec.md §3c birleştirme).
+//
+// It moves ALL of the source's orders, including rejected and cancelled ones:
+// the source check is about to become unreachable (status 'merged'), and
+// leaving its audit trail behind on a row nobody will look at again would
+// hide why a ticket was rejected. Their items still do not count towards the
+// target's bill — CheckRepo.GetTotal excludes domain.InactiveOrderStatuses
+// wherever the order hangs.
+//
+// branch_id is deliberately not rewritten: CheckService.Merge refuses a
+// cross-branch merge, so the two checks already share one.
+func (r *OrderRepo) ReassignToCheck(ctx context.Context, tx pgx.Tx, sourceCheckID, targetCheckID uuid.UUID) ([]uuid.UUID, error) {
+	const q = `
+		UPDATE orders SET check_id = $2, updated_at = NOW()
+		WHERE check_id = $1
+		RETURNING id`
+
+	rows, err := tx.Query(ctx, q, sourceCheckID, targetCheckID)
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: reassign to check: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("pos/repo/order: reassign to check scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pos/repo/order: reassign to check: %w", err)
+	}
+	return ids, nil
+}
+
+// ItemOwner answers "which order, which check and which order status does
+// this order_item currently belong to", plus what it is worth. It exists so
+// the move-items path can verify ownership and price the move in one query
+// instead of loading whole orders.
+type ItemOwner struct {
+	ItemID          uuid.UUID
+	OrderID         uuid.UUID
+	CheckID         *uuid.UUID
+	OrderStatus     domain.OrderStatus
+	Quantity        int
+	UnitPriceAmount int64
+}
+
+// ItemOwners resolves the given order_item ids to their owning order.
+//
+// Ids that do not exist, or that RLS hides, are simply absent from the
+// result: the caller compares the returned length against what it asked for
+// and reports which id was rejected, which is a better error than "not
+// found" for a batch request. The rows are locked FOR UPDATE OF oi so a
+// concurrent second move of the same line blocks rather than double-moving
+// it.
+func (r *OrderRepo) ItemOwners(ctx context.Context, tx pgx.Tx, itemIDs []uuid.UUID) ([]ItemOwner, error) {
+	if len(itemIDs) == 0 {
+		return nil, nil
+	}
+
+	const q = `
+		SELECT oi.id, oi.order_id, o.check_id, o.status, oi.quantity, oi.unit_price_amount
+		FROM order_items oi
+		JOIN orders o ON o.id = oi.order_id
+		WHERE oi.id = ANY($1::uuid[])
+		ORDER BY oi.id
+		FOR UPDATE OF oi`
+
+	rows, err := tx.Query(ctx, q, uuidStrings(itemIDs))
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: item owners: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ItemOwner
+	for rows.Next() {
+		var owner ItemOwner
+		var status string
+		if err := rows.Scan(&owner.ItemID, &owner.OrderID, &owner.CheckID, &status,
+			&owner.Quantity, &owner.UnitPriceAmount); err != nil {
+			return nil, fmt.Errorf("pos/repo/order: item owners scan: %w", err)
+		}
+		owner.OrderStatus = domain.OrderStatus(status)
+		out = append(out, owner)
+	}
+	return out, rows.Err()
+}
+
+// MoveItemsToOrder re-points order_items at another order and returns how
+// many rows it touched. The caller has already verified — under the row lock
+// ItemOwners takes — that every id belongs to the source check.
+func (r *OrderRepo) MoveItemsToOrder(ctx context.Context, tx pgx.Tx, itemIDs []uuid.UUID, targetOrderID uuid.UUID) (int64, error) {
+	if len(itemIDs) == 0 {
+		return 0, nil
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE order_items SET order_id = $2
+		WHERE id = ANY($1::uuid[])
+	`, uuidStrings(itemIDs), targetOrderID)
+	if err != nil {
+		return 0, fmt.Errorf("pos/repo/order: move items to order: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// EmptyOrderIDs reports which of the given orders have no items left, so the
+// caller can cancel the husks a move left behind.
+func (r *OrderRepo) EmptyOrderIDs(ctx context.Context, tx pgx.Tx, orderIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+
+	const q = `
+		SELECT o.id
+		FROM orders o
+		WHERE o.id = ANY($1::uuid[])
+		  AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id)`
+
+	rows, err := tx.Query(ctx, q, uuidStrings(orderIDs))
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: empty order ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("pos/repo/order: empty order ids scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CancelByIDs cancels the given orders, skipping any that are no longer live
+// for the kitchen (domain.KitchenActiveOrderStatuses), and returns the ids it
+// actually changed.
+//
+// The status filter is what keeps the order state machine honest: a
+// 'delivered' order emptied by a move must not be dragged backwards into
+// 'cancelled' (domain.TransitionOrderStatus forbids that edge), and an empty
+// order contributes 0 to the bill either way.
+func (r *OrderRepo) CancelByIDs(ctx context.Context, tx pgx.Tx, orderIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+
+	statuses := make([]string, len(domain.KitchenActiveOrderStatuses))
+	for i, s := range domain.KitchenActiveOrderStatuses {
+		statuses[i] = string(s)
+	}
+
+	const q = `
+		UPDATE orders SET status = 'cancelled', updated_at = NOW()
+		WHERE id = ANY($1::uuid[]) AND status = ANY($2)
+		RETURNING id`
+
+	rows, err := tx.Query(ctx, q, uuidStrings(orderIDs), statuses)
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: cancel by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("pos/repo/order: cancel by ids scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

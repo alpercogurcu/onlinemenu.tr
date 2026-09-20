@@ -49,7 +49,7 @@ func placeTestOrder(t *testing.T, ctx context.Context, orders *service.OrderServ
 		CheckID:      checkID,
 		OrderChannel: domain.OrderChannelDineIn,
 		Items: []domain.OrderItem{
-			{ProductID: uuid.New(), ProductName: "Lahmacun", ProductCurrency: "TRY", Quantity: 2, UnitPriceAmount: 15000},
+			{ProductID: testProduct("Lahmacun", 15000), ProductName: "Lahmacun", ProductCurrency: "TRY", Quantity: 2, UnitPriceAmount: 15000},
 		},
 	})
 	require.NoError(t, err)

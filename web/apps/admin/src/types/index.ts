@@ -96,7 +96,11 @@ export interface MenuItem {
 }
 
 // POS
-export type CheckStatus = "open" | "closed" | "cancelled"
+// "merged" is the source adisyon of a birleştirme (docs/pos-ux-spec.md §3c):
+// its orders were moved onto another check. It is deliberately NOT
+// "cancelled" — the day-end report counts cancellations, and every table
+// merge would otherwise read as a cancelled sale.
+export type CheckStatus = "open" | "closed" | "cancelled" | "merged"
 export type OrderStatus =
   | "pending"
   | "accepted"

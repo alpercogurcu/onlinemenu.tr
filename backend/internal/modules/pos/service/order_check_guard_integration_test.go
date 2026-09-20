@@ -89,7 +89,7 @@ func TestOrderService_Place_ChecksCheckIsWritable(t *testing.T) {
 				CheckID:      tt.checkID,
 				OrderChannel: domain.OrderChannelDineIn,
 				Items: []domain.OrderItem{
-					{ProductID: uuid.New(), ProductName: "Çay", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 1000},
+					{ProductID: testProduct("Çay", 1000), ProductName: "Çay", ProductCurrency: "TRY", Quantity: 1, UnitPriceAmount: 1000},
 				},
 			})
 			if tt.wantErr == nil {

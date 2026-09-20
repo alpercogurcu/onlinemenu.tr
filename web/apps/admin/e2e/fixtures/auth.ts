@@ -15,6 +15,20 @@ export const USERS = {
 export const BRANCH_ID = "bbbbbbbb-0000-0000-0000-000000000001"
 export const PRODUCT_ID = "dddddddd-0000-0000-0000-000000000201"
 
+// POST /pos/orders re-prices every line against the catalog and refuses a
+// mismatch with 422 price_mismatch (docs/pos-ux-spec.md bulgu #14), so a spec
+// can no longer invent an amount — it picks a seeded product and uses ITS
+// price. Prices are kuruş and mirror backend/deploy/dev-seed.sql.
+export const PRODUCTS = {
+  adana: { id: "dddddddd-0000-0000-0000-000000000201", name: "Adana Kebap", price: 32_000 },
+  tavuk: { id: "dddddddd-0000-0000-0000-000000000202", name: "Tavuk Şiş", price: 28_000 },
+  lahmacun: { id: "dddddddd-0000-0000-0000-000000000203", name: "Lahmacun", price: 9_000 },
+  corba: { id: "dddddddd-0000-0000-0000-000000000204", name: "Mercimek Çorba", price: 7_500 },
+  ayran: { id: "dddddddd-0000-0000-0000-000000000205", name: "Ayran", price: 4_000 },
+} as const
+
+export type SeededProduct = (typeof PRODUCTS)[keyof typeof PRODUCTS]
+
 export async function loginAs(page: Page, email: string) {
   await page.goto("/login")
   await page.getByLabel("E-posta").fill(email)

@@ -21,8 +21,8 @@ func NewCheckRepo() *CheckRepo { return &CheckRepo{} }
 // query because scanCheck takes ...any: a column list that drifts out of sync
 // with the scan targets compiles fine and only fails at runtime.
 const checkColumns = `id, tenant_id, branch_id, table_id, table_label, pax, status,
-	          opened_by, opened_by_kind, source, closed_by, note, opened_at, closed_at,
-	          created_at, updated_at`
+	          opened_by, opened_by_kind, source, closed_by, merged_into_check_id, note,
+	          opened_at, closed_at, created_at, updated_at`
 
 // Create inserts a new open check and returns it with server-assigned fields.
 //
@@ -320,13 +320,71 @@ func scanCheck(s interface {
 	var status, openedByKind, source string
 	if err := s.Scan(
 		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &c.Pax, &status,
-		&c.OpenedBy, &openedByKind, &source, &c.ClosedBy, &c.Note, &c.OpenedAt, &c.ClosedAt,
-		&c.CreatedAt, &c.UpdatedAt,
+		&c.OpenedBy, &openedByKind, &source, &c.ClosedBy, &c.MergedIntoCheckID, &c.Note,
+		&c.OpenedAt, &c.ClosedAt, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return domain.Check{}, err
 	}
 	c.Status = domain.CheckStatus(status)
 	c.OpenedByKind = domain.OpenedByKind(openedByKind)
 	c.Source = domain.Source(source)
+	return c, nil
+}
+
+// UpdateTable re-points an open check at another table (docs/pos-ux-spec.md
+// §3c masa taşıma), guarded on its expected current status the same way
+// UpdateStatus is. tableID may be nil (moving a check off the floor plan
+// entirely — masasız satış).
+//
+// The table's own status is NOT touched here: both the source and the target
+// table row are updated by the caller, inside the same transaction, through
+// TableRepo — keeping every table-status write in one repo is what stops the
+// floor plan and the adisyon from drifting apart.
+//
+// A unique_violation on checks_open_table_id_uidx is translated to
+// ErrTableOccupied for the same reason Create does: another open check
+// already claims the target table, and the index is the backstop for the
+// caller's row lock.
+func (r *CheckRepo) UpdateTable(ctx context.Context, tx pgx.Tx, id uuid.UUID, tableID *uuid.UUID, tableLabel string, expectedStatus domain.CheckStatus) (domain.Check, error) {
+	const q = `
+		UPDATE checks SET table_id = $2, table_label = $3, updated_at = NOW()
+		WHERE id = $1 AND status = $4
+		RETURNING ` + checkColumns
+
+	c, err := scanCheck(tx.QueryRow(ctx, q, id, tableID, tableLabel, string(expectedStatus)))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Check{}, ErrInvalidTransition
+		}
+		if isUniqueViolation(err) {
+			return domain.Check{}, ErrTableOccupied
+		}
+		return domain.Check{}, fmt.Errorf("pos/repo/check: update table: %w", err)
+	}
+	return c, nil
+}
+
+// MarkMerged moves a check to the 'merged' terminal status and records which
+// check absorbed it (docs/pos-ux-spec.md §3c birleştirme), guarded on its
+// expected current status.
+//
+// It is separate from UpdateStatus rather than a fourth argument to it
+// because the two columns must move together: checks_merged_into_chk enforces
+// `(status = 'merged') = (merged_into_check_id IS NOT NULL)`, so a caller
+// that could set one without the other would only ever produce a constraint
+// violation. closed_at is deliberately left NULL — see pos/000008.
+func (r *CheckRepo) MarkMerged(ctx context.Context, tx pgx.Tx, id, targetCheckID uuid.UUID, expectedStatus domain.CheckStatus) (domain.Check, error) {
+	const q = `
+		UPDATE checks SET status = 'merged', merged_into_check_id = $2, updated_at = NOW()
+		WHERE id = $1 AND status = $3
+		RETURNING ` + checkColumns
+
+	c, err := scanCheck(tx.QueryRow(ctx, q, id, targetCheckID, string(expectedStatus)))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Check{}, ErrInvalidTransition
+		}
+		return domain.Check{}, fmt.Errorf("pos/repo/check: mark merged: %w", err)
+	}
 	return c, nil
 }

@@ -13,11 +13,18 @@ const (
 	CheckStatusOpen      CheckStatus = "open"
 	CheckStatusClosed    CheckStatus = "closed"
 	CheckStatusCancelled CheckStatus = "cancelled"
+	// CheckStatusMerged marks the source check of a merge (docs/pos-ux-spec.md
+	// §3c): its orders now hang off another check. It is deliberately not
+	// CheckStatusCancelled — the day-end report counts cancellations, and
+	// every table merge would otherwise be reported as a cancelled sale. A
+	// merged check carries no closed_at, so it never enters a report window
+	// (see pos/000008).
+	CheckStatusMerged CheckStatus = "merged"
 )
 
 func (s CheckStatus) Valid() bool {
 	switch s {
-	case CheckStatusOpen, CheckStatusClosed, CheckStatusCancelled:
+	case CheckStatusOpen, CheckStatusClosed, CheckStatusCancelled, CheckStatusMerged:
 		return true
 	}
 	return false
@@ -85,11 +92,16 @@ type Check struct {
 	// Source defaults to SourcePOS when left empty — see CheckRepo.Create,
 	// which normalizes it rather than letting a zero-value Go string hit the
 	// column's CHECK constraint.
-	Source    Source
-	ClosedBy  *uuid.UUID
-	Note      string
-	OpenedAt  time.Time
-	ClosedAt  *time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Source   Source
+	ClosedBy *uuid.UUID
+	// MergedIntoCheckID is non-nil exactly when Status is CheckStatusMerged
+	// (checks_merged_into_chk enforces the pairing): it names the check that
+	// absorbed this one's orders, so "bu adisyona ne oldu" is answerable from
+	// the row rather than only from the outbox event.
+	MergedIntoCheckID *uuid.UUID
+	Note              string
+	OpenedAt          time.Time
+	ClosedAt          *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }

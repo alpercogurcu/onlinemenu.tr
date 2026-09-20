@@ -27,6 +27,7 @@ func newGuestOrderService() *service.OrderService {
 		OrderRepo: repo.NewOrderRepo(),
 		CheckRepo: repo.NewCheckRepo(),
 		TableRepo: repo.NewTableRepo(),
+		Pricer:    staticPricer{},
 		Logger:    zap.NewNop(),
 	})
 }

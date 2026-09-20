@@ -304,3 +304,41 @@ func uuidStringSlice(ids []uuid.UUID) []string {
 	}
 	return out
 }
+
+// PriceCatalogProducts returns the list price of active products straight
+// from the products table, with no menu involved.
+//
+// It backs the POS (staff) pricing path — see public.StaffPricer for why a
+// counter sale is not gated on a branch having an active menu. The
+// projection is identical to PriceProducts so both paths produce the same
+// PricedProduct shape; only "where does the price come from" differs, and
+// keeping that the single difference is what makes the two comparable.
+//
+// tenant scoping is RLS's job (the caller runs inside WithTenantReadTx), the
+// same as every other query in this file.
+func (r *StorefrontMenuRepo) PriceCatalogProducts(ctx context.Context, tx pgx.Tx, productIDs []uuid.UUID) (map[uuid.UUID]PricedProduct, error) {
+	out := make(map[uuid.UUID]PricedProduct, len(productIDs))
+	if len(productIDs) == 0 {
+		return out, nil
+	}
+
+	const q = `
+		SELECT p.id, p.name, p.price_amount, p.currency, p.tax_rate_bps
+		FROM products p
+		WHERE p.id = ANY($1::uuid[]) AND p.is_active`
+
+	rows, err := tx.Query(ctx, q, uuidStringSlice(productIDs))
+	if err != nil {
+		return nil, fmt.Errorf("catalog/repo/storefront_menu: price catalog products: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var p PricedProduct
+		if err := rows.Scan(&p.ID, &p.Name, &p.PriceAmount, &p.Currency, &p.TaxRateBPS); err != nil {
+			return nil, fmt.Errorf("catalog/repo/storefront_menu: price catalog products scan: %w", err)
+		}
+		out[p.ID] = p
+	}
+	return out, rows.Err()
+}

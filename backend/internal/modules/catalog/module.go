@@ -39,6 +39,11 @@ var Module = fx.Module("catalog",
 		// pub.ProductReader needs one: StorefrontMenuService already returns
 		// the public types, so exposing it is a plain interface provider.
 		newStorefrontMenuReader,
+		// The POS's server-side price check (docs/pos-ux-spec.md bulgu #14).
+		// A separate one-method interface, not a widening of
+		// StorefrontMenuReader: pos has no business reading the diner menu,
+		// and the storefront has no business pricing a counter sale.
+		newStaffPricer,
 	),
 	fx.Invoke(func(h *cataloghttp.Handler, r *chi.Mux) {
 		h.RegisterRoutes(r)
@@ -46,6 +51,10 @@ var Module = fx.Module("catalog",
 )
 
 func newStorefrontMenuReader(svc *service.StorefrontMenuService) pub.StorefrontMenuReader {
+	return svc
+}
+
+func newStaffPricer(svc *service.StorefrontMenuService) pub.StaffPricer {
 	return svc
 }
 

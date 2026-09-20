@@ -10,6 +10,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	catalogpub "onlinemenu.tr/internal/modules/catalog/public"
 	"onlinemenu.tr/internal/modules/pos/domain"
 	pub "onlinemenu.tr/internal/modules/pos/public"
 	"onlinemenu.tr/internal/modules/pos/repo"
@@ -27,10 +28,33 @@ var ErrInvalidOrderStatus = errors.New("pos/service/order: invalid order status"
 // stricter permissions; see domain.IsKitchenAdvanceTarget.
 var ErrUseDedicatedEndpoint = errors.New("pos/service/order: status requires its dedicated endpoint")
 
+// ErrPriceMismatch is returned when a staff order line's unit_price_amount
+// does not equal the product's catalog price plus the selected modifiers'
+// deltas (docs/pos-ux-spec.md bulgu #14 / P0).
+//
+// Until this existed, Place copied the client's number straight into the
+// order: a POS terminal could write any price it liked, and the varyant
+// feature (P1) would have turned that into a supported discount channel. The
+// QR guest path never had the hole — its prices are derived from the catalog
+// read model and the diner's numbers never enter that derivation — so this
+// brings the staff path level with it.
+var ErrPriceMismatch = errors.New("pos/service/order: line price does not match the catalog")
+
+// ErrInvalidOrderLine wraps a catalog-side rejection of an order line: the
+// product is not sellable, or a selected modifier is not attached to it / is
+// selected too many times. It is distinct from ErrPriceMismatch because the
+// cashier's remedy differs — one means "refresh your product list", the other
+// "your total is stale".
+var ErrInvalidOrderLine = errors.New("pos/service/order: invalid order line")
+
 // OrderService manages order lifecycle within a check or as standalone (delivery/takeaway).
 type OrderService struct {
 	db        *db.Pool
 	orderRepo *repo.OrderRepo
+	// pricer re-derives staff line prices from the catalog. It is a required
+	// dependency, not an optional one: a nil pricer would silently reopen the
+	// hole ErrPriceMismatch exists to close, so Place fails closed instead.
+	pricer catalogpub.StaffPricer
 	// checkRepo/tableRepo are used only by PlaceGuest, which must open a
 	// guest check inside the same transaction as the order it carries (see
 	// openCheckTx). The staff paths still go through CheckService.
@@ -47,6 +71,7 @@ type OrderParams struct {
 	OrderRepo *repo.OrderRepo
 	CheckRepo *repo.CheckRepo
 	TableRepo *repo.TableRepo
+	Pricer    catalogpub.StaffPricer
 	Logger    *zap.Logger
 }
 
@@ -56,6 +81,7 @@ func NewOrderService(p OrderParams) *OrderService {
 		orderRepo: p.OrderRepo,
 		checkRepo: p.CheckRepo,
 		tableRepo: p.TableRepo,
+		pricer:    p.Pricer,
 		logger:    p.Logger,
 	}
 }
@@ -83,6 +109,9 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 	if !o.OrderChannel.Valid() {
 		return domain.Order{}, fmt.Errorf("pos/service/order: invalid channel %q", o.OrderChannel)
 	}
+	if err := s.repriceItems(ctx, tenantID, o.Items); err != nil {
+		return domain.Order{}, err
+	}
 	o.TenantID = tenantID
 	o.Status = domain.OrderStatusPending
 
@@ -109,6 +138,67 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 		return domain.Order{}, wrapErr(err, "pos/service/order: place: %w")
 	}
 	return created, nil
+}
+
+// repriceItems re-derives every line's price from the catalog and rejects the
+// order when the client's unit_price_amount disagrees (ErrPriceMismatch).
+//
+// It also OVERWRITES the snapshot columns the client supplies alongside the
+// price — product name, list price, currency and tax rate — with the
+// catalog's own values. Rejecting on the price while trusting the tax rate
+// would leave the VAT breakdown in the day-end report and on the fiscal
+// receipt client-controlled, which is the same hole one field over.
+//
+// The comparison, not a silent correction, is what the caller gets for the
+// unit price: a POS whose cached price is stale must be told its total is
+// wrong before the cashier reads it out to the customer.
+//
+// items is mutated in place; the caller passes the slice it is about to
+// persist.
+func (s *OrderService) repriceItems(ctx context.Context, tenantID uuid.UUID, items []domain.OrderItem) error {
+	if s.pricer == nil {
+		return errors.New("pos/service/order: staff pricer not wired")
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	lines := make([]catalogpub.StaffCartLine, len(items))
+	for i, it := range items {
+		lines[i] = catalogpub.StaffCartLine{
+			ProductID:   it.ProductID,
+			Quantity:    it.Quantity,
+			ModifierIDs: it.SelectedModifierIDs,
+		}
+	}
+
+	priced, err := s.pricer.PriceStaffCart(ctx, tenantID, lines)
+	if err != nil {
+		var invalid *catalogpub.ValidationError
+		if errors.As(err, &invalid) {
+			return fmt.Errorf("pos/service/order: %s: %w", invalid.Msg, ErrInvalidOrderLine)
+		}
+		return fmt.Errorf("pos/service/order: price order lines: %w", err)
+	}
+	// PriceStaffCart contracts one line out per line in, in input order. A
+	// short slice would silently re-price the wrong item, so this is checked
+	// rather than assumed.
+	if len(priced) != len(items) {
+		return fmt.Errorf("pos/service/order: pricer returned %d lines for %d items", len(priced), len(items))
+	}
+
+	for i := range items {
+		p := priced[i]
+		if items[i].UnitPriceAmount != p.UnitPriceAmount {
+			return fmt.Errorf("pos/service/order: line %d (%s): sent %d, catalog says %d: %w",
+				i, p.ProductName, items[i].UnitPriceAmount, p.UnitPriceAmount, ErrPriceMismatch)
+		}
+		items[i].ProductName = p.ProductName
+		items[i].ProductPriceAmount = p.BasePriceAmount
+		items[i].ProductCurrency = p.Currency
+		items[i].TaxRateBPS = p.TaxRateBPS
+	}
+	return nil
 }
 
 // lockWritableCheck locks the order's check and rejects the placement when it

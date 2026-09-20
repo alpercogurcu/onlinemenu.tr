@@ -147,6 +147,51 @@ func groupSelectionLimit(m repo.ProductModifier) int {
 // alternative — dropping the line — would let a diner receive a cheaper order
 // than the one they submitted.
 func (s *StorefrontMenuService) PriceCart(ctx context.Context, tenantID, branchID uuid.UUID, lines []pub.CartLine) ([]pub.PricedLine, error) {
+	// CartLine and StaffCartLine are field-identical by construction — they
+	// are two names for "what was ordered, with no price" — so the conversion
+	// is a cast. They stay separate types because a caller holding one must
+	// not be able to pass it where the other's pricing rules apply.
+	staff := make([]pub.StaffCartLine, len(lines))
+	for i, l := range lines {
+		staff[i] = pub.StaffCartLine(l)
+	}
+	return s.priceLines(ctx, tenantID, staff, func(tx pgx.Tx, productIDs []uuid.UUID) (map[uuid.UUID]repo.PricedProduct, error) {
+		return s.repo.PriceProducts(ctx, tx, branchID, productIDs)
+	}, "price cart")
+}
+
+// PriceStaffCart re-derives a POS (staff) order's line prices from the
+// product catalog itself (pub.StaffPricer).
+//
+// It differs from PriceCart in exactly one place — the base price comes from
+// products.price_amount rather than the branch's menu-resolved price — and
+// runs every other rule through the same priceLines body, because those rules
+// are the security-relevant half and a second copy would drift. See
+// pub.StaffPricer for why the two bases differ.
+func (s *StorefrontMenuService) PriceStaffCart(ctx context.Context, tenantID uuid.UUID, lines []pub.StaffCartLine) ([]pub.PricedLine, error) {
+	return s.priceLines(ctx, tenantID, lines, func(tx pgx.Tx, productIDs []uuid.UUID) (map[uuid.UUID]repo.PricedProduct, error) {
+		return s.repo.PriceCatalogProducts(ctx, tx, productIDs)
+	}, "price staff cart")
+}
+
+// basePriceLookup resolves the list price of the requested products. It is a
+// parameter rather than a fixed query because that is the ONLY thing the
+// diner-facing and the counter-facing pricing paths disagree about.
+type basePriceLookup func(tx pgx.Tx, productIDs []uuid.UUID) (map[uuid.UUID]repo.PricedProduct, error)
+
+// priceLines is the one implementation of "what does this line cost".
+//
+// Everything that bounds how far a client can move a price lives here and
+// nowhere else: a modifier must be attached to the named product, may not be
+// repeated, may not exceed its group's selection limit, and the resulting
+// line may not go negative.
+func (s *StorefrontMenuService) priceLines(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	lines []pub.StaffCartLine,
+	basePrices basePriceLookup,
+	op string,
+) ([]pub.PricedLine, error) {
 	if len(lines) == 0 {
 		return nil, &pub.ValidationError{Msg: "cart is empty"}
 	}
@@ -167,7 +212,7 @@ func (s *StorefrontMenuService) PriceCart(ctx context.Context, tenantID, branchI
 	)
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
-		priced, err = s.repo.PriceProducts(ctx, tx, branchID, productIDs)
+		priced, err = basePrices(tx, productIDs)
 		if err != nil {
 			return err
 		}
@@ -175,7 +220,7 @@ func (s *StorefrontMenuService) PriceCart(ctx context.Context, tenantID, branchI
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("catalog/service/storefront_menu: price cart: %w", err)
+		return nil, fmt.Errorf("catalog/service/storefront_menu: %s: %w", op, err)
 	}
 
 	// Keyed on the PAIR, not on the modifier id: a modifier that exists but

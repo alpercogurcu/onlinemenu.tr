@@ -9,8 +9,17 @@ const UNIT_PRICE = 32000
 
 type Headers = { Authorization: string }
 
-type Check = { id: string; status: string; total?: number }
-type Order = { id: string; status: string; check_id: string | null }
+type Check = {
+  id: string
+  status: string
+  total?: number
+  table_id: string | null
+  table_label: string
+  merged_into_check_id?: string
+}
+type OrderItem = { id: string; product_name: string; unit_price_amount: number }
+type Order = { id: string; status: string; check_id: string | null; items: OrderItem[] }
+type PosTable = { id: string; name: string; status: string }
 
 async function headersFor(request: APIRequestContext, email: string): Promise<Headers> {
   const { token } = await devToken(request, email)
@@ -38,12 +47,12 @@ async function openCheck(request: APIRequestContext, headers: Headers, label: st
   return ((await res.json()) as Check).id
 }
 
-async function placeOrder(
+async function placeOrderFull(
   request: APIRequestContext,
   headers: Headers,
   checkId: string,
   quantities: number[],
-): Promise<string> {
+): Promise<Order> {
   const res = await request.post(`${POS}/orders`, {
     headers: { ...headers, "Idempotency-Key": `e2e-orders-${randomUUID()}` },
     data: {
@@ -54,7 +63,16 @@ async function placeOrder(
     },
   })
   expect(res.status(), await res.text()).toBe(201)
-  return ((await res.json()) as Order).id
+  return (await res.json()) as Order
+}
+
+async function placeOrder(
+  request: APIRequestContext,
+  headers: Headers,
+  checkId: string,
+  quantities: number[],
+): Promise<string> {
+  return (await placeOrderFull(request, headers, checkId, quantities)).id
 }
 
 async function getCheck(request: APIRequestContext, headers: Headers, checkId: string): Promise<Check> {
@@ -319,6 +337,254 @@ test.describe("sipariş yaşam döngüsü ve adisyon toplamı", () => {
       expect((await getOrder(request, manager, orderId)).status).toBe("pending")
     } finally {
       await cleanup(request, manager, checkId)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// docs/pos-ux-spec.md §3c — masa taşıma / birleştirme / kalem taşıma
+// ---------------------------------------------------------------------------
+
+const MODIFIER_EXTRA_SAUCE = "dddddddd-0000-0000-0000-000000000311" // Ekstra sos, +₺15
+const EXTRA_SAUCE_DELTA = 1500
+
+async function emptyTable(request: APIRequestContext, headers: Headers): Promise<PosTable> {
+  const res = await request.get(`${POS}/tables?branch_id=${BRANCH_ID}`, { headers })
+  expect(res.status(), await res.text()).toBe(200)
+  const zones = (await res.json()) as { tables: PosTable[] }[]
+  const free = zones.flatMap((z) => z.tables).find((t) => t.status === "empty")
+  expect(free, "dev seed must leave at least one empty table for the transfer test").toBeTruthy()
+  return free as PosTable
+}
+
+// Cancelling a check parks its table in "cleaning", which the next run cannot
+// transfer onto. Manager holds pos.table.manage, so the fixture resets it.
+async function resetTable(request: APIRequestContext, headers: Headers, tableId: string) {
+  await request.post(`${POS}/tables/${tableId}/status`, { headers, data: { status: "empty" } })
+}
+
+test.describe("adisyon taşıma, birleştirme ve kalem taşıma", () => {
+  test("birleştirilen adisyon iptal değil 'merged' olur ve tutarı hedefe taşınır", async ({ request }) => {
+    const headers = await headersFor(request, USERS.manager)
+    const target = await openCheck(request, headers, `E2E-MRG-T-${Date.now().toString(36)}`)
+    const source = await openCheck(request, headers, `E2E-MRG-S-${Date.now().toString(36)}`)
+
+    try {
+      await placeOrder(request, headers, target, [1])
+      await placeOrder(request, headers, source, [2])
+      expect((await getCheck(request, headers, target)).total).toBe(UNIT_PRICE)
+      expect((await getCheck(request, headers, source)).total).toBe(2 * UNIT_PRICE)
+
+      const key = `e2e-merge-${randomUUID()}`
+      const merge = await request.post(`${POS}/checks/${target}/merge`, {
+        headers: { ...headers, "Idempotency-Key": key },
+        data: { source_check_id: source },
+      })
+      expect(merge.status(), await merge.text()).toBe(200)
+
+      expect((await getCheck(request, headers, target)).total).toBe(3 * UNIT_PRICE)
+
+      const merged = await getCheck(request, headers, source)
+      expect(merged.status, "a merged adisyon must not read as a cancelled sale").toBe("merged")
+      expect(merged.merged_into_check_id).toBe(target)
+      expect(merged.total).toBe(0)
+
+      // Same key, same body: the middleware replays instead of merging twice.
+      const replay = await request.post(`${POS}/checks/${target}/merge`, {
+        headers: { ...headers, "Idempotency-Key": key },
+        data: { source_check_id: source },
+      })
+      expect(replay.status()).toBe(200)
+      expect(replay.headers()["idempotency-replayed"]).toBe("true")
+      expect((await getCheck(request, headers, target)).total).toBe(3 * UNIT_PRICE)
+
+      // A second, genuinely new attempt finds the source no longer open.
+      const again = await request.post(`${POS}/checks/${target}/merge`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-merge-${randomUUID()}` },
+        data: { source_check_id: source },
+      })
+      expect(again.status()).toBe(409)
+      expect(((await again.json()) as { code: string }).code).toBe("check_not_open")
+    } finally {
+      await cleanup(request, headers, target)
+    }
+  })
+
+  test("kalem taşıma seçilen satırın tutarını hedef adisyona geçirir", async ({ request }) => {
+    const headers = await headersFor(request, USERS.manager)
+    const source = await openCheck(request, headers, `E2E-MVS-${Date.now().toString(36)}`)
+    const target = await openCheck(request, headers, `E2E-MVT-${Date.now().toString(36)}`)
+
+    try {
+      const stays = await placeOrderFull(request, headers, source, [1])
+      const moves = await placeOrderFull(request, headers, source, [2])
+      expect((await getCheck(request, headers, source)).total).toBe(3 * UNIT_PRICE)
+
+      const move = await request.post(`${POS}/checks/${source}/move-items`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-move-${randomUUID()}` },
+        data: { target_check_id: target, order_item_ids: [moves.items[0].id] },
+      })
+      expect(move.status(), await move.text()).toBe(200)
+      expect(((await move.json()) as Check).id, "the response is the target check").toBe(target)
+
+      expect((await getCheck(request, headers, source)).total).toBe(UNIT_PRICE)
+      expect((await getCheck(request, headers, target)).total).toBe(2 * UNIT_PRICE)
+
+      // The emptied source order is cancelled; the untouched one is not.
+      expect((await getOrder(request, headers, moves.id)).status).toBe("cancelled")
+      expect((await getOrder(request, headers, stays.id)).status).toBe("pending")
+
+      // A line that now belongs to the target can no longer be moved off the source.
+      const foreign = await request.post(`${POS}/checks/${source}/move-items`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-move-${randomUUID()}` },
+        data: { target_check_id: target, order_item_ids: [moves.items[0].id] },
+      })
+      expect(foreign.status()).toBe(422)
+      expect(((await foreign.json()) as { code: string }).code).toBe("order_item_not_found")
+    } finally {
+      await cleanup(request, headers, source)
+      await cleanup(request, headers, target)
+    }
+  })
+
+  test("masa taşıma hedef masayı aynı istekte dolu yapar", async ({ request }) => {
+    const headers = await headersFor(request, USERS.manager)
+    const table = await emptyTable(request, headers)
+    const checkId = await openCheck(request, headers, `E2E-TRF-${Date.now().toString(36)}`)
+
+    try {
+      await placeOrder(request, headers, checkId, [1])
+
+      const transfer = await request.post(`${POS}/checks/${checkId}/transfer`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-transfer-${randomUUID()}` },
+        data: { table_id: table.id },
+      })
+      expect(transfer.status(), await transfer.text()).toBe(200)
+      const moved = (await transfer.json()) as Check
+      expect(moved.table_id).toBe(table.id)
+      expect(moved.table_label, "the label follows the table so the KDS agrees").toBe(table.name)
+
+      // The cashier holds no pos.table.manage, so the server must have done this.
+      const after = await emptyTable(request, headers)
+      expect(after.id, "the target table is no longer empty").not.toBe(table.id)
+
+      const unknown = await request.post(`${POS}/checks/${checkId}/transfer`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-transfer-${randomUUID()}` },
+        data: { table_id: randomUUID() },
+      })
+      expect(unknown.status()).toBe(422)
+      expect(((await unknown.json()) as { code: string }).code).toBe("table_not_found")
+    } finally {
+      await cleanup(request, headers, checkId)
+      await resetTable(request, headers, table.id)
+    }
+  })
+
+  test("kasiyer birleştirebilir, garson birleştiremez", async ({ request }) => {
+    const manager = await headersFor(request, USERS.manager)
+    const cashier = await headersFor(request, USERS.cashier)
+    const waiter = await headersFor(request, USERS.waiter)
+    const target = await openCheck(request, manager, `E2E-AZM-T-${Date.now().toString(36)}`)
+    const source = await openCheck(request, manager, `E2E-AZM-S-${Date.now().toString(36)}`)
+
+    try {
+      const denied = await request.post(`${POS}/checks/${target}/merge`, {
+        headers: { ...waiter, "Idempotency-Key": `e2e-merge-${randomUUID()}` },
+        data: { source_check_id: source },
+      })
+      expect(denied.status(), "the waiter holds no pos.check.merge").toBe(403)
+
+      const allowed = await request.post(`${POS}/checks/${target}/merge`, {
+        headers: { ...cashier, "Idempotency-Key": `e2e-merge-${randomUUID()}` },
+        data: { source_check_id: source },
+      })
+      expect(allowed.status(), await allowed.text()).toBe(200)
+      expect((await getCheck(request, manager, source)).status).toBe("merged")
+    } finally {
+      await cleanup(request, manager, target)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// docs/pos-ux-spec.md bulgu #14 / P0 — sunucu tarafı fiyat doğrulaması
+// ---------------------------------------------------------------------------
+
+test.describe("sunucu tarafı fiyat doğrulaması", () => {
+  test("manipüle edilmiş birim fiyat 422 price_mismatch ile reddedilir", async ({ request }) => {
+    const headers = await headersFor(request, USERS.manager)
+    const checkId = await openCheck(request, headers, `E2E-FYT-${Date.now().toString(36)}`)
+
+    try {
+      for (const sent of [1, UNIT_PRICE - 1, UNIT_PRICE + 1]) {
+        const res = await request.post(`${POS}/orders`, {
+          headers: { ...headers, "Idempotency-Key": `e2e-price-${randomUUID()}` },
+          data: {
+            branch_id: BRANCH_ID,
+            check_id: checkId,
+            order_channel: "dine_in",
+            items: [{ ...item(1), unit_price_amount: sent }],
+          },
+        })
+        expect(res.status(), `sent ${sent}: ${await res.text()}`).toBe(422)
+        expect(((await res.json()) as { code: string }).code).toBe("price_mismatch")
+      }
+      expect((await getCheck(request, headers, checkId)).total, "nothing reached the adisyon").toBe(0)
+
+      const unknown = await request.post(`${POS}/orders`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-price-${randomUUID()}` },
+        data: {
+          branch_id: BRANCH_ID,
+          check_id: checkId,
+          order_channel: "dine_in",
+          items: [{ ...item(1), product_id: randomUUID() }],
+        },
+      })
+      expect(unknown.status()).toBe(422)
+      expect(((await unknown.json()) as { code: string }).code).toBe("invalid_order_line")
+    } finally {
+      await cleanup(request, headers, checkId)
+    }
+  })
+
+  test("seçenek farkı sunucuda fiyata eklenir", async ({ request }) => {
+    const headers = await headersFor(request, USERS.manager)
+    const checkId = await openCheck(request, headers, `E2E-MOD-${Date.now().toString(36)}`)
+
+    try {
+      // Base price alone is wrong once an option with a delta is selected.
+      const stale = await request.post(`${POS}/orders`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-mod-${randomUUID()}` },
+        data: {
+          branch_id: BRANCH_ID,
+          check_id: checkId,
+          order_channel: "dine_in",
+          items: [{ ...item(1), modifier_ids: [MODIFIER_EXTRA_SAUCE] }],
+        },
+      })
+      expect(stale.status()).toBe(422)
+      expect(((await stale.json()) as { code: string }).code).toBe("price_mismatch")
+
+      const ok = await request.post(`${POS}/orders`, {
+        headers: { ...headers, "Idempotency-Key": `e2e-mod-${randomUUID()}` },
+        data: {
+          branch_id: BRANCH_ID,
+          check_id: checkId,
+          order_channel: "dine_in",
+          items: [
+            {
+              ...item(2),
+              unit_price_amount: UNIT_PRICE + EXTRA_SAUCE_DELTA,
+              note: "Ekstra sos",
+              modifier_ids: [MODIFIER_EXTRA_SAUCE],
+            },
+          ],
+        },
+      })
+      expect(ok.status(), await ok.text()).toBe(201)
+      expect((await getCheck(request, headers, checkId)).total).toBe(2 * (UNIT_PRICE + EXTRA_SAUCE_DELTA))
+    } finally {
+      await cleanup(request, headers, checkId)
     }
   })
 })

@@ -127,20 +127,25 @@ func newStorefrontStack(t *testing.T) storefrontStack {
 		SaleReader: &saleReaderAdapter{svc: payService},
 		Logger:     log,
 	})
-	posOrders := possvc.NewOrderService(possvc.OrderParams{
-		DB:        sharedPool,
-		OrderRepo: posrepo.NewOrderRepo(),
-		CheckRepo: posrepo.NewCheckRepo(),
-		TableRepo: posrepo.NewTableRepo(),
-		Logger:    log,
-	})
-	guestPos := &guestPosAdapter{svc: posOrders}
-
 	menuReader := catalogsvc.NewStorefrontMenuService(catalogsvc.StorefrontMenuParams{
 		DB:     sharedPool,
 		Repo:   catalogrepo.NewStorefrontMenuRepo(),
 		Logger: log,
 	})
+	// The real catalog pricer: this suite already seeds products and menus, so
+	// the staff price check (docs/pos-ux-spec.md bulgu #14) runs for real here
+	// rather than against a stand-in. The guest path does not go through it —
+	// PlaceGuest is priced by the storefront before pos sees it — but wiring
+	// the real one keeps the stub count down.
+	posOrders := possvc.NewOrderService(possvc.OrderParams{
+		DB:        sharedPool,
+		OrderRepo: posrepo.NewOrderRepo(),
+		CheckRepo: posrepo.NewCheckRepo(),
+		TableRepo: posrepo.NewTableRepo(),
+		Pricer:    menuReader,
+		Logger:    log,
+	})
+	guestPos := &guestPosAdapter{svc: posOrders}
 
 	signer, err := auth.NewGuestTokenSigner([]byte(guestTokenSecret))
 	require.NoError(t, err)

@@ -1,6 +1,6 @@
 import { type APIRequestContext, type APIResponse, expect, test } from "@playwright/test"
 
-import { API_URL, BRANCH_ID, PRODUCT_ID, USERS, devToken } from "./fixtures/auth"
+import { API_URL, BRANCH_ID, PRODUCTS, type SeededProduct, USERS, devToken } from "./fixtures/auth"
 
 // Cash-day scenario against the live dev stack (real pilot flow): drawer open →
 // sales → wrong-order correction → movements → count with a shortfall → close,
@@ -82,7 +82,10 @@ async function openCheck(api: Api, label: string): Promise<string> {
   return check.id
 }
 
-async function placeOrder(api: Api, checkId: string, name: string, price: number, key: string) {
+// The amount is the seeded product's own price: POST /pos/orders re-prices
+// every line and answers 422 price_mismatch for anything else
+// (docs/pos-ux-spec.md bulgu #14).
+async function placeOrder(api: Api, checkId: string, product: SeededProduct, key: string) {
   return api.post(
     "/api/v1/pos/orders",
     {
@@ -91,13 +94,13 @@ async function placeOrder(api: Api, checkId: string, name: string, price: number
       order_channel: "dine_in",
       items: [
         {
-          product_id: PRODUCT_ID,
-          product_name: name,
-          product_price_amount: price,
+          product_id: product.id,
+          product_name: product.name,
+          product_price_amount: product.price,
           product_currency: "TRY",
           tax_rate_bps: 1000,
           quantity: 1,
-          unit_price_amount: price,
+          unit_price_amount: product.price,
         },
       ],
     },
@@ -105,8 +108,8 @@ async function placeOrder(api: Api, checkId: string, name: string, price: number
   )
 }
 
-async function placeOrderOk(api: Api, checkId: string, name: string, price: number, key: string): Promise<string> {
-  const order = await json<{ id: string }>(await placeOrder(api, checkId, name, price, key), 201)
+async function placeOrderOk(api: Api, checkId: string, product: SeededProduct, key: string): Promise<string> {
+  const order = await json<{ id: string }>(await placeOrder(api, checkId, product, key), 201)
   return order.id
 }
 
@@ -264,7 +267,7 @@ test.describe("kasa günü", () => {
   test("adisyon → sipariş → nakit ödeme → fiş → adisyon kapanır; satış kasa toplamına yansır", async () => {
     const saleCheckId = await openCheck(cashier, `E2E-K1-${RUN}`)
     openedChecks.push(saleCheckId)
-    const orderId = await placeOrderOk(cashier, saleCheckId, "Adana Kebap", 32_000, `e2e-${RUN}-k1-order`)
+    const orderId = await placeOrderOk(cashier, saleCheckId, PRODUCTS.adana, `e2e-${RUN}-k1-order`)
     await json(await cashier.post(`/api/v1/pos/orders/${orderId}/accept`), 200)
 
     // Money is not collected yet: closing the adisyon must be refused.
@@ -316,7 +319,7 @@ test.describe("kasa günü", () => {
     expect(closed.closed_at).not.toBeNull()
 
     // Closed adisyon takes neither orders nor money (2026-09-15 production finding).
-    const lateOrder = await placeOrder(cashier, saleCheckId, "Ayran", 3_000, `e2e-${RUN}-k1-late-order`)
+    const lateOrder = await placeOrder(cashier, saleCheckId, PRODUCTS.ayran, `e2e-${RUN}-k1-late-order`)
     await expectStatus(lateOrder, 409)
     expect(await lateOrder.json()).toMatchObject({ code: "check_not_open" })
     const latePay = await cashier.post("/api/v1/payments", cashSale(saleCheckId, "Ayran", 3_000), `e2e-${RUN}-k1-late-pay`)
@@ -328,14 +331,14 @@ test.describe("kasa günü", () => {
     const correctionCheckId = await openCheck(cashier, `E2E-K2-${RUN}`)
     openedChecks.push(correctionCheckId)
 
-    const wrongId = await placeOrderOk(cashier, correctionCheckId, "Yanlış Sipariş", 25_000, `e2e-${RUN}-k2-wrong`)
+    const wrongId = await placeOrderOk(cashier, correctionCheckId, PRODUCTS.tavuk, `e2e-${RUN}-k2-wrong`)
     const rejected = await json<{ status: string }>(
       await cashier.post(`/api/v1/pos/orders/${wrongId}/reject`, { reason: "e2e: yanlış girildi" }),
       200,
     )
     expect(rejected.status).toBe("rejected")
 
-    const rightId = await placeOrderOk(cashier, correctionCheckId, "İskender", 18_000, `e2e-${RUN}-k2-right`)
+    const rightId = await placeOrderOk(cashier, correctionCheckId, PRODUCTS.lahmacun, `e2e-${RUN}-k2-right`)
     await json(await cashier.post(`/api/v1/pos/orders/${rightId}/accept`), 200)
 
     // The rejected order stays in the ledger but never counts toward the total.
@@ -345,7 +348,7 @@ test.describe("kasa günü", () => {
     )
     expect(orders.find((o) => o.id === wrongId)?.status).toBe("rejected")
     const check = await json<{ total: number }>(await cashier.get(`/api/v1/pos/checks/${correctionCheckId}`), 200)
-    expect(check.total).toBe(18_000)
+    expect(check.total).toBe(9_000)
 
     // A rejected order cannot be rejected again.
     await expectStatus(await cashier.post(`/api/v1/pos/orders/${wrongId}/reject`, { reason: "e2e: tekrar" }), 409)
@@ -354,20 +357,20 @@ test.describe("kasa günü", () => {
     await expectStatus(noPayment, 409)
     expect(await noPayment.json()).toMatchObject({ code: "insufficient_payment" })
 
-    const partial = await payCash(cashier, correctionCheckId, "İskender (kısmi)", 10_000, `e2e-${RUN}-k2-pay-1`)
+    const partial = await payCash(cashier, correctionCheckId, "Lahmacun (kısmi)", 5_000, `e2e-${RUN}-k2-pay-1`)
     await waitCompleted(manager, partial.id)
     const underpaid = await closeCheck(cashier, correctionCheckId, `e2e-${RUN}-k2-close-partial`)
     await expectStatus(underpaid, 409)
     expect(await underpaid.json()).toMatchObject({ code: "insufficient_payment" })
 
-    const rest = await payCash(cashier, correctionCheckId, "İskender (kalan)", 8_000, `e2e-${RUN}-k2-pay-2`)
+    const rest = await payCash(cashier, correctionCheckId, "Lahmacun (kalan)", 4_000, `e2e-${RUN}-k2-pay-2`)
     await waitCompleted(manager, rest.id)
     const closed = await json<{ status: string }>(await closeCheck(cashier, correctionCheckId, `e2e-${RUN}-k2-close`), 200)
     expect(closed.status).toBe("closed")
 
-    // Only the correct amount was collected: 32 000 + 18 000 in the drawer.
+    // Only the correct amount was collected: 32 000 + 9 000 in the drawer.
     const session = await activeSession(cashier)
-    expect(session!.cash_payments_taken).toBeGreaterThanOrEqual(50_000)
+    expect(session!.cash_payments_taken).toBeGreaterThanOrEqual(41_000)
   })
 
   test("kasa hareketleri: para çıkışı ve girişi deftere yazılır, bakiyeyi etkiler", async () => {
@@ -461,9 +464,9 @@ test.describe("kasa günü", () => {
 
     const checkId = await openCheck(cashier, `E2E-K3-${RUN}`)
     openedChecks.push(checkId)
-    await placeOrderOk(cashier, checkId, "Lahmacun", 12_000, `e2e-${RUN}-k3-order`)
+    await placeOrderOk(cashier, checkId, PRODUCTS.lahmacun, `e2e-${RUN}-k3-order`)
 
-    const blocked = await cashier.post("/api/v1/payments", cashSale(checkId, "Lahmacun", 12_000), `e2e-${RUN}-k3-pay`)
+    const blocked = await cashier.post("/api/v1/payments", cashSale(checkId, "Lahmacun", 9_000), `e2e-${RUN}-k3-pay`)
     await expectStatus(blocked, 409)
     expect(await blocked.text()).toContain("açık kasa oturumu yok")
 
@@ -479,7 +482,7 @@ test.describe("kasa günü", () => {
     const card = await json<Payment>(
       await cashier.post(
         "/api/v1/payments",
-        { ...cashSale(checkId, "Lahmacun", 12_000), method: "terminal" },
+        { ...cashSale(checkId, "Lahmacun", 9_000), method: "terminal" },
         `e2e-${RUN}-k3-card`,
       ),
       201,
@@ -495,18 +498,18 @@ test.describe("kasa günü", () => {
 
     // Other specs share the branch, so the assertions are deltas against the
     // report read before this file created anything.
-    // Closed: K1 (32 000), K2 (18 000; the 25 000 rejected order is excluded),
-    // K3 (12 000 paid by card).
+    // Closed: K1 (32 000), K2 (9 000; the 28 000 rejected order is excluded),
+    // K3 (9 000 paid by card).
     expect(report.sales.closed_check_count - baseline.sales.closed_check_count).toBeGreaterThanOrEqual(3)
-    expect(report.sales.gross - baseline.sales.gross).toBe(32_000 + 18_000 + 12_000)
+    expect(report.sales.gross - baseline.sales.gross).toBe(32_000 + 9_000 + 9_000)
 
     const cashBefore = cashTotal(baseline, "completed")
     const cashAfter = cashTotal(report, "completed")
-    expect(cashAfter.total - cashBefore.total).toBe(50_000)
+    expect(cashAfter.total - cashBefore.total).toBe(41_000)
     expect(cashAfter.count - cashBefore.count).toBe(3)
     const cardBefore = baseline.payments.find((p) => p.method === "terminal" && p.status === "completed")
     const cardAfter = report.payments.find((p) => p.method === "terminal" && p.status === "completed")
-    expect((cardAfter?.total ?? 0) - (cardBefore?.total ?? 0)).toBe(12_000)
+    expect((cardAfter?.total ?? 0) - (cardBefore?.total ?? 0)).toBe(9_000)
 
     // The refused cash attempt (K3) left no failed/pending cash row behind.
     expect(cashTotal(report, "pending")).toEqual(cashTotal(baseline, "pending"))
@@ -514,10 +517,10 @@ test.describe("kasa günü", () => {
     const session = report.cash_sessions.find((s) => s.id === sessionId)
     expect(session).toMatchObject({
       status: "closed",
-      cash_payments_taken: 50_000,
+      cash_payments_taken: 41_000,
       movements_net: -7_500,
-      expected_close: OPENING_AMOUNT + 50_000 - 7_500,
-      closing_counted_amount: OPENING_AMOUNT + 50_000 - 7_500 - SHORTFALL,
+      expected_close: OPENING_AMOUNT + 41_000 - 7_500,
+      closing_counted_amount: OPENING_AMOUNT + 41_000 - 7_500 - SHORTFALL,
       difference: -SHORTFALL,
     })
 

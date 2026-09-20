@@ -1,0 +1,19 @@
+-- docs/pos-ux-spec.md §3a: which options a line was ordered with.
+--
+-- §3a's original "veri saklama kararı" was that the selection lives only in
+-- order_items.note as readable text ("Acılı | Lavaş(+5)"), because the kitchen
+-- receipt already prints that line. The ids are stored alongside it because a
+-- free-text note is not answerable: the KDS cannot group by "acılı", a receipt
+-- reprint cannot re-derive the price, and nothing can tell a renamed modifier
+-- from a different one. note stays the human-readable rendering; this column
+-- is the machine-readable truth.
+--
+-- UUID[] rather than a join table: an order line is an immutable snapshot
+-- (product_name and unit_price_amount are copied at order time for exactly
+-- this reason), so there is nothing to join to — modifiers.name may change
+-- tomorrow and the order must not. A join table would also need its own
+-- tenant_id, RLS policy and grants to carry no additional fact.
+--
+-- DEFAULT '{}' keeps every existing row and every client that does not send
+-- the field working unchanged (the POS desktop sends it omitempty).
+ALTER TABLE order_items ADD COLUMN modifier_ids UUID[] NOT NULL DEFAULT '{}';

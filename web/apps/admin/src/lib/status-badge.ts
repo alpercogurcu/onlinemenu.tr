@@ -17,6 +17,11 @@ export function checkStatusVariant(status: CheckStatus): StatusBadgeVariant {
       return "success"
     case "cancelled":
       return "neutral"
+    // A merged adisyon is not a failure and not a sale: its money is billed
+    // on the check that absorbed it. "info" keeps it visually apart from both
+    // the green "closed" and the grey "cancelled".
+    case "merged":
+      return "info"
   }
 }
 

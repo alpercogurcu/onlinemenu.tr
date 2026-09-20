@@ -122,7 +122,7 @@ func TestPOSReport_SaleDetails(t *testing.T) {
 		CheckID:      &checkCash.ID,
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
-			{ProductID: prodID, ProductName: "Nakit Kalem", ProductCurrency: "TRY", TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: 1500},
+			{ProductID: spineProduct(1500, 1000), ProductName: "Nakit Kalem", ProductCurrency: "TRY", TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: 1500},
 		},
 	})
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestPOSReport_SaleDetails(t *testing.T) {
 		CheckID:      &checkTerminal.ID,
 		OrderChannel: posdomain.OrderChannelDineIn,
 		Items: []posdomain.OrderItem{
-			{ProductID: prodID, ProductName: "Kart Kalem", ProductCurrency: "TRY", TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: 2000},
+			{ProductID: spineProduct(2000, 1000), ProductName: "Kart Kalem", ProductCurrency: "TRY", TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: 2000},
 		},
 	})
 	require.NoError(t, err)

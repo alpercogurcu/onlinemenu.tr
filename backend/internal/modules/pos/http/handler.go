@@ -83,6 +83,13 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		r.With(hwc.h.permit("pos.check.read")).Get("/checks/{id}", hwc.h.getCheck)
 		r.With(hwc.h.permit("pos.check.close"), httpx.Idempotency(hwc.cache)).Post("/checks/{id}/close", hwc.h.closeCheck)
 		r.With(hwc.h.permit("pos.check.cancel")).Post("/checks/{id}/cancel", hwc.h.cancelCheck)
+		// Masa taşıma / adisyon birleştirme / kalem taşıma (docs/pos-ux-spec.md
+		// §3c). All three carry Idempotency-Key: each mutates the money state
+		// of an adisyon (which table it is billed against, which check its
+		// lines hang off), and a retried tap must not merge twice.
+		r.With(hwc.h.permit("pos.check.transfer"), httpx.Idempotency(hwc.cache)).Post("/checks/{id}/transfer", hwc.h.transferCheck)
+		r.With(hwc.h.permit("pos.check.merge"), httpx.Idempotency(hwc.cache)).Post("/checks/{id}/merge", hwc.h.mergeCheck)
+		r.With(hwc.h.permit("pos.order.move_items"), httpx.Idempotency(hwc.cache)).Post("/checks/{id}/move-items", hwc.h.moveCheckItems)
 		r.With(hwc.h.permit("pos.order.read")).Get("/checks/{id}/orders", hwc.h.listOrdersByCheck)
 
 		r.With(hwc.h.permit("pos.order.place"), httpx.Idempotency(hwc.cache)).Post("/orders", hwc.h.placeOrder)
@@ -268,6 +275,112 @@ func (h *Handler) cancelCheck(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, toCheckResponse(c))
 }
 
+// transferCheck moves an open adisyon to another table. The table statuses
+// are flipped server-side inside the same transaction — the client cannot do
+// it, because POST /tables/{id}/status requires pos.table.manage and a
+// cashier does not hold it (docs/pos-ux-spec.md §3c).
+func (h *Handler) transferCheck(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		TableID uuid.UUID `json:"table_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.TableID == uuid.Nil {
+		http.Error(w, "table_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+
+	c, err := h.checks.Transfer(r.Context(), p.TenantID, p, id, req.TableID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toCheckResponse(c))
+}
+
+// mergeCheck folds source_check_id into the adisyon named in the path. The
+// path id is the SURVIVING check, matching every other /checks/{id}/... route
+// where {id} is the thing being acted on rather than the thing consumed.
+func (h *Handler) mergeCheck(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		SourceCheckID uuid.UUID `json:"source_check_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.SourceCheckID == uuid.Nil {
+		http.Error(w, "source_check_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+
+	c, err := h.checks.Merge(r.Context(), p.TenantID, p, id, req.SourceCheckID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toCheckResponse(c))
+}
+
+// moveCheckItems moves selected lines off the adisyon named in the path and
+// onto target_check_id. The response is the TARGET check (per
+// docs/pos-ux-spec.md §3c): that is the adisyon the cashier is about to look
+// at, and re-reading the source would tell them nothing they did not send.
+func (h *Handler) moveCheckItems(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		TargetCheckID uuid.UUID   `json:"target_check_id"`
+		OrderItemIDs  []uuid.UUID `json:"order_item_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.TargetCheckID == uuid.Nil {
+		http.Error(w, "target_check_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+	if len(req.OrderItemIDs) == 0 {
+		http.Error(w, "order_item_ids is required", http.StatusUnprocessableEntity)
+		return
+	}
+
+	c, err := h.checks.MoveItems(r.Context(), p.TenantID, p, id, req.TargetCheckID, req.OrderItemIDs)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toCheckResponse(c))
+}
+
 func (h *Handler) listOrdersByCheck(w http.ResponseWriter, r *http.Request) {
 	p, ok := requirePrincipal(w, r)
 	if !ok {
@@ -324,14 +437,15 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 	items := make([]domain.OrderItem, len(req.Items))
 	for i, it := range req.Items {
 		items[i] = domain.OrderItem{
-			ProductID:          it.ProductID,
-			ProductName:        it.ProductName,
-			ProductPriceAmount: it.ProductPriceAmount,
-			ProductCurrency:    it.ProductCurrency,
-			TaxRateBPS:         it.TaxRateBPS,
-			Quantity:           it.Quantity,
-			UnitPriceAmount:    it.UnitPriceAmount,
-			Note:               it.Note,
+			ProductID:           it.ProductID,
+			ProductName:         it.ProductName,
+			ProductPriceAmount:  it.ProductPriceAmount,
+			ProductCurrency:     it.ProductCurrency,
+			TaxRateBPS:          it.TaxRateBPS,
+			Quantity:            it.Quantity,
+			UnitPriceAmount:     it.UnitPriceAmount,
+			Note:                it.Note,
+			SelectedModifierIDs: it.ModifierIDs,
 		}
 		if items[i].ProductCurrency == "" {
 			items[i].ProductCurrency = "TRY"
@@ -771,6 +885,11 @@ type checkResponse struct {
 	OpenedAt   time.Time  `json:"opened_at"`
 	ClosedAt   *time.Time `json:"closed_at"`
 	Total      *int64     `json:"total,omitempty"`
+	// MergedIntoCheckID is present only on a check whose status is "merged"
+	// (docs/pos-ux-spec.md §3c): it names the adisyon that absorbed this
+	// one's orders, so the admin table can say where the money went instead
+	// of showing an unexplained terminal status.
+	MergedIntoCheckID *uuid.UUID `json:"merged_into_check_id,omitempty"`
 }
 
 func toCheckResponse(c domain.Check) checkResponse {
@@ -785,6 +904,8 @@ func toCheckResponse(c domain.Check) checkResponse {
 		Note:       c.Note,
 		OpenedAt:   c.OpenedAt,
 		ClosedAt:   c.ClosedAt,
+
+		MergedIntoCheckID: c.MergedIntoCheckID,
 	}
 }
 
@@ -922,15 +1043,31 @@ func toZonePlanResponse(entries []service.TablePlanEntry) []zonePlanResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// orderItemInput is one submitted POS order line.
+//
+// product_name / product_price_amount / product_currency / tax_rate_bps are
+// still accepted for wire compatibility with the deployed pos-desktop, but
+// they are no longer trusted: OrderService.Place overwrites all four from the
+// catalog. unit_price_amount IS still read — it is compared against the
+// catalog price plus the selected modifiers' deltas and a mismatch is
+// rejected with 422 price_mismatch, so a stale POS is told its total is wrong
+// instead of silently billing the customer the server's number.
+//
+// modifier_ids carries the options the cashier picked in the varyant dialog
+// (docs/pos-ux-spec.md §3a). It is validation input only — nothing persists
+// it, because the chosen options belong in `note` as readable text, which the
+// kitchen receipt already prints. Omitting it means "no options", which is
+// what every client sent before this field existed.
 type orderItemInput struct {
-	ProductID          uuid.UUID `json:"product_id"`
-	ProductName        string    `json:"product_name"`
-	ProductPriceAmount int64     `json:"product_price_amount"`
-	ProductCurrency    string    `json:"product_currency"`
-	TaxRateBPS         int       `json:"tax_rate_bps"`
-	Quantity           int       `json:"quantity"`
-	UnitPriceAmount    int64     `json:"unit_price_amount"`
-	Note               string    `json:"note"`
+	ProductID          uuid.UUID   `json:"product_id"`
+	ProductName        string      `json:"product_name"`
+	ProductPriceAmount int64       `json:"product_price_amount"`
+	ProductCurrency    string      `json:"product_currency"`
+	TaxRateBPS         int         `json:"tax_rate_bps"`
+	Quantity           int         `json:"quantity"`
+	UnitPriceAmount    int64       `json:"unit_price_amount"`
+	Note               string      `json:"note"`
+	ModifierIDs        []uuid.UUID `json:"modifier_ids"`
 }
 
 func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
@@ -962,6 +1099,16 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 		respondError(w, http.StatusConflict, codeCheckHasPayments, "check has payments; void them before cancelling")
 		return
 	}
+	if errors.Is(err, service.ErrPriceMismatch) {
+		respondError(w, http.StatusUnprocessableEntity, codePriceMismatch,
+			"line price does not match the catalog price for the selected options")
+		return
+	}
+	if errors.Is(err, service.ErrInvalidOrderLine) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidOrderLine,
+			"order line names a product or option that is not sellable")
+		return
+	}
 	if errors.Is(err, service.ErrInvalidOrderStatus) {
 		respondError(w, http.StatusUnprocessableEntity, codeInvalidStatus, "invalid order status")
 		return
@@ -980,6 +1127,26 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	}
 	if errors.Is(err, pub.ErrTableOccupied) {
 		respondError(w, http.StatusConflict, codeTableOccupied, "table is already occupied")
+		return
+	}
+	if errors.Is(err, service.ErrCheckPaymentsPresent) {
+		respondError(w, http.StatusConflict, codePaymentsPresent, "source check has payments; close it before merging")
+		return
+	}
+	if errors.Is(err, service.ErrItemAlreadyPaid) {
+		respondError(w, http.StatusConflict, codeItemAlreadyPaid, "moved items are already covered by a payment on this check")
+		return
+	}
+	if errors.Is(err, service.ErrSameCheck) {
+		respondError(w, http.StatusUnprocessableEntity, codeSameCheck, "source and target are the same check")
+		return
+	}
+	if errors.Is(err, service.ErrOrderItemNotFound) {
+		respondError(w, http.StatusUnprocessableEntity, codeOrderItemNotFound, "order item does not belong to this check")
+		return
+	}
+	if errors.Is(err, pub.ErrTableNotFound) {
+		respondError(w, http.StatusUnprocessableEntity, codeTableNotFound, "table not found")
 		return
 	}
 	if errors.Is(err, pub.ErrTableBranchMismatch) {
@@ -1020,6 +1187,13 @@ const (
 	codeCheckNotOpen         = "check_not_open"
 	codeCheckBranchMismatch  = "check_branch_mismatch"
 	codeCheckHasPayments     = "check_has_payments"
+	codePaymentsPresent      = "payments_present"
+	codeItemAlreadyPaid      = "item_already_paid"
+	codeSameCheck            = "same_check"
+	codeOrderItemNotFound    = "order_item_not_found"
+	codeTableNotFound        = "table_not_found"
+	codePriceMismatch        = "price_mismatch"
+	codeInvalidOrderLine     = "invalid_order_line"
 	codeInvalidStatus        = "invalid_status"
 	codeUseDedicatedEndpoint = "use_dedicated_endpoint"
 	codeInvalidBranchID      = "invalid_branch_id"

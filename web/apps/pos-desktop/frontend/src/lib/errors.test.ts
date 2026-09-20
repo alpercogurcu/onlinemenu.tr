@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeError, errorCode, isForbiddenError } from './errors'
+import { describeError, describeTableCleanError, errorCode, isForbiddenError } from './errors'
 
 // ADR-DATA-008 Join's 403 split (payment/http/cash_session_pin_handler.go):
 // session_scoped_principal and branch_forbidden used to both surface as the
@@ -92,5 +92,19 @@ describe('describeError — order validation', () => {
 
   it('explains an invalid order line', () => {
     expect(describeError(conflict(422, 'invalid_order_line'))).toBe('Sipariş satırlarından biri geçersiz — satırları kontrol edin.')
+  })
+})
+
+describe('describeTableCleanError', () => {
+  it('says who may free the table when the role lacks the permission', () => {
+    expect(
+      describeTableCleanError('apiclient: set table status: apiclient: unexpected status 403: forbidden'),
+    ).toBe('Bu masayı yalnız yönetici boşaltabilir.')
+  })
+
+  it('leaves every other failure to the ordinary messages', () => {
+    expect(describeTableCleanError('apiclient: set table status: apiclient: unexpected status 409: x')).toBe(
+      describeError('apiclient: set table status: apiclient: unexpected status 409: x'),
+    )
   })
 })

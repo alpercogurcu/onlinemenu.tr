@@ -189,3 +189,13 @@ export function describeError(err: unknown): string {
   }
   return raw
 }
+
+/**
+ * Message for a failed "masa temizlendi". A 403 here has one meaning — this role
+ * may not free a table — so it says that, instead of the generic branch/role
+ * text describeError gives every other 403.
+ */
+export function describeTableCleanError(err: unknown): string {
+  if (isForbiddenError(err)) return 'Bu masayı yalnız yönetici boşaltabilir.'
+  return describeError(err)
+}

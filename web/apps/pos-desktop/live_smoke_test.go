@@ -63,6 +63,10 @@ type live struct {
 	t      *testing.T
 	a      *App
 	branch string
+	base   string
+
+	managerToken string
+	created      []string
 }
 
 func (l *live) must(err error, what string) {
@@ -207,6 +211,7 @@ func (l *live) settleAndClose(checkID string) {
 		l.pay(checkID, "cash", remaining, shareLines(items, remaining))
 		l.settledTotal(checkID)
 	}
+	l.mustDeliver(checkID)
 	_, err := l.a.CloseCheck(checkID)
 	l.must(err, "CloseCheck "+checkID)
 }
@@ -215,6 +220,7 @@ func (l *live) openCheck(tableID, label string) CheckDTO {
 	l.t.Helper()
 	c, err := l.a.OpenCheck(l.branch, tableID, label, "")
 	l.must(err, "OpenCheck "+label)
+	l.created = append(l.created, c.ID)
 	// A failed run must not leave open adisyons behind on the dev branch.
 	l.t.Cleanup(func() {
 		got, err := l.a.GetCheck(c.ID)
@@ -239,6 +245,9 @@ func (l *live) settleAndCloseBestEffort(checkID string) {
 			return
 		}
 		l.settledTotalBestEffort(checkID)
+	}
+	if err := l.deliverOrders(checkID); err != nil {
+		l.t.Logf("cleanup: %v", err)
 	}
 	if _, err := l.a.CloseCheck(checkID); err != nil {
 		l.t.Logf("cleanup: close %s: %v", checkID, err)
@@ -293,7 +302,7 @@ func TestLiveSmoke(t *testing.T) {
 	if session.BranchID == "" {
 		t.Fatalf("session for %s has no branch", email)
 	}
-	l := &live{t: t, a: &App{ctx: ctx, api: api}, branch: session.BranchID}
+	l := &live{t: t, a: &App{ctx: ctx, api: api}, branch: session.BranchID, base: base}
 	t.Logf("logged in as %s, branch %s", email, l.branch)
 
 	// --- 1. cash session: use the open one or open (and later close) ours ---
@@ -474,6 +483,7 @@ func TestLiveSmoke(t *testing.T) {
 	if got := l.settledTotal(a.ID); got != total {
 		t.Fatalf("settled %d after the card payment, want the full %d", got, total)
 	}
+	l.mustDeliver(a.ID)
 	closed, err := l.a.CloseCheck(a.ID)
 	l.must(err, "CloseCheck A")
 	if closed.Status != "closed" {
@@ -510,12 +520,12 @@ func TestLiveSmoke(t *testing.T) {
 	}
 	free := freeTables()
 	if len(free) < 3 {
-		l.resetCleaningTables(base)
+		l.resetCleaningTables()
 		free = freeTables()
 	}
 	// Registered before the checks below so it runs after their cleanups (LIFO):
 	// the tables they close turn "cleaning" and would stay that way.
-	t.Cleanup(func() { l.resetCleaningTables(base) })
+	t.Cleanup(func() { l.resetCleaningTables() })
 	if len(free) < 3 {
 		t.Skipf("only %d free tables — transfer/merge/move need 3; steps 1-7 passed", len(free))
 	}
@@ -612,7 +622,114 @@ func TestLiveSmoke(t *testing.T) {
 
 	l.settleAndClose(y.ID)
 	l.settleAndClose(z.ID)
-	t.Log("live smoke passed")
+	l.assertNoLiveOrders()
+	t.Logf("live smoke passed (%d adisyons opened, every order delivered)", len(l.created))
+}
+
+// manager returns a bearer token for a shift manager (default
+// shift@dev.onlinemenu.tr, POS_LIVE_MANAGER_EMAIL to change). Some things the
+// counter role may not do — moving an order through the kitchen states, freeing
+// a table — are done by a manager in real life, and the smoke plays that part.
+func (l *live) manager() (string, error) {
+	if l.managerToken != "" {
+		return l.managerToken, nil
+	}
+	email := os.Getenv("POS_LIVE_MANAGER_EMAIL")
+	if email == "" {
+		email = "shift@dev.onlinemenu.tr"
+	}
+	store := &liveTokenStore{}
+	if _, err := apiclient.New(l.base, store).Login(context.Background(), email); err != nil {
+		return "", fmt.Errorf("log in as %s: %w", email, err)
+	}
+	token, err := store.Load()
+	if err != nil {
+		return "", err
+	}
+	l.managerToken = token
+	return token, nil
+}
+
+func (l *live) managerPost(path, body string) error {
+	token, err := l.manager()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, l.base+path, bytes.NewReader([]byte(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("POST %s answered %d", path, resp.StatusCode)
+	}
+	return nil
+}
+
+// deliverOrders walks every live order of the check through the kitchen states
+// (accept -> preparing -> ready -> delivered) as a manager. An adisyon closed
+// with orders still pending/preparing leaves them on the kitchen display as
+// phantom tickets, so nothing this smoke creates may be closed before this ran.
+func (l *live) deliverOrders(checkID string) error {
+	orders, err := l.a.ListCheckOrders(checkID)
+	if err != nil {
+		return fmt.Errorf("list orders of %s: %w", checkID, err)
+	}
+	for _, o := range orders {
+		var steps []string
+		switch o.Status {
+		case "pending":
+			steps = []string{"accept", "preparing", "ready", "delivered"}
+		case "accepted":
+			steps = []string{"preparing", "ready", "delivered"}
+		case "preparing":
+			steps = []string{"ready", "delivered"}
+		case "ready":
+			steps = []string{"delivered"}
+		}
+		for _, step := range steps {
+			var err error
+			if step == "accept" {
+				err = l.managerPost("/api/v1/pos/orders/"+o.ID+"/accept", "")
+			} else {
+				err = l.managerPost("/api/v1/pos/orders/"+o.ID+"/advance", `{"status":"`+step+`"}`)
+			}
+			if err != nil {
+				return fmt.Errorf("order %s (%s) -> %s: %w", o.ID, o.Status, step, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (l *live) mustDeliver(checkID string) {
+	l.t.Helper()
+	l.must(l.deliverOrders(checkID), "deliver the orders of "+checkID)
+}
+
+// assertNoLiveOrders fails when any check this run created still holds an order
+// the kitchen would show. A merged check's orders live on its target, so the
+// target's are covered too.
+func (l *live) assertNoLiveOrders() {
+	l.t.Helper()
+	for _, id := range l.created {
+		orders, err := l.a.ListCheckOrders(id)
+		if err != nil {
+			l.t.Errorf("read orders of %s: %v", id, err)
+			continue
+		}
+		for _, o := range orders {
+			if activeOrderStatuses[o.Status] {
+				l.t.Errorf("check %s still has a live order %s (%s) — it would show on the kitchen display as a phantom ticket", id, o.ID, o.Status)
+			}
+		}
+	}
 }
 
 // resetCleaningTables sets every table that is "cleaning" back to "empty" — ALL
@@ -624,19 +741,13 @@ func TestLiveSmoke(t *testing.T) {
 // this smoke would otherwise use up the branch's free tables. A shift manager
 // can, which is what the counter staff does in practice. Best effort: without
 // that login the transfer/merge/move steps skip when too few tables are free.
-func (l *live) resetCleaningTables(base string) {
+func (l *live) resetCleaningTables() {
 	l.t.Helper()
-	email := os.Getenv("POS_LIVE_MANAGER_EMAIL")
-	if email == "" {
-		email = "shift@dev.onlinemenu.tr"
-	}
-	store := &liveTokenStore{}
-	mgr := apiclient.New(base, store)
-	if _, err := mgr.Login(context.Background(), email); err != nil {
-		l.t.Logf("cannot log in as %s to free 'cleaning' tables: %v", email, err)
+	token, err := l.manager()
+	if err != nil {
+		l.t.Logf("cannot act as a manager to free 'cleaning' tables: %v", err)
 		return
 	}
-	token, _ := store.Load()
 	statuses, err := l.tableStatusesBestEffort()
 	if err != nil {
 		l.t.Logf("cannot list tables to free 'cleaning' ones: %v", err)
@@ -646,7 +757,7 @@ func (l *live) resetCleaningTables(base string) {
 		if status != "cleaning" {
 			continue
 		}
-		req, err := http.NewRequest(http.MethodPost, base+"/api/v1/pos/tables/"+id+"/status", bytes.NewReader([]byte(`{"status":"empty"}`)))
+		req, err := http.NewRequest(http.MethodPost, l.base+"/api/v1/pos/tables/"+id+"/status", bytes.NewReader([]byte(`{"status":"empty"}`)))
 		if err != nil {
 			continue
 		}

@@ -228,6 +228,15 @@ func (a *App) ListTables(branchID string) ([]ZonePlanDTO, error) {
 	return out, nil
 }
 
+// SetTableStatus changes a table's floor-plan status. The counter uses it to
+// free a "cleaning" table (status "empty") once it has been wiped. The server
+// decides who may: a role without the permission gets a 403, which the
+// frontend words for the cashier.
+func (a *App) SetTableStatus(tableID, status string) error {
+	_, err := a.api.SetTableStatus(a.ctx, tableID, status)
+	return err
+}
+
 // OpenCheck opens a new check, optionally for a table selected from the
 // masa planı screen (tableID) — pass "" for masasız satış (e.g. "Paket
 // servis"), which leaves the check's table unset. branchID should come from

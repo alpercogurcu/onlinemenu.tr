@@ -8,6 +8,8 @@ type TablePlanProps = {
   errorMessage: string
   onSelectAvailable: (table: main.TableDTO) => void
   onSelectOccupied: (checkId: string) => void
+  /** A wiped table is freed with one tap (it turns "cleaning" when its adisyon closes). */
+  onCleanTable: (table: main.TableDTO) => void
   /** Checks with a payment awaiting its fiscal record — the table holding one
    * gets a warn indicator (requirement 5). */
   awaitingFiscalCheckIds: ReadonlySet<string>
@@ -38,8 +40,9 @@ export type TargetSelection = {
  * Tap behavior (see App.tsx's handleSelectTable/handleSelectCheck):
  *  - empty/reserved  -> open a new check against this table (onSelectAvailable)
  *  - occupied        -> jump to the check already open on it (onSelectOccupied)
- *  - cleaning        -> not tappable (disabled, both visually and via the
- *                       button's disabled attribute)
+ *  - cleaning        -> one tap frees it ("Temizlendi → boşalt", onCleanTable):
+ *                       closing an adisyon leaves its table "cleaning", and the
+ *                       counter must be able to reopen it once it is wiped
  */
 export function TablePlan(props: TablePlanProps) {
   const { target } = props
@@ -67,6 +70,7 @@ function TablePlanBody({
   errorMessage,
   onSelectAvailable,
   onSelectOccupied,
+  onCleanTable,
   awaitingFiscalCheckIds,
   target,
 }: TablePlanProps) {
@@ -108,6 +112,7 @@ function TablePlanBody({
                 table={table}
                 onSelectAvailable={onSelectAvailable}
                 onSelectOccupied={onSelectOccupied}
+                onCleanTable={onCleanTable}
                 target={target}
                 awaitingFiscal={Boolean(table.active_check_id && awaitingFiscalCheckIds.has(table.active_check_id))}
               />
@@ -123,12 +128,14 @@ function TableCard({
   table,
   onSelectAvailable,
   onSelectOccupied,
+  onCleanTable,
   awaitingFiscal,
   target,
 }: {
   table: main.TableDTO
   onSelectAvailable: (table: main.TableDTO) => void
   onSelectOccupied: (checkId: string) => void
+  onCleanTable: (table: main.TableDTO) => void
   awaitingFiscal: boolean
   target?: TargetSelection
 }) {
@@ -150,7 +157,10 @@ function TableCard({
       if (pickable) target.onPick(table)
       return
     }
-    if (isCleaning) return
+    if (isCleaning) {
+      onCleanTable(table)
+      return
+    }
     if (isOccupied) {
       if (table.active_check_id) onSelectOccupied(table.active_check_id)
       return
@@ -161,7 +171,7 @@ function TableCard({
   return (
     <button
       type="button"
-      disabled={target ? !pickable : isCleaning}
+      disabled={target ? !pickable : false}
       onClick={handleClick}
       className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-md border px-2 py-2 text-center transition-colors disabled:cursor-not-allowed ${variant} ${
         target ? (pickable ? 'ring-2 ring-amber' : 'opacity-40') : ''
@@ -176,7 +186,12 @@ function TableCard({
       <span className={`block text-xs ${isOccupied ? '' : 'opacity-80'}`}>{table.capacity} kişi</span>
       {isOccupied && <span className="block text-[10px] uppercase tracking-wide">Dolu</span>}
       {isReserved && <span className="block text-[10px] uppercase tracking-wide">Rezerve</span>}
-      {isCleaning && <span className="block text-[10px] uppercase tracking-wide">Temizlik</span>}
+      {isCleaning && (
+        <>
+          <span className="block text-[10px] uppercase tracking-wide">Temizlik</span>
+          <span className="block text-[10px] font-semibold text-ink">Temizlendi → boşalt</span>
+        </>
+      )}
     </button>
   )
 }

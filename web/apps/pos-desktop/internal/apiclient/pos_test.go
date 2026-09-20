@@ -973,3 +973,47 @@ func TestClient_CheckMoves_SurfaceTheMachineReadableConflictCode(t *testing.T) {
 		t.Fatalf("err = %v — the frontend maps the Turkish message from this code, so it must survive in the error text", err)
 	}
 }
+
+func TestClient_SetTableStatus_PostsTheStatusToTheTableRoute(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/pos/tables/tbl-1/status" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"tbl-1","status":"empty"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	table, err := c.SetTableStatus(t.Context(), "tbl-1", "empty")
+	if err != nil {
+		t.Fatalf("SetTableStatus: %v", err)
+	}
+	if got["status"] != "empty" || table.Status != "empty" {
+		t.Fatalf("sent %v, decoded %+v", got, table)
+	}
+}
+
+func TestClient_SetTableStatus_RejectsMissingArgumentsAndKeepsTheForbiddenStatus(t *testing.T) {
+	c := New("http://unused.invalid", &memStore{token: "tok", saved: true})
+	if _, err := c.SetTableStatus(t.Context(), "", "empty"); err == nil {
+		t.Fatal("expected an error for a missing table id")
+	}
+	if _, err := c.SetTableStatus(t.Context(), "t", ""); err == nil {
+		t.Fatal("expected an error for a missing status")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	c = New(srv.URL, &memStore{token: "tok", saved: true})
+	_, err := c.SetTableStatus(t.Context(), "t", "empty")
+	if err == nil || !strings.Contains(err.Error(), "status 403") {
+		t.Fatalf("err = %v — the frontend tells 403 (only a manager may free it) from other failures by this text", err)
+	}
+}

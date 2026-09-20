@@ -312,6 +312,23 @@ func (c *Client) MoveCheckItems(ctx context.Context, sourceCheckID, targetCheckI
 
 // --- Table plan (masa planı, Sprint-5 Wave 2) ---
 
+// SetTableStatus calls POST /api/v1/pos/tables/{id}/status. The counter uses it
+// for one thing: turning a "cleaning" table (what closing an adisyon leaves
+// behind) back to "empty" once it is wiped. Whether the caller's role may do
+// that is the server's decision — a 403 stays in the error text ("status 403")
+// so the frontend can say who may.
+func (c *Client) SetTableStatus(ctx context.Context, tableID, status string) (Table, error) {
+	if tableID == "" || status == "" {
+		return Table{}, fmt.Errorf("apiclient: set table status: table id and status are required")
+	}
+	var out Table
+	path := fmt.Sprintf("/api/v1/pos/tables/%s/status", url.PathEscape(tableID))
+	if err := c.do(ctx, http.MethodPost, path, map[string]string{"status": status}, &out); err != nil {
+		return Table{}, fmt.Errorf("apiclient: set table status: %w", err)
+	}
+	return out, nil
+}
+
 // Table mirrors pos/http tableResponse — one floor-plan row: the table
 // itself plus the id of the check currently open against it (nil when the
 // table is not occupied). LayoutPosition is decoded (kept 1:1 with the

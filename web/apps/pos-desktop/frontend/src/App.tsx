@@ -22,6 +22,7 @@ import {
   PrintReceipt,
   RegisterPayment,
   SelectKeycloakContext,
+  SetTableStatus,
   TransferCheck,
   TryRestoreSession,
 } from '../wailsjs/go/main/App'
@@ -78,7 +79,7 @@ import {
   type LineOptions,
   type PendingLine,
 } from './lib/cart'
-import { describeError } from './lib/errors'
+import { describeError, describeTableCleanError } from './lib/errors'
 import {
   addKitchenFailure,
   applyKitchenPrintResult,
@@ -724,6 +725,19 @@ function App() {
   // the old free-text-table path's replacement now that table-bound
   // adisyon açma goes through TablePlan. tableID "" leaves the check's table
   // unset, matching the pre-Wave-2 TableLabel-only OpenCheck behavior.
+  // A table turns "cleaning" when its adisyon closes; one tap on it says it has
+  // been wiped and reopens it. No confirmation: it is a status flip with nothing
+  // to lose, and the counter does it after every table.
+  async function handleCleanTable(table: main.TableDTO) {
+    setReceiptError('')
+    try {
+      await SetTableStatus(table.id, 'empty')
+    } catch (err) {
+      setReceiptError(describeTableCleanError(err))
+    }
+    refreshTables(session?.branch_id)
+  }
+
   async function handleOpenTakeaway() {
     if (!session?.branch_id) return
     setReceiptError('')
@@ -1284,6 +1298,7 @@ function App() {
             errorMessage={tablesError}
             onSelectAvailable={handlePickTarget}
             onSelectOccupied={() => undefined}
+            onCleanTable={handleCleanTable}
             awaitingFiscalCheckIds={awaitingFiscalCheckIds}
             target={{
               kind: targetPick,
@@ -1329,6 +1344,7 @@ function App() {
             errorMessage={tablesError}
             onSelectAvailable={handleSelectTable}
             onSelectOccupied={handleSelectCheck}
+            onCleanTable={handleCleanTable}
             awaitingFiscalCheckIds={awaitingFiscalCheckIds}
           />
         )}

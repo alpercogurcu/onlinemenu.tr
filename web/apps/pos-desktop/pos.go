@@ -698,34 +698,3 @@ func toOrderDTO(o apiclient.Order) OrderDTO {
 // because toCheckDTO/toOrderDTO format explicitly rather than relying on
 // domain.Check/Order's zero-value handling upstream.
 const rfc3339Millis = "2006-01-02T15:04:05.000Z07:00"
-
-// TransferCheck moves an open adisyon to another (free) table. It answers the
-// moved check so the frontend can show the new table label.
-func (a *App) TransferCheck(checkID, tableID string) (CheckDTO, error) {
-	c, err := a.api.TransferCheck(a.ctx, checkID, tableID)
-	if err != nil {
-		return CheckDTO{}, err
-	}
-	return toCheckDTO(c), nil
-}
-
-// MergeChecks folds sourceCheckID into targetCheckID: the target survives, the
-// source becomes "merged". A source that has any payment is refused by the
-// server (409 payments_present). It answers the surviving (target) check.
-func (a *App) MergeChecks(targetCheckID, sourceCheckID string) (CheckDTO, error) {
-	c, err := a.api.MergeChecks(a.ctx, targetCheckID, sourceCheckID)
-	if err != nil {
-		return CheckDTO{}, err
-	}
-	return toCheckDTO(c), nil
-}
-
-// MoveCheckItems moves the given order items from sourceCheckID onto
-// targetCheckID and answers the TARGET check.
-func (a *App) MoveCheckItems(sourceCheckID, targetCheckID string, orderItemIDs []string) (CheckDTO, error) {
-	c, err := a.api.MoveCheckItems(a.ctx, sourceCheckID, targetCheckID, orderItemIDs)
-	if err != nil {
-		return CheckDTO{}, err
-	}
-	return toCheckDTO(c), nil
-}

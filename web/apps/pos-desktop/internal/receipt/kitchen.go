@@ -183,3 +183,88 @@ func wrap(prefix, text string, width int) []string {
 	}
 	return lines
 }
+
+// NoticeKind is what happened to an adisyon that the kitchen needs to know
+// about: a check that changed tables, two that were merged, or items that moved
+// to another table (docs/pos-ux-spec.md §3c). The cook must not send a dish to
+// a table that no longer holds its order.
+type NoticeKind string
+
+const (
+	NoticeTransfer  NoticeKind = "transfer"
+	NoticeMerge     NoticeKind = "merge"
+	NoticeMoveItems NoticeKind = "move-items"
+)
+
+// NoticeTitle is the big header line of a notice.
+func NoticeTitle(kind NoticeKind) string {
+	switch kind {
+	case NoticeTransfer:
+		return "MASA TAŞINDI"
+	case NoticeMerge:
+		return "BİRLEŞTİ"
+	case NoticeMoveItems:
+		return "KALEM TAŞINDI"
+	default:
+		return kitchenTitle
+	}
+}
+
+// BuildKitchenNotice assembles the ESC/POS job for an information slip: the
+// action in a big header, both table labels in double size ("Masa 3" then
+// "-> Masa 7"), the time, and — for moved items — the item lines exactly as on a
+// kitchen ticket. Like the ticket it carries no prices, wraps rather than
+// truncates, and strips control characters from every piece of free text.
+//
+// The arrow is ASCII on purpose: CP857 has no "→", and an unencodable rune
+// prints as "?", which on a slip that says where a dish goes would be a defect.
+func BuildKitchenNotice(cfg Config, kind NoticeKind, from, to string, at time.Time, items []KitchenItem) []byte {
+	width := normalizeWidth(cfg.Width)
+	cols := int(width)
+
+	b := escpos.NewBuilder(width).Init()
+
+	b.Align(escpos.AlignCenter).SetMode(true, true)
+	for _, line := range wrap("", NoticeTitle(kind), cols/2) {
+		b.Line(line)
+	}
+
+	b.Align(escpos.AlignLeft)
+	for _, line := range wrap("", noticeLabel(from), cols/2) {
+		b.Line(line)
+	}
+	for _, line := range wrap("-> ", noticeLabel(to), cols/2) {
+		b.Line(line)
+	}
+	b.SetMode(false, false)
+
+	b.Line(at.Local().Format("15:04"))
+	b.Divider()
+
+	if len(items) > 0 {
+		for _, it := range items {
+			b.SetMode(true, false)
+			for _, line := range wrap(itemPrefix(it.Quantity), sanitize(it.ProductName), cols) {
+				b.Line(line)
+			}
+			b.SetMode(false, false)
+			if note := sanitize(it.Note); note != "" {
+				for _, line := range wrap(noteMarker, note, cols) {
+					b.Line(line)
+				}
+			}
+		}
+		b.Divider()
+	}
+
+	b.Feed(1)
+	b.Cut(escpos.CutFull, 3)
+	return b.Bytes()
+}
+
+func noticeLabel(label string) string {
+	if l := sanitize(label); l != "" {
+		return l
+	}
+	return "Adisyon"
+}

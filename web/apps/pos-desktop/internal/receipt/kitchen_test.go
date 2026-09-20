@@ -447,3 +447,122 @@ func TestBuildKitchenTicket_PrintsSelectedOptionsUnderTheItem(t *testing.T) {
 		t.Errorf("first note line = %q, want it marked with %q", texts[itemAt+1], "    > Acılı")
 	}
 }
+
+func noticeLines(t *testing.T, kind NoticeKind, from, to string, items []KitchenItem, width escpos.Width) ([]printedLine, int) {
+	t.Helper()
+	at := time.Date(2026, 9, 20, 14, 7, 0, 0, time.Local)
+	return decodeJob(t, BuildKitchenNotice(Config{Width: width}, kind, from, to, at, items))
+}
+
+func TestBuildKitchenNotice_TitleNamesTheAction(t *testing.T) {
+	tests := []struct {
+		kind  NoticeKind
+		title string
+	}{
+		{NoticeTransfer, "MASA TAŞINDI"},
+		{NoticeMerge, "BİRLEŞTİ"},
+		{NoticeMoveItems, "KALEM TAŞINDI"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.kind), func(t *testing.T) {
+			lines, cuts := noticeLines(t, tt.kind, "Masa 3", "Masa 7", nil, escpos.Width48)
+			if cuts != 1 {
+				t.Fatalf("cuts = %d, want 1", cuts)
+			}
+			first := lines[0]
+			if string(first.text) != string(escpos.EncodeCP857(tt.title)) {
+				t.Fatalf("first line = %q, want the title %q", first.text, tt.title)
+			}
+			if !first.bold || !first.double {
+				t.Fatalf("the title must be bold and double size: %+v", first)
+			}
+		})
+	}
+}
+
+func TestBuildKitchenNotice_ShowsBothTablesInDoubleSizeAndTheTime(t *testing.T) {
+	lines, _ := noticeLines(t, NoticeTransfer, "Masa 3", "Masa 7", nil, escpos.Width48)
+	texts := lineTexts(lines)
+
+	var fromLine, toLine, timeLine = -1, -1, -1
+	for i, l := range lines {
+		switch {
+		case string(l.text) == "Masa 3" && l.double:
+			fromLine = i
+		case string(l.text) == "-> Masa 7" && l.double:
+			toLine = i
+		case string(l.text) == "14:07" && !l.double:
+			timeLine = i
+		}
+	}
+	if fromLine < 0 || toLine < 0 || timeLine < 0 {
+		t.Fatalf("missing from/to/time lines in %q", texts)
+	}
+	if !(fromLine < toLine && toLine < timeLine) {
+		t.Fatalf("order must be from, to, time: %d %d %d", fromLine, toLine, timeLine)
+	}
+}
+
+func TestBuildKitchenNotice_ListsMovedItemsWithNotesAndNoPrices(t *testing.T) {
+	lines, _ := noticeLines(t, NoticeMoveItems, "Masa 3", "Masa 7", []KitchenItem{
+		{ProductName: "Lahmacun", Quantity: 2, Note: "Acılı | Lavaş(+5)"},
+		{ProductName: "Ayran", Quantity: 1},
+	}, escpos.Width48)
+	texts := strings.Join(lineTexts(lines), "\n")
+
+	for _, want := range []string{"2x  Lahmacun", "1x  Ayran", "> Acılı | Lavaş(+5)"} {
+		if !strings.Contains(texts, string(escpos.EncodeCP857(want))) {
+			t.Errorf("missing %q in\n%s", want, texts)
+		}
+	}
+	for _, l := range lines {
+		if strings.HasPrefix(string(l.text), "2x") && (!l.bold || l.double) {
+			t.Errorf("an item line must be bold, normal size: %+v", l)
+		}
+	}
+	if strings.Contains(texts, "₺") || strings.Contains(texts, "TL") {
+		t.Errorf("a kitchen notice must not carry prices:\n%s", texts)
+	}
+}
+
+func TestBuildKitchenNotice_TransferAndMergeHaveNoItemSection(t *testing.T) {
+	for _, kind := range []NoticeKind{NoticeTransfer, NoticeMerge} {
+		lines, _ := noticeLines(t, kind, "Masa 3", "Masa 2", nil, escpos.Width48)
+		for _, l := range lines {
+			if strings.Contains(string(l.text), "x  ") {
+				t.Errorf("%s: unexpected item line %q", kind, l.text)
+			}
+		}
+	}
+}
+
+func TestBuildKitchenNotice_FitsPaperWidth(t *testing.T) {
+	long := "Bahçe Katı Büyük Aile Masası Numara Yirmi Üç"
+	for _, width := range []escpos.Width{escpos.Width32, escpos.Width48} {
+		lines, _ := noticeLines(t, NoticeMoveItems, long, long, []KitchenItem{
+			{ProductName: "Karışık Izgara Büyük Boy Özel Soslu Acılı Porsiyon", Quantity: 3, Note: strings.Repeat("çok uzun bir not ", 8)},
+		}, width)
+		for _, l := range lines {
+			if l.columns() > int(width) {
+				t.Errorf("width %d: line %q takes %d columns", width, l.text, l.columns())
+			}
+		}
+	}
+}
+
+func TestBuildKitchenNotice_StripsControlCharactersFromLabels(t *testing.T) {
+	// A table label is staff-typed free text ("Paket servis" etc.); it must not
+	// be able to inject printer commands (cut, drawer pulse) into the job.
+	job := BuildKitchenNotice(Config{Width: escpos.Width48}, NoticeTransfer, "Masa\x1b@ 3", "Masa\x1dV\x00 7", time.Now(), nil)
+	if _, cuts := decodeJob(t, job); cuts != 1 {
+		t.Fatalf("cuts = %d, want exactly the one the builder emits", cuts)
+	}
+}
+
+func TestBuildKitchenNotice_EmptyLabelsFallBackToAdisyon(t *testing.T) {
+	lines, _ := noticeLines(t, NoticeTransfer, "", "", nil, escpos.Width48)
+	texts := strings.Join(lineTexts(lines), "\n")
+	if !strings.Contains(texts, "Adisyon") || !strings.Contains(texts, "-> Adisyon") {
+		t.Fatalf("blank labels must still read as a notice:\n%s", texts)
+	}
+}

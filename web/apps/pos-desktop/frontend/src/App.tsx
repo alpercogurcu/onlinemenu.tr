@@ -17,6 +17,7 @@ import {
   OpenCheck,
   PlaceOrder,
   PrinterStatus,
+  PrintKitchenNotice,
   PrintKitchenTicket,
   PrintReceipt,
   RegisterPayment,
@@ -59,6 +60,12 @@ import {
   type TrackedPayment,
 } from './lib/fiscalStatus'
 import { cashSessionBannerKind } from './lib/cashSession'
+import {
+  addNoticeFailure,
+  describeNoticeFailure,
+  removeNoticeFailure,
+  type NoticeFailure,
+} from './lib/kitchenNotice'
 import { confirmMerge, moveNotice, targetPrompt, type TargetKind } from './lib/checkActions'
 import { itemsPaidBy, payableItems } from './lib/paymentPlan'
 import {
@@ -117,6 +124,9 @@ function App() {
   const [mergeTarget, setMergeTarget] = useState<main.TableDTO | null>(null)
   const [checkActionBusy, setCheckActionBusy] = useState(false)
   const [notice, setNotice] = useState('')
+  // Kitchen information slips (transfer/merge/move) that did not print. The move
+  // itself stands; these stay visible until reprinted or dismissed.
+  const [noticeFailures, setNoticeFailures] = useState<NoticeFailure[]>([])
   const [paymentSession, setPaymentSession] = useState<{ id: number; initial: PaymentInitial | null } | null>(null)
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
 
@@ -936,6 +946,24 @@ function App() {
     }
   }
 
+  function recordMoveResult(result: main.CheckMoveResultDTO) {
+    const message = result.notice_error
+    if (!message) return
+    setNoticeFailures((prev) =>
+      addNoticeFailure(prev, { id: `${Date.now()}-${prev.length}`, notice: result.notice ?? null, message }),
+    )
+  }
+
+  async function retryNotice(failure: NoticeFailure) {
+    if (!failure.notice) return
+    try {
+      await PrintKitchenNotice(main.KitchenNoticeDTO.createFrom(failure.notice))
+      setNoticeFailures((prev) => removeNoticeFailure(prev, failure.id))
+    } catch (err) {
+      setNoticeFailures((prev) => addNoticeFailure(prev, { ...failure, message: describeError(err) }))
+    }
+  }
+
   function handlePickTarget(table: main.TableDTO) {
     if (!selectedCheck || !session?.branch_id || checkActionBusy) return
     const branchId = session.branch_id
@@ -943,7 +971,7 @@ function App() {
     switch (targetPick) {
       case 'transfer':
         void runCheckAction(async () => {
-          await TransferCheck(source.id, table.id)
+          recordMoveResult(await TransferCheck(source.id, table.id))
           setTargetPick(null)
           refreshOpenChecks()
           refreshTables(branchId)
@@ -966,7 +994,7 @@ function App() {
             openedHere = true
           }
           try {
-            await MoveCheckItems(source.id, targetCheckId, itemIds)
+            recordMoveResult(await MoveCheckItems(source.id, targetCheckId, itemIds))
           } catch (err) {
             // The POS has no way to cancel the adisyon it just opened, and a
             // colleague may have settled the items in the meantime. Say so
@@ -998,7 +1026,7 @@ function App() {
     const source = selectedCheck
     const targetCheckId = table.active_check_id
     void runCheckAction(async () => {
-      await MergeChecks(targetCheckId, source.id)
+      recordMoveResult(await MergeChecks(targetCheckId, source.id))
       setMergeTarget(null)
       setTargetPick(null)
       refreshOpenChecks()
@@ -1125,6 +1153,38 @@ function App() {
             <button
               type="button"
               onClick={() => setKitchenFailures((prev) => removeKitchenFailure(prev, failure.orderId))}
+              className="min-h-12 rounded px-3 text-ink-dim"
+            >
+              Yoksay
+            </button>
+          </span>
+        </div>
+      ),
+    })),
+    ...noticeFailures.map((failure) => ({
+      key: `notice-${failure.id}`,
+      // Bilgi fişi (masa taşındı / birleşti / kalem taşındı) mutfağa ulaşmadı:
+      // taşıma geri alınmaz, ama aşçı yemeği eski masaya çıkarabilir — bu yüzden
+      // yeniden yazdırılana ya da bilinçli "Yoksay"a kadar görünür kalır.
+      node: (
+        <div
+          role="alert"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-line border-l-4 border-l-warn bg-warn/10 px-4 py-1 text-sm text-ink"
+        >
+          <span>{describeNoticeFailure(failure)}</span>
+          <span className="flex shrink-0 items-center gap-2">
+            {failure.notice && (
+              <button
+                type="button"
+                onClick={() => void retryNotice(failure)}
+                className="min-h-12 rounded bg-amber px-3 font-semibold text-amber-ink"
+              >
+                Yeniden yazdır
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setNoticeFailures((prev) => removeNoticeFailure(prev, failure.id))}
               className="min-h-12 rounded px-3 text-ink-dim"
             >
               Yoksay

@@ -529,8 +529,12 @@ func TestLiveSmoke(t *testing.T) {
 	l.step("transfer moves the adisyon and flips both tables in one go", func(t *testing.T) {
 		moved, err := l.a.TransferCheck(x.ID, t3.ID)
 		l.must(err, "TransferCheck")
-		if moved.TableLabel != t3.Name {
-			t.Fatalf("table label %q after transfer, want %q", moved.TableLabel, t3.Name)
+		if moved.Check.TableLabel != t3.Name {
+			t.Fatalf("table label %q after transfer, want %q", moved.Check.TableLabel, t3.Name)
+		}
+		// X has an order the kitchen is still working on, so a notice is due.
+		if moved.Notice == nil || moved.Notice.Kind != "transfer" || moved.Notice.From != t1.Name || moved.Notice.To != t3.Name {
+			t.Fatalf("transfer notice = %+v, want transfer %q -> %q", moved.Notice, t1.Name, t3.Name)
 		}
 		status := l.tableStatuses()
 		if status[t1.ID] != "empty" || status[t3.ID] != "occupied" {
@@ -538,8 +542,8 @@ func TestLiveSmoke(t *testing.T) {
 		}
 		again, err := l.a.TransferCheck(x.ID, t3.ID)
 		l.must(err, "TransferCheck to the same table again")
-		if again.ID != x.ID {
-			t.Fatalf("repeat transfer answered %q", again.ID)
+		if again.Check.ID != x.ID {
+			t.Fatalf("repeat transfer answered %q", again.Check.ID)
 		}
 		_, err = l.a.TransferCheck(y.ID, t3.ID)
 		l.wantErr(err, "table_occupied", "TransferCheck onto an occupied table")
@@ -556,8 +560,8 @@ func TestLiveSmoke(t *testing.T) {
 		}
 		target, err := l.a.MoveCheckItems(z.ID, y.ID, []string{moveID})
 		l.must(err, "MoveCheckItems")
-		if target.ID != y.ID {
-			t.Fatalf("move-items answered %q, want the target %q", target.ID, y.ID)
+		if target.Check.ID != y.ID {
+			t.Fatalf("move-items answered %q, want the target %q", target.Check.ID, y.ID)
 		}
 		if n := len(l.items(y.ID)); n != 2 {
 			t.Fatalf("target has %d items after the move, want 2", n)
@@ -583,8 +587,8 @@ func TestLiveSmoke(t *testing.T) {
 		before := len(l.items(y.ID)) + len(l.items(x.ID))
 		merged, err := l.a.MergeChecks(y.ID, x.ID)
 		l.must(err, "MergeChecks")
-		if merged.ID != y.ID {
-			t.Fatalf("merge answered %q, want the surviving %q", merged.ID, y.ID)
+		if merged.Check.ID != y.ID {
+			t.Fatalf("merge answered %q, want the surviving %q", merged.Check.ID, y.ID)
 		}
 		if n := len(l.items(y.ID)); n != before {
 			t.Fatalf("target has %d items after the merge, want %d", n, before)

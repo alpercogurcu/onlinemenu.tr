@@ -748,7 +748,7 @@ func spineProduct(unitPrice int64, taxBPS int) uuid.UUID {
 	return id
 }
 
-func (spinePricer) PriceStaffCart(_ context.Context, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
+func (spinePricer) PriceStaffCart(_ context.Context, _, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
 	out := make([]catalogpub.PricedLine, len(lines))
 	for i, l := range lines {
 		row, ok := spineProducts.Load(l.ProductID)

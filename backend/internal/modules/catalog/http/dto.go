@@ -57,6 +57,11 @@ type productResponse struct {
 	SourceStockItemID *uuid.UUID `json:"source_stock_item_id,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// BranchPriceOverridden says PriceAmount is this branch's own price, not
+	// the tenant's (ADR-DATA-009). Always false unless the request named a
+	// branch_id; the field is always present so a client never has to tell
+	// "absent" from "false".
+	BranchPriceOverridden bool `json:"branch_price_overridden"`
 }
 
 func toProductResponse(p domain.Product) productResponse {
@@ -78,6 +83,15 @@ func toProductResponse(p domain.Product) productResponse {
 		CreatedAt:         p.CreatedAt,
 		UpdatedAt:         p.UpdatedAt,
 	}
+}
+
+// toBranchProductResponse is toProductResponse plus the branch flag. The
+// embedded Product already carries the EFFECTIVE price, so a caller that
+// ignores the flag still shows and bills the right number.
+func toBranchProductResponse(bp domain.BranchProduct) productResponse {
+	out := toProductResponse(bp.Product)
+	out.BranchPriceOverridden = bp.BranchPriceOverridden
+	return out
 }
 
 // --- ModifierGroup ---

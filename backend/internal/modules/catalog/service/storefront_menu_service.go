@@ -161,16 +161,21 @@ func (s *StorefrontMenuService) PriceCart(ctx context.Context, tenantID, branchI
 }
 
 // PriceStaffCart re-derives a POS (staff) order's line prices from the
-// product catalog itself (pub.StaffPricer).
+// product catalog itself, as the given branch sells it (pub.StaffPricer).
 //
 // It differs from PriceCart in exactly one place — the base price comes from
 // products.price_amount rather than the branch's menu-resolved price — and
 // runs every other rule through the same priceLines body, because those rules
 // are the security-relevant half and a second copy would drift. See
 // pub.StaffPricer for why the two bases differ.
-func (s *StorefrontMenuService) PriceStaffCart(ctx context.Context, tenantID uuid.UUID, lines []pub.StaffCartLine) ([]pub.PricedLine, error) {
+//
+// branchID reaches the SQL rather than being applied afterwards, so the
+// branch override (ADR-DATA-009) is resolved in the same query that reads the
+// list price: a two-step "read tenant price, then patch it" would be a second
+// place where the effective price is decided.
+func (s *StorefrontMenuService) PriceStaffCart(ctx context.Context, tenantID, branchID uuid.UUID, lines []pub.StaffCartLine) ([]pub.PricedLine, error) {
 	return s.priceLines(ctx, tenantID, lines, func(tx pgx.Tx, productIDs []uuid.UUID) (map[uuid.UUID]repo.PricedProduct, error) {
-		return s.repo.PriceCatalogProducts(ctx, tx, productIDs)
+		return s.repo.PriceCatalogProducts(ctx, tx, branchID, productIDs)
 	}, "price staff cart")
 }
 

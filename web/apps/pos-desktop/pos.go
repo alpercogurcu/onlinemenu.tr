@@ -166,7 +166,7 @@ func (a *App) ListCategories() ([]CategoryDTO, error) {
 
 // ListProducts returns the products in one category for the product grid.
 func (a *App) ListProducts(categoryID string) ([]ProductDTO, error) {
-	products, err := a.api.ListProducts(a.ctx, categoryID)
+	products, err := a.api.ListProducts(a.ctx, categoryID, a.api.CurrentBranchID())
 	if err != nil {
 		return nil, err
 	}

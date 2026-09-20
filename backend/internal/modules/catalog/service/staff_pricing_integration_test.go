@@ -23,7 +23,7 @@ import (
 func TestPriceStaffCart_AppliesModifierDeltasOnce(t *testing.T) {
 	f := seedPricingFixture(t)
 
-	priced, err := newPricingService().PriceStaffCart(context.Background(), f.tenantID,
+	priced, err := newPricingService().PriceStaffCart(context.Background(), f.tenantID, f.branchID,
 		[]pub.StaffCartLine{{ProductID: f.productID, Quantity: 2, ModifierIDs: []uuid.UUID{f.extraID, f.sizeLarge}}})
 	require.NoError(t, err)
 	require.Len(t, priced, 1)
@@ -55,7 +55,7 @@ func TestPriceStaffCart_PricesProductsWithNoMenu(t *testing.T) {
 
 	svc := newPricingService()
 
-	priced, err := svc.PriceStaffCart(ctx, tenantID, []pub.StaffCartLine{{ProductID: productID, Quantity: 1}})
+	priced, err := svc.PriceStaffCart(ctx, tenantID, uuid.Nil, []pub.StaffCartLine{{ProductID: productID, Quantity: 1}})
 	require.NoError(t, err)
 	require.Len(t, priced, 1)
 	assert.Equal(t, int64(7500), priced[0].UnitPriceAmount)
@@ -89,7 +89,7 @@ func TestPriceStaffCart_RejectsForeignAndRepeatedModifiers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := svc.PriceStaffCart(ctx, f.tenantID, []pub.StaffCartLine{tc.line})
+			_, err := svc.PriceStaffCart(ctx, f.tenantID, f.branchID, []pub.StaffCartLine{tc.line})
 			var invalid *pub.ValidationError
 			assert.ErrorAs(t, err, &invalid)
 		})
@@ -113,7 +113,7 @@ func TestPriceStaffCart_RejectsInactiveProduct(t *testing.T) {
 		return err
 	}))
 
-	_, err := newPricingService().PriceStaffCart(ctx, tenantID,
+	_, err := newPricingService().PriceStaffCart(ctx, tenantID, uuid.Nil,
 		[]pub.StaffCartLine{{ProductID: productID, Quantity: 1}})
 	var invalid *pub.ValidationError
 	assert.ErrorAs(t, err, &invalid)

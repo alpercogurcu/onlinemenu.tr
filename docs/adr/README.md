@@ -37,6 +37,7 @@ Mimari Karar Kayıtları (Architecture Decision Records). Her karar kendi dosyas
 | [DATA-006](DATA-006-branch-transfer-orders.md) | Şubeler Arası Sipariş (Branch Transfer Orders) | 📝 Taslak |
 | [DATA-007](DATA-007-supply-policy.md) | Tedarik Politikası ve Şube-Yerel Maliyet | 📝 Taslak |
 | [DATA-008](DATA-008-cash-session-cashier-identity.md) | Kasa Oturumu Sahipliği ve Kasiyer Kimlik Doğrulama | ✅ Kabul Edildi |
+| [DATA-009](DATA-009-branch-product-overrides.md) | Şube Bazlı Ürün Override'ları (Fiyat + Satılabilirlik) | ✅ Kabul Edildi |
 
 ### Mimari (ARCH)
 | Kod | Başlık | Durum |

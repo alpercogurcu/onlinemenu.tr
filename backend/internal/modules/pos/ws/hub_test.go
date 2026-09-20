@@ -807,7 +807,7 @@ func TestKitchenWS_HeartbeatTimeout_DropsConnection(t *testing.T) {
 // tests and the admin e2e suite.
 type wsPricer struct{}
 
-func (wsPricer) PriceStaffCart(_ context.Context, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
+func (wsPricer) PriceStaffCart(_ context.Context, _, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
 	out := make([]catalogpub.PricedLine, len(lines))
 	for i, l := range lines {
 		price, ok := wsTestPrices.Load(l.ProductID)

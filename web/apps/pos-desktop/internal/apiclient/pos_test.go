@@ -282,22 +282,41 @@ func TestClient_OpenCheck_MapsOccupiedTableConflict(t *testing.T) {
 }
 
 func TestClient_ListProducts_UsesCategoryScopedRoute(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/catalog/categories/cat-1/products" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]Product{{ID: "p1", Name: "Ayran"}})
-	}))
-	defer srv.Close()
-
-	c := New(srv.URL, &memStore{token: "tok", saved: true})
-	products, err := c.ListProducts(t.Context(), "cat-1")
-	if err != nil {
-		t.Fatalf("ListProducts: %v", err)
+	// The branch must travel with the request (ADR-DATA-009): the grid the
+	// cashier reads prices from has to be the branch-effective one, or the
+	// order they place is refused with price_mismatch. An empty branch (a
+	// chain-wide session) must NOT send the parameter at all.
+	cases := []struct {
+		name      string
+		branchID  string
+		wantQuery string
+	}{
+		{"branch-scoped session", "branch-1", "branch_id=branch-1"},
+		{"chain-wide session", "", ""},
 	}
-	if len(products) != 1 || products[0].Name != "Ayran" {
-		t.Fatalf("unexpected products: %+v", products)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/catalog/categories/cat-1/products" {
+					t.Fatalf("unexpected path: %s", r.URL.Path)
+				}
+				if r.URL.RawQuery != tc.wantQuery {
+					t.Fatalf("query = %q, want %q", r.URL.RawQuery, tc.wantQuery)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode([]Product{{ID: "p1", Name: "Ayran"}})
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, &memStore{token: "tok", saved: true})
+			products, err := c.ListProducts(t.Context(), "cat-1", tc.branchID)
+			if err != nil {
+				t.Fatalf("ListProducts: %v", err)
+			}
+			if len(products) != 1 || products[0].Name != "Ayran" {
+				t.Fatalf("unexpected products: %+v", products)
+			}
+		})
 	}
 }
 

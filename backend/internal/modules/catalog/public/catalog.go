@@ -152,9 +152,25 @@ type StaffCartLine struct {
 //
 // Returns exactly one PricedLine per input line, in input order, or a
 // *ValidationError; never a shortened slice, for the reason PriceCart gives.
+//
+// branchID names the branch the sale happens at (ADR-DATA-009): the tenant's
+// catalog is the default, but a branch may sell a product at its own price or
+// not sell it at all. uuid.Nil means "no branch named" and resolves every
+// line to the tenant default, which is what a takeaway/delivery caller with
+// no branch context gets. A product the branch has switched off is rejected
+// as a *ValidationError, not silently priced at the tenant rate.
 type StaffPricer interface {
-	PriceStaffCart(ctx context.Context, tenantID uuid.UUID, lines []StaffCartLine) ([]PricedLine, error)
+	PriceStaffCart(ctx context.Context, tenantID, branchID uuid.UUID, lines []StaffCartLine) ([]PricedLine, error)
 }
+
+// ErrBranchForbidden is returned when a branch-scoped principal reaches for a
+// branch that is not theirs (ADR-AUTH-001 layer 3 / ADR-SEC-005). The HTTP
+// layer maps it to 403 with code "branch_forbidden", matching pos and payment.
+var ErrBranchForbidden = catalogBranchForbiddenError{}
+
+type catalogBranchForbiddenError struct{}
+
+func (catalogBranchForbiddenError) Error() string { return "catalog: branch forbidden" }
 
 // StorefrontMenuReader is the storefront module's only door into the catalog.
 //

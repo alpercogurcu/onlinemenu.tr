@@ -66,9 +66,18 @@ func (c *Client) ListCategories(ctx context.Context) ([]Category, error) {
 // category query param" route (listProducts returns every tenant product,
 // listByCategory is the category-scoped one); this uses the latter since
 // the POS product grid is always browsed by category tab.
-func (c *Client) ListProducts(ctx context.Context, categoryID string) ([]Product, error) {
+//
+// branchID makes the response branch-effective (ADR-DATA-009): the grid shows
+// this branch's own prices and hides what it does not sell, which is the same
+// resolution POST /pos/orders re-runs server-side — without it the cashier
+// would read the tenant price aloud and then get 422 price_mismatch. An empty
+// branchID (chain-wide session) falls back to the tenant catalog.
+func (c *Client) ListProducts(ctx context.Context, categoryID, branchID string) ([]Product, error) {
 	var out []Product
 	path := fmt.Sprintf("/api/v1/catalog/categories/%s/products", categoryID)
+	if branchID != "" {
+		path += "?branch_id=" + url.QueryEscape(branchID)
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, fmt.Errorf("apiclient: list products: %w", err)
 	}

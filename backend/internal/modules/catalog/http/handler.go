@@ -20,35 +20,38 @@ import (
 
 // Handler exposes catalog REST endpoints.
 type Handler struct {
-	categories *service.CategoryService
-	products   *service.ProductService
-	modifiers  *service.ModifierService
-	menus      *service.MenuService
-	logger     *zap.Logger
-	engine     *auth.Engine
+	categories      *service.CategoryService
+	products        *service.ProductService
+	modifiers       *service.ModifierService
+	menus           *service.MenuService
+	branchOverrides *service.BranchOverrideService
+	logger          *zap.Logger
+	engine          *auth.Engine
 }
 
 // Params groups fx-injected dependencies for NewHandler.
 type Params struct {
 	fx.In
 
-	Categories *service.CategoryService
-	Products   *service.ProductService
-	Modifiers  *service.ModifierService
-	Menus      *service.MenuService
-	Logger     *zap.Logger
-	Engine     *auth.Engine
+	Categories      *service.CategoryService
+	Products        *service.ProductService
+	Modifiers       *service.ModifierService
+	Menus           *service.MenuService
+	BranchOverrides *service.BranchOverrideService
+	Logger          *zap.Logger
+	Engine          *auth.Engine
 }
 
 // NewHandler constructs a Handler for fx injection.
 func NewHandler(p Params) *Handler {
 	return &Handler{
-		categories: p.Categories,
-		products:   p.Products,
-		modifiers:  p.Modifiers,
-		menus:      p.Menus,
-		logger:     p.Logger,
-		engine:     p.Engine,
+		categories:      p.Categories,
+		products:        p.Products,
+		modifiers:       p.Modifiers,
+		menus:           p.Menus,
+		branchOverrides: p.BranchOverrides,
+		logger:          p.Logger,
+		engine:          p.Engine,
 	}
 }
 
@@ -71,6 +74,15 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 		r.With(h.permit("catalog.product.delete")).Delete("/products/{id}", h.deleteProduct)
 
 		r.With(h.permit("catalog.product.read")).Get("/categories/{id}/products", h.listByCategory)
+
+		// Branch product overrides (ADR-DATA-009). Reading is a product read
+		// (the chain manager configuring a branch already holds it); writing
+		// is a distinct manager-only action, deliberately NOT folded into
+		// catalog.product.update — a branch price is the tenant owner's
+		// commercial decision, not a catalog editor's.
+		r.With(h.permit("catalog.product.read")).Get("/branches/{branchID}/product-overrides", h.listBranchOverrides)
+		r.With(h.permit("catalog.branch_override.manage")).Put("/branches/{branchID}/products/{productID}/override", h.putBranchOverride)
+		r.With(h.permit("catalog.branch_override.manage")).Delete("/branches/{branchID}/products/{productID}/override", h.deleteBranchOverride)
 
 		// Modifier groups
 		r.With(h.permit("catalog.modifier_group.create")).Post("/modifier-groups", h.createModifierGroup)
@@ -197,16 +209,16 @@ func (h *Handler) listProducts(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	branchID, ok := h.branchIDFromQuery(w, r)
+	if !ok {
+		return
+	}
 	products, err := h.products.List(r.Context(), tenantID)
 	if err != nil {
 		h.error(w, r, err)
 		return
 	}
-	out := make([]productResponse, len(products))
-	for i, p := range products {
-		out[i] = toProductResponse(p)
-	}
-	respondJSON(w, http.StatusOK, out)
+	h.respondBranchProducts(w, r, tenantID, branchID, products)
 }
 
 func (h *Handler) getProduct(w http.ResponseWriter, r *http.Request) {
@@ -368,14 +380,30 @@ func (h *Handler) listByCategory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	branchID, ok := h.branchIDFromQuery(w, r)
+	if !ok {
+		return
+	}
 	products, err := h.products.ListByCategory(r.Context(), tenantID, catID, includeInactive)
 	if err != nil {
 		h.error(w, r, err)
 		return
 	}
-	out := make([]productResponse, len(products))
-	for i, p := range products {
-		out[i] = toProductResponse(p)
+	h.respondBranchProducts(w, r, tenantID, branchID, products)
+}
+
+// respondBranchProducts applies the branch's overrides (if any) and writes the
+// listing. It is the single place both product listings go through, so
+// "branch_id changes what this endpoint means" is true of both or neither.
+func (h *Handler) respondBranchProducts(w http.ResponseWriter, r *http.Request, tenantID, branchID uuid.UUID, products []domain.Product) {
+	branchProducts, err := h.branchOverrides.ApplyToProducts(r.Context(), tenantID, branchID, products)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	out := make([]productResponse, len(branchProducts))
+	for i, bp := range branchProducts {
+		out[i] = toBranchProductResponse(bp)
 	}
 	respondJSON(w, http.StatusOK, out)
 }
@@ -385,6 +413,10 @@ func (h *Handler) listByCategory(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
+	if errors.Is(err, pub.ErrBranchForbidden) {
+		respondJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "code": "branch_forbidden"})
+		return
+	}
 	if errors.Is(err, pub.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

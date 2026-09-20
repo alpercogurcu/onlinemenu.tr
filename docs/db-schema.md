@@ -701,6 +701,37 @@ erDiagram
 
 ---
 
+## ŞUBE BAZLI ÜRÜN OVERRIDE'I (ADR-DATA-009)
+
+Tenant geneli katalog (`products`) tek satır kalır; bir şubenin farklı satış fiyatı veya "bu ürünü burada satmıyoruz" kararı ayrı bir tabloda yaşar. **Satır yoksa tenant varsayılanı geçerlidir** — N şube × M ürün kartezyeni üretilmez.
+
+### branch_product_overrides (catalog) — `migrations/catalog/000003`
+
+| Kolon | Tip | Not |
+|---|---|---|
+| tenant_id | uuid NOT NULL | RLS (FORCE) |
+| branch_id | uuid NOT NULL | `tenant.branches` — modüller arası FK yok, çıplak UUID |
+| product_id | uuid NOT NULL FK → products | `ON DELETE CASCADE` |
+| is_available | boolean NOT NULL DEFAULT true | `false` → ürün bu şubede satılmaz (listede yok, siparişte 422) |
+| price_amount | bigint NULL CHECK (>= 0) | kuruş; **NULL = tenant fiyatı** (0 ≠ NULL: 0 geçerli bir satış fiyatıdır) |
+| updated_at | timestamptz NOT NULL | |
+| **PK** | (tenant_id, branch_id, product_id) | şube listeleme sorgusu bu prefiksi kullanır |
+| index | (product_id) | FK cascade taraması için |
+
+**Etkin fiyat önceliği** (tek yerde, `catalog/repo.storefrontMenuItemsCTE` ve `PriceCatalogProducts`):
+
+```
+branch_product_overrides.price_amount > menu_items.price_override > products.price_amount
+```
+
+**Etkin satılabilirlik** = `product_channel_availability` (kanal ekseni, opt-out) **AND** `branch_product_overrides.is_available` (şube ekseni, opt-out). İki eksen birbirinin yerine geçmez.
+
+### catalog_outbox (catalog) — `migrations/catalog/000004`
+
+Catalog modülünün ilk outbox tablosu (ADR-DATA-001). Kolon şeması `pos_outbox`'un nihai haliyle birebir aynıdır (temel alanlar + `retry_count`/`next_retry_at`/`last_error`/`is_dead` + `claimed_at`), çünkü dispatcher'ın claim sorgusu hepsini bekler. Yayımlanan tek event bugün `catalog.branch_override.changed.v1`'dir; `event_type` kolonu modül önekini **taşımaz** (dispatcher `<module>.<event_type>.v1` olarak kurar).
+
+---
+
 ## Önemli Index'ler
 
 ```sql
@@ -708,6 +739,9 @@ erDiagram
 CREATE INDEX ON orders (tenant_id);
 CREATE INDEX ON checks (tenant_id, branch_id, status);
 CREATE INDEX ON order_items (order_id);
+
+-- Şube bazlı ürün override'ı (ADR-DATA-009)
+CREATE INDEX ON branch_product_overrides (product_id);  -- PK (tenant_id, branch_id, product_id) prefiksi listelemeyi karşılar
 
 -- Stok sorguları
 CREATE INDEX ON stock_levels (warehouse_id, product_id);

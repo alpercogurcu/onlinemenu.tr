@@ -505,7 +505,13 @@ func newEventBusConfig() eventbus.Config {
 	return eventbus.Config{
 		URL:        mustEnv("NATS_URL"),
 		StreamName: "DOMAIN_EVENTS",
-		Subjects:   []string{"tenant.>", "identity.>", "pos.>", "payment.>", "inventory.>"},
+		// Every module whose outbox this binary dispatches must have its
+		// namespace bound here (newOutboxConfig below lists the tables). A
+		// missing prefix does not fail loudly: the publish is rejected, the
+		// row retries to MaxRetries and lands is_dead, with nothing on the
+		// read path to notice — which is how catalog.> was found missing the
+		// day catalog_outbox was added.
+		Subjects: []string{"tenant.>", "identity.>", "catalog.>", "pos.>", "payment.>", "inventory.>"},
 	}
 }
 
@@ -648,6 +654,7 @@ func newOutboxConfig() outbox.Config {
 		// The monolith serves every module's outbox; partially-migrated dev
 		// environments are handled by the dispatcher's missing-table disable.
 		Tables: []outbox.TableSpec{
+			{Table: "catalog_outbox", Module: "catalog"},
 			{Table: "pos_outbox", Module: "pos"},
 			{Table: "payment_outbox", Module: "payment"},
 			{Table: "billing_outbox", Module: "billing"},

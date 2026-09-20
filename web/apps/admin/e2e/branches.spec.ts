@@ -52,6 +52,11 @@ const STAFF_B = {
 } as const
 
 const SEEDED_CATEGORY_ID = "dddddddd-0000-0000-0000-000000000011"
+
+// ADR-DATA-009 fixture. tavuk gets branch B's own (higher) price, lahmacun is
+// switched off there. Both are in SEEDED_CATEGORY_ID and neither is used by
+// the tests above, so an override cannot re-price an earlier assertion.
+const OVERRIDE_PRICE = 31_000
 const OPENING_AMOUNT = 20_000
 const COST_KEY = /"[a-z_]*cost[a-z_]*"\s*:/i
 
@@ -116,6 +121,8 @@ function apiFor(request: APIRequestContext, token: string) {
     get: (path: string) => request.get(`${API_URL}${path}`, { headers }),
     post: (path: string, data?: unknown, key?: string) =>
       request.post(`${API_URL}${path}`, { headers: withKey(key), data }),
+    put: (path: string, data?: unknown) => request.put(`${API_URL}${path}`, { headers, data }),
+    del: (path: string) => request.delete(`${API_URL}${path}`, { headers }),
   }
 }
 
@@ -161,7 +168,9 @@ async function openCheck(api: Api, branchId: string, label: string): Promise<str
   return check.id
 }
 
-function orderBody(branchId: string, checkId: string, product: SeededProduct) {
+// price defaults to the product's tenant price; a caller passes another one
+// only to assert what the BRANCH's effective catalog charges (ADR-DATA-009).
+function orderBody(branchId: string, checkId: string, product: SeededProduct, price: number = product.price) {
   return {
     branch_id: branchId,
     check_id: checkId,
@@ -170,11 +179,11 @@ function orderBody(branchId: string, checkId: string, product: SeededProduct) {
       {
         product_id: product.id,
         product_name: product.name,
-        product_price_amount: product.price,
+        product_price_amount: price,
         product_currency: "TRY",
         tax_rate_bps: 1000,
         quantity: 1,
-        unit_price_amount: product.price,
+        unit_price_amount: price,
       },
     ],
   }
@@ -187,6 +196,22 @@ async function placeOrder(api: Api, branchId: string, checkId: string, product: 
 async function placeOrderOk(api: Api, branchId: string, checkId: string, product: SeededProduct, key: string) {
   const order = await json<{ id: string }>(await placeOrder(api, branchId, checkId, product, key), 201)
   return order.id
+}
+
+// placeOrderAt prices the line at `price` instead of the product's tenant
+// price. POST /pos/orders re-derives every line from the BRANCH's effective
+// catalog and refuses anything else with 422 price_mismatch, so this is what
+// proves an override really reached the order path.
+function placeOrderAt(api: Api, branchId: string, checkId: string, product: SeededProduct, price: number, key: string) {
+  return api.post("/api/v1/pos/orders", orderBody(branchId, checkId, product, price), key)
+}
+
+// Branch product overrides are tenant-wide state that survives a run, so a
+// leftover row from an aborted run would re-price the earlier tests in this
+// serial file. Every write below is paired with this teardown.
+async function clearOverride(api: Api, branchId: string, productId: string): Promise<void> {
+  const res = await api.del(`/api/v1/catalog/branches/${branchId}/products/${productId}/override`)
+  expect([204, 404], `override temizliği → ${res.status()}`).toContain(res.status())
 }
 
 function saleBody(branchId: string, checkId: string, method: "cash" | "terminal", product: SeededProduct) {
@@ -410,6 +435,11 @@ test.describe("çoklu şube", () => {
   })
 
   test.afterAll(async () => {
+    // Overrides are persistent tenant state: a leftover row would silently
+    // change what the earlier tests in this serial file pay on the next run.
+    for (const productId of [PRODUCTS.tavuk.id, PRODUCTS.lahmacun.id]) {
+      await clearOverride(manager, branchB, productId).catch(() => {})
+    }
     for (const checkId of liveChecks) await retireCheck(manager, checkId)
     const leftoverB = await activeSession(manager, branchB).catch(() => null)
     if (leftoverB) await closeSession(manager, leftoverB)
@@ -955,5 +985,85 @@ test.describe("çoklu şube", () => {
       200,
     )
     expect(settlement).toMatchObject({ completed: [], pending_total: 0 })
+  })
+
+  test("şube bazlı ürün override'ı: yönetici şube B'ye kendi fiyatını verir ve bir ürünü kapatır (ADR-DATA-009)", async () => {
+    interface ListedProduct {
+      id: string
+      price_amount: number
+      branch_price_overridden: boolean
+    }
+    const categoryPath = `/api/v1/catalog/categories/${SEEDED_CATEGORY_ID}/products`
+    const listFor = async (api: Api, branchId: string) =>
+      json<ListedProduct[]>(await api.get(`${categoryPath}?branch_id=${branchId}`), 200)
+    const find = (rows: ListedProduct[], product: SeededProduct) => rows.find((p) => p.id === product.id)
+
+    // Baseline: before any override both branches see the tenant catalog.
+    expect(find(await listFor(cashierB, branchB), PRODUCTS.tavuk)).toMatchObject({
+      price_amount: PRODUCTS.tavuk.price,
+      branch_price_overridden: false,
+    })
+
+    // The chain owner sets branch B's own price and closes another product there.
+    const overridePath = (productId: string) => `/api/v1/catalog/branches/${branchB}/products/${productId}/override`
+    expect(
+      await json<{ price_amount: number | null; is_available: boolean }>(
+        await manager.put(overridePath(PRODUCTS.tavuk.id), { is_available: true, price_amount: OVERRIDE_PRICE }),
+        200,
+      ),
+    ).toMatchObject({ price_amount: OVERRIDE_PRICE, is_available: true })
+    await json(await manager.put(overridePath(PRODUCTS.lahmacun.id), { is_available: false, price_amount: null }), 200)
+
+    // A branch cashier may not set prices — the action is manager-only even
+    // for their own branch (ADR-DATA-009 §6).
+    await expectStatus(await cashierB.put(overridePath(PRODUCTS.tavuk.id), { is_available: true, price_amount: 1 }), 403)
+    // ...and may not even read another branch's overrides.
+    await expectStatus(await cashierB.get(`/api/v1/catalog/branches/${BRANCH_A}/product-overrides`), 403)
+    const ownOverrides = await json<{ product_id: string; price_amount: number | null }[]>(
+      await cashierB.get(`/api/v1/catalog/branches/${branchB}/product-overrides`),
+      200,
+    )
+    expect(ownOverrides.find((o) => o.product_id === PRODUCTS.tavuk.id)?.price_amount).toBe(OVERRIDE_PRICE)
+
+    // Branch B's cashier sees the override price and no longer sees the closed product.
+    const atB = await listFor(cashierB, branchB)
+    expect(find(atB, PRODUCTS.tavuk)).toMatchObject({ price_amount: OVERRIDE_PRICE, branch_price_overridden: true })
+    expect(find(atB, PRODUCTS.lahmacun), "şubede kapatılan ürün listede olmamalı").toBeUndefined()
+    expect(find(atB, PRODUCTS.adana)).toMatchObject({ price_amount: PRODUCTS.adana.price, branch_price_overridden: false })
+
+    // Branch A is untouched: the override is per branch, not a tenant edit.
+    const atA = await listFor(cashierA, BRANCH_A)
+    expect(find(atA, PRODUCTS.tavuk)).toMatchObject({ price_amount: PRODUCTS.tavuk.price, branch_price_overridden: false })
+    expect(find(atA, PRODUCTS.lahmacun)).toMatchObject({ price_amount: PRODUCTS.lahmacun.price })
+
+    // The order path agrees with the listing: the branch price is accepted,
+    // the tenant price is not, and the closed product cannot be sold at all.
+    const checkId = await openCheck(cashierB, branchB, `E2E-OVR-${RUN}`)
+    liveChecks.push(checkId)
+
+    await json(await placeOrderAt(cashierB, branchB, checkId, PRODUCTS.tavuk, OVERRIDE_PRICE, `e2e-${RUN}-ovr-ok`), 201)
+
+    const stale = await placeOrderAt(cashierB, branchB, checkId, PRODUCTS.tavuk, PRODUCTS.tavuk.price, `e2e-${RUN}-ovr-stale`)
+    await expectStatus(stale, 422)
+    expect(await stale.json()).toMatchObject({ code: "price_mismatch" })
+
+    const closed = await placeOrder(cashierB, branchB, checkId, PRODUCTS.lahmacun, `e2e-${RUN}-ovr-closed`)
+    await expectStatus(closed, 422)
+    expect(await closed.json()).toMatchObject({ code: "invalid_order_line" })
+
+    // Branch A still sells both at the tenant price.
+    const aCheck = await openCheck(cashierA, BRANCH_A, `E2E-OVR-A-${RUN}`)
+    liveChecks.push(aCheck)
+    await json(await placeOrder(cashierA, BRANCH_A, aCheck, PRODUCTS.lahmacun, `e2e-${RUN}-ovr-a-closed`), 201)
+
+    // Removing the overrides returns branch B to the tenant catalog.
+    await clearOverride(manager, branchB, PRODUCTS.tavuk.id)
+    await clearOverride(manager, branchB, PRODUCTS.lahmacun.id)
+    const restored = await listFor(cashierB, branchB)
+    expect(find(restored, PRODUCTS.tavuk)).toMatchObject({
+      price_amount: PRODUCTS.tavuk.price,
+      branch_price_overridden: false,
+    })
+    expect(find(restored, PRODUCTS.lahmacun)).toBeDefined()
   })
 })

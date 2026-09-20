@@ -97,6 +97,19 @@ allow if {
 	any_role({"cashier", "shift_manager", "kitchen", "bar"})
 }
 
+# -- Catalog: branch product overrides (ADR-DATA-009). "catalog.branch_override.manage"
+# is manager-only and needs NO rule of its own: the chain-wide manager already
+# passes through the wildcard at the top of this file, and `default allow = false`
+# refuses everyone else. This comment exists so the absence of a rule reads as a
+# decision rather than an oversight.
+#
+# It is deliberately NOT in catalog_read_actions: setting a branch's own selling
+# price is the tenant owner's commercial decision, not something a cashier or a
+# kitchen screen may do — and adding it to that set would hand it to all four
+# counter roles at once. READING the overrides rides on catalog.product.read
+# (already in the set) plus the layer-3 branch guard in catalog/service, which
+# keeps a branch-bound principal inside its own branch.
+
 # -- Inventory (legacy, pre-ADR-DATA-005 branch-scoped model): ORPHANED.
 # inventory_levels/inventory_transactions were re-keyed to warehouse-scoped
 # stock_levels/stock_movements (migrations/inventory/000003); no live endpoint

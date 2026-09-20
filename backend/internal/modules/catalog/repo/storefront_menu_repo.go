@@ -88,26 +88,37 @@ type ProductModifier struct {
 // winner — branch-specific menu first, then menu sort_order, then menu id as
 // a stable tiebreaker.
 //
-// Both ListMenuRows and PriceProducts embed this identical CTE, and that is
-// the point: if browsing and re-pricing resolved the winner differently, the
-// server would charge a price the diner was never shown, and no per-endpoint
-// test would notice.
+// The branch override (ADR-DATA-009) is resolved HERE rather than in the
+// callers, for the same reason the menu winner is: if browsing and re-pricing
+// resolved it differently, the server would charge a price the diner was
+// never shown, and no per-endpoint test would notice. Precedence is fixed by
+// the ADR and must not be reordered silently:
+//
+//	branch_product_overrides.price_amount > menu_items.price_override > products.price_amount
+//
+// A branch override row with is_available = FALSE removes the product from
+// the menu entirely — the branch does not sell it, so it is neither browsable
+// nor orderable.
 //
 // $1 = branch_id.
 const storefrontMenuItemsCTE = `
 	WITH visible_items AS (
 	    SELECT DISTINCT ON (mi.product_id)
 	           mi.product_id,
-	           COALESCE(mi.price_override, p.price_amount) AS price_amount
+	           COALESCE(bpo.price_amount, mi.price_override, p.price_amount) AS price_amount
 	    FROM menu_items mi
 	    JOIN menus    m ON m.id = mi.menu_id
 	    JOIN products p ON p.id = mi.product_id
+	    LEFT JOIN branch_product_overrides bpo
+	           ON bpo.product_id = mi.product_id
+	          AND bpo.branch_id  = $1
 	    WHERE mi.is_active
 	      AND m.is_active
 	      AND (m.branch_id = $1 OR m.branch_id IS NULL)
 	      AND (m.valid_from  IS NULL OR m.valid_from  <= CURRENT_DATE)
 	      AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
 	      AND p.is_active
+	      AND (bpo.is_available IS DISTINCT FROM FALSE)
 	    ORDER BY mi.product_id, (m.branch_id IS NOT NULL) DESC, m.sort_order, m.id
 	)`
 
@@ -306,7 +317,8 @@ func uuidStringSlice(ids []uuid.UUID) []string {
 }
 
 // PriceCatalogProducts returns the list price of active products straight
-// from the products table, with no menu involved.
+// from the products table, with no menu involved, as the given branch sells
+// them (ADR-DATA-009).
 //
 // It backs the POS (staff) pricing path — see public.StaffPricer for why a
 // counter sale is not gated on a branch having an active menu. The
@@ -314,20 +326,33 @@ func uuidStringSlice(ids []uuid.UUID) []string {
 // PricedProduct shape; only "where does the price come from" differs, and
 // keeping that the single difference is what makes the two comparable.
 //
+// branchID may be uuid.Nil ("no branch named"), which resolves every line to
+// the tenant default: the LEFT JOIN simply matches nothing. A product the
+// branch has switched off (is_available = FALSE) is absent from the result,
+// which is the caller's signal to reject the line — the same treatment an
+// inactive product gets, and the same 422 the cashier sees either way.
+//
 // tenant scoping is RLS's job (the caller runs inside WithTenantReadTx), the
 // same as every other query in this file.
-func (r *StorefrontMenuRepo) PriceCatalogProducts(ctx context.Context, tx pgx.Tx, productIDs []uuid.UUID) (map[uuid.UUID]PricedProduct, error) {
+func (r *StorefrontMenuRepo) PriceCatalogProducts(ctx context.Context, tx pgx.Tx, branchID uuid.UUID, productIDs []uuid.UUID) (map[uuid.UUID]PricedProduct, error) {
 	out := make(map[uuid.UUID]PricedProduct, len(productIDs))
 	if len(productIDs) == 0 {
 		return out, nil
 	}
 
 	const q = `
-		SELECT p.id, p.name, p.price_amount, p.currency, p.tax_rate_bps
+		SELECT p.id, p.name,
+		       COALESCE(bpo.price_amount, p.price_amount),
+		       p.currency, p.tax_rate_bps
 		FROM products p
-		WHERE p.id = ANY($1::uuid[]) AND p.is_active`
+		LEFT JOIN branch_product_overrides bpo
+		       ON bpo.product_id = p.id
+		      AND bpo.branch_id  = $1
+		WHERE p.id = ANY($2::uuid[])
+		  AND p.is_active
+		  AND (bpo.is_available IS DISTINCT FROM FALSE)`
 
-	rows, err := tx.Query(ctx, q, uuidStringSlice(productIDs))
+	rows, err := tx.Query(ctx, q, branchID, uuidStringSlice(productIDs))
 	if err != nil {
 		return nil, fmt.Errorf("catalog/repo/storefront_menu: price catalog products: %w", err)
 	}

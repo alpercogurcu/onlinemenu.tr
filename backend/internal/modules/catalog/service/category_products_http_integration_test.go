@@ -40,8 +40,12 @@ func categoryProductsMux(t *testing.T) *chi.Mux {
 
 	h := cataloghttp.NewHandler(cataloghttp.Params{
 		Products: newProductService(),
-		Logger:   zap.NewNop(),
-		Engine:   engine,
+		// The listing folds branch overrides in even when no branch_id is
+		// given (it short-circuits), so the service must be wired or the
+		// handler nil-panics on the tenant-wide path too.
+		BranchOverrides: newBranchOverrideService(),
+		Logger:          zap.NewNop(),
+		Engine:          engine,
 	})
 	mux := chi.NewMux()
 	h.RegisterRoutes(mux)

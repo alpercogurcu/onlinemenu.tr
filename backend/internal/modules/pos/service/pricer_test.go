@@ -22,7 +22,7 @@ import (
 // catalog/service's own integration tests and in the admin e2e suite.
 type staticPricer struct{}
 
-func (staticPricer) PriceStaffCart(_ context.Context, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
+func (staticPricer) PriceStaffCart(_ context.Context, _, _ uuid.UUID, lines []catalogpub.StaffCartLine) ([]catalogpub.PricedLine, error) {
 	out := make([]catalogpub.PricedLine, len(lines))
 	for i, l := range lines {
 		priced, ok := lookupTestProduct(l.ProductID)

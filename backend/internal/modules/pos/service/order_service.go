@@ -109,7 +109,7 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 	if !o.OrderChannel.Valid() {
 		return domain.Order{}, fmt.Errorf("pos/service/order: invalid channel %q", o.OrderChannel)
 	}
-	if err := s.repriceItems(ctx, tenantID, o.Items); err != nil {
+	if err := s.repriceItems(ctx, tenantID, o.BranchID, o.Items); err != nil {
 		return domain.Order{}, err
 	}
 	o.TenantID = tenantID
@@ -153,9 +153,14 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 // unit price: a POS whose cached price is stale must be told its total is
 // wrong before the cashier reads it out to the customer.
 //
+// branchID is the branch the order is being placed at: since ADR-DATA-009 a
+// product may carry that branch's own price, or not be sold there at all, so
+// pricing a counter sale without naming the branch would bill the tenant
+// default at a branch that charges something else.
+//
 // items is mutated in place; the caller passes the slice it is about to
 // persist.
-func (s *OrderService) repriceItems(ctx context.Context, tenantID uuid.UUID, items []domain.OrderItem) error {
+func (s *OrderService) repriceItems(ctx context.Context, tenantID, branchID uuid.UUID, items []domain.OrderItem) error {
 	if s.pricer == nil {
 		return errors.New("pos/service/order: staff pricer not wired")
 	}
@@ -172,7 +177,7 @@ func (s *OrderService) repriceItems(ctx context.Context, tenantID uuid.UUID, ite
 		}
 	}
 
-	priced, err := s.pricer.PriceStaffCart(ctx, tenantID, lines)
+	priced, err := s.pricer.PriceStaffCart(ctx, tenantID, branchID, lines)
 	if err != nil {
 		var invalid *catalogpub.ValidationError
 		if errors.As(err, &invalid) {

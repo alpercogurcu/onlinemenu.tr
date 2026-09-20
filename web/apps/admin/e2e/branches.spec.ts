@@ -20,11 +20,6 @@ import {
 // chain-wide manager sees, and that no cost field reaches counter/guest
 // surfaces.
 //
-// Known backend gaps are pinned with test.fail(): they assert the CORRECT
-// behaviour, so they pass today (the assertion fails as expected) and turn
-// red the day the backend is fixed — at which point the test.fail() line is
-// simply deleted. Each one names its gap in the test title.
-
 const RUN = Date.now().toString(36)
 
 // The modules mount under different prefixes on purpose-less history, not by
@@ -439,6 +434,13 @@ test.describe("çoklu şube", () => {
       expect(row, `${staff.email} şube B üyeliği`).toMatchObject({ branch_id: branchB, role_id: staff.roleId, status: "active" })
     }
     expect(members.memberships.find((x) => x.person_email === USERS.cashier)).toBeUndefined()
+
+    // The roles list tells the invite form which roles need a branch.
+    const roles = await json<{ roles: { id: string; branch_scoped: boolean }[] }>(await manager.get(`${identityPath(tenantId)}/roles`), 200)
+    for (const roleId of Object.values(ROLE)) {
+      expect(roles.roles.find((r) => r.id === roleId)?.branch_scoped, roleId).toBe(true)
+    }
+    expect(roles.roles.find((r) => r.id === "00000001-0000-0000-0000-000000000006")?.branch_scoped).toBe(false)
 
     // ADR-SEC-005: a branch-scoped role cannot be granted chain-wide, and a
     // branch that does not exist in the tenant is refused before any insert.
@@ -899,34 +901,59 @@ test.describe("çoklu şube", () => {
     await expect(page.getByRole("row").filter({ hasText: "dev.onlinemenu.tr" })).toHaveCount(3)
   })
 
-  test("BİLİNEN AÇIK: GET /pos/checks başka şubenin adisyonlarını şube B kasiyerine döker (branch_id süzgeci)", async () => {
-    test.fail(true, "CheckService.List principal'ın şubesine kısıtlanmıyor (handler yorumu: 'narrowing, not restricting')")
-    const res = await cashierB.get(`/api/v1/pos/checks?branch_id=${BRANCH_A}`)
-    if (res.status() === 200) {
-      expect(((await res.json()) as CheckRow[]).map((c) => c.id)).not.toContain(victimCheck)
-    } else {
-      await expectRefused(res)
+  test("okuma izolasyonu: şube B kasiyeri şube A'nın adisyon ve siparişlerini listeleyemez, okuyamaz", async () => {
+    // Explicitly naming another branch is refused; naming none is forced onto the caller's own branch.
+    await expectStatus(await cashierB.get(`/api/v1/pos/checks?branch_id=${BRANCH_A}`), 403)
+    await expectStatus(await cashierB.get(`/api/v1/pos/checks?branch_id=${BRANCH_A}&status=open`), 403)
+
+    const own = await json<CheckRow[]>(await cashierB.get("/api/v1/pos/checks"), 200)
+    expect(own.filter((c) => c.branch_id !== branchB)).toEqual([])
+    expect(own.map((c) => c.id)).not.toContain(victimCheck)
+    const ownFiltered = await json<CheckRow[]>(await cashierB.get(`/api/v1/pos/checks?branch_id=${branchB}`), 200)
+    expect(ownFiltered.filter((c) => c.branch_id !== branchB)).toEqual([])
+
+    // The chain manager keeps the unfiltered view: it still sees the victim.
+    const everything = await json<CheckRow[]>(await manager.get("/api/v1/pos/checks"), 200)
+    expect(everything.map((c) => c.id)).toContain(victimCheck)
+
+    // A single foreign row answers 404, not 403: no existence oracle for ids.
+    await expectStatus(await cashierB.get(`/api/v1/pos/checks/${victimCheck}`), 404)
+    await expectStatus(await cashierB.get(`/api/v1/pos/checks/${victimCheck}/orders`), 404)
+    await expectStatus(await cashierB.get(`/api/v1/pos/orders/${victimOrder}`), 404)
+
+    // The batch read is partial by contract: the foreign order simply drops out.
+    const batch = await json<OrderRow[]>(await cashierB.get(`/api/v1/pos/orders?ids=${victimOrder}`), 200)
+    expect(batch).toEqual([])
+
+    // Branch A's own cashier still reads all of it.
+    await json(await cashierA.get(`/api/v1/pos/checks/${victimCheck}`), 200)
+    const aOwn = await json<CheckRow[]>(await cashierA.get("/api/v1/pos/checks"), 200)
+    expect(aOwn.filter((c) => c.branch_id !== BRANCH_A)).toEqual([])
+    expect(aOwn.map((c) => c.id)).toContain(victimCheck)
+  })
+
+  test("ödeme izolasyonu: şube B kasiyeri şube A adisyonuna nakit veya kartla tahsilat alamaz (403 branch_forbidden)", async () => {
+    const drawerBefore = await activeSession(manager, BRANCH_A)
+    expect(drawerBefore, "A'nın çekmecesi izolasyon testinde açıldı").not.toBeNull()
+
+    for (const method of ["cash", "terminal"] as const) {
+      const res = await cashierB.post(
+        "/api/v1/payments",
+        saleBody(BRANCH_A, victimCheck, method, PRODUCTS.ayran),
+        `e2e-${RUN}-v-pay-${method}`,
+      )
+      await expectStatus(res, 403)
+      expect(await res.json()).toMatchObject({ code: "branch_forbidden" })
     }
-  })
 
-  test("BİLİNEN AÇIK: GET /pos/checks süzgeçsiz çağrıda da başka şubenin adisyonları geliyor", async () => {
-    test.fail(true, "aynı kök neden: listChecks tenant-geneli, scope'a bakmıyor")
-    const rows = await json<CheckRow[]>(await cashierB.get("/api/v1/pos/checks"), 200)
-    expect(rows.filter((c) => c.branch_id !== branchB).map((c) => c.id)).toEqual([])
-  })
-
-  test("BİLİNEN AÇIK: GET /pos/checks/{id} ve /orders başka şubenin adisyonunu okutuyor", async () => {
-    test.fail(true, "getCheck/listOrdersByCheck/getOrder/listOrdersByIDs requireBranch çağırmıyor (yazma uçları çağırıyor)")
-    await expectRefused(await cashierB.get(`/api/v1/pos/checks/${victimCheck}`))
-    await expectRefused(await cashierB.get(`/api/v1/pos/checks/${victimCheck}/orders`))
-    await expectRefused(await cashierB.get(`/api/v1/pos/orders/${victimOrder}`))
-  })
-
-  test("BİLİNEN AÇIK (KRİTİK): şube B kasiyeri şube A'nın açık kasasına nakit tahsilat yazabiliyor (POST /payments branch_id=A → 201)", async () => {
-    test.fail(true, "registerSale/RegisterSale principal'ın şubesini req.BranchID ile karşılaştırmıyor; A'nın çekmecesi ve fiş kaydı B kasiyeriyle işliyor")
-    // Branch A's drawer is open here (the isolation test guarantees it), so a
-    // cash sale is what actually reaches the other branch's till.
-    const res = await cashierB.post("/api/v1/payments", saleBody(BRANCH_A, victimCheck, "cash", PRODUCTS.ayran), `e2e-${RUN}-v-pay`)
-    await expectRefused(res)
+    // Nothing reached A's till or its adisyon.
+    const drawerAfter = await activeSession(manager, BRANCH_A)
+    expect(drawerAfter?.cash_payments_taken).toBe(drawerBefore?.cash_payments_taken)
+    expect(drawerAfter?.expected_close).toBe(drawerBefore?.expected_close)
+    const settlement = await json<{ completed: unknown[]; pending_total: number }>(
+      await manager.get(`/api/v1/payments/checks/${victimCheck}/settlement`),
+      200,
+    )
+    expect(settlement).toMatchObject({ completed: [], pending_total: 0 })
   })
 })

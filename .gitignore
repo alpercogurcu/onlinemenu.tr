@@ -103,3 +103,6 @@ deploy/b2b-staff.local.*
 
 # Kişisel Claude kuralları
 CLAUDE.local.md
+
+# Parola içeren yerel kılavuzlar
+*.local.md

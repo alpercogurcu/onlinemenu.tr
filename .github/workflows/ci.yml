@@ -237,6 +237,10 @@ jobs:
         working-directory: web
         run: pnpm --filter @onlinemenu/pos-desktop test:run
 
+      - name: Test (pos-core)
+        working-directory: web
+        run: pnpm --filter @onlinemenu/pos-core test:run
+
       - name: Typecheck (menu)
         working-directory: web
         run: pnpm --filter @onlinemenu/menu typecheck

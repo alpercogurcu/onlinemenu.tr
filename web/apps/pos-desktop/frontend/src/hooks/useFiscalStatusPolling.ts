@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { GetPayment } from '../../wailsjs/go/main/App'
-import { describeError, isForbiddenError } from '../lib/errors'
+import { describeError, isForbiddenError } from '@onlinemenu/pos-core'
 import { isTerminal, parseStatus, type FiscalStatus, type TrackedPayment } from '../lib/fiscalStatus'
 
 export const POLL_INTERVAL_MS = 2_000

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { TURKISH_DENOMINATIONS, denominationTotal, type DenominationRow } from '../lib/cashSession'
-import { formatMoney } from '../lib/format'
+import { formatMoney } from '@onlinemenu/pos-core'
 import { Numpad } from './Numpad'
 
 type DenominationCounterProps = {

@@ -1,18 +1,21 @@
 import { useEffect, useState } from 'react'
-import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
-import { formatMoneyInputDisplay, kurusToMoneyInput } from '../lib/numpad'
-import { buildPaymentLines, type PaymentLine } from '../lib/paymentLines'
 import {
+  buildPaymentLines,
   cashChange,
   cashReceived,
   dueFor,
+  formatMoney,
+  formatMoneyInputDisplay,
   itemTotal,
+  kurusToMoneyInput,
+  parseMoneyInputToKurus,
   selectionTotal,
   unpaidItems,
   type DueMode,
   type PayMethod,
   type PayableItem,
-} from '../lib/paymentPlan'
+  type PaymentLine,
+} from '@onlinemenu/pos-core'
 import { ErrorBanner } from './ErrorBanner'
 import { CheckIcon } from './icons'
 import { Numpad } from './Numpad'
@@ -77,7 +80,7 @@ function modeButtonClass(active: boolean, dashed = false): string {
  * (everything, cash, exact) is two taps: "Ödeme al" then "Nakit alındı".
  *
  * Whatever the due amount is, the payment goes out with fiscal lines that add up
- * to it (lib/paymentLines): a payment that covers only some of the items must
+ * to it (@onlinemenu/pos-core's paymentLines.ts): a payment that covers only some of the items must
  * not send them all, or a real ÖKC rejects the basket.
  */
 export function PaymentScreen({

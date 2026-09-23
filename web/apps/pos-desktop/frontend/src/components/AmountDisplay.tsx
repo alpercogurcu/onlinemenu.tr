@@ -1,4 +1,4 @@
-import { formatMoneyInputDisplay } from '../lib/numpad'
+import { formatMoneyInputDisplay } from '@onlinemenu/pos-core'
 
 type AmountDisplayProps = {
   label: string

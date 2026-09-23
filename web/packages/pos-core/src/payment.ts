@@ -1,15 +1,13 @@
-// Pure arithmetic for split/partial cash payments — kept separate from
-// Receipt.tsx so the rules are readable (and, if a JS test runner is ever
-// added to this app — see this file's own note below — testable) in one
-// place, rather than inline in a component.
+// Pure arithmetic for split/partial cash payments — kept separate from any
+// one component/screen so the rules are readable and testable in one place,
+// rather than inline in a component.
 //
 // All amounts are integers in kuruş (see format.ts's file-level comment).
 //
-// NOTE — no unit tests: this workspace has no vitest/jest configured
-// (frontend/package.json has no test script), so these functions are only
-// verified by `tsc`/manual trace today, not by an automated test. Flagged
-// to team-lead in the split-payment task report; add a runner if this
-// arithmetic needs enforced regression coverage.
+// NOTE: this file predates a test runner being wired up for it (it was moved
+// here, into @onlinemenu/pos-core, from pos-desktop's lib/, where it shipped
+// with no automated test — see git history). It has no dedicated test file of
+// its own yet; add one if this arithmetic needs enforced regression coverage.
 
 /** Outstanding balance still owed on a check, never negative (a check that
  * was ever overpaid, e.g. by a pre-fix client, must not show a negative

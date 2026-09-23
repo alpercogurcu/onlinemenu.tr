@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
-import { formatMoney } from '../lib/format'
+import { formatMoney } from '@onlinemenu/pos-core'
 import { PendingFiscalDot } from './PendingFiscalDot'
 
 type CheckRailProps = {

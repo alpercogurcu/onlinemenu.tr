@@ -8,7 +8,7 @@ import {
   SubmitClosingCount,
 } from '../../wailsjs/go/main/App'
 import type { main } from '../../wailsjs/go/models'
-import { describeError } from '../lib/errors'
+import { describeError } from '@onlinemenu/pos-core'
 import { isClosingCountStale, toClosingSnapshot, type ClosingSnapshot, type DenominationRow } from '../lib/cashSession'
 
 /** How often the Kapanış (closing_control) screen re-reads the branch's cash

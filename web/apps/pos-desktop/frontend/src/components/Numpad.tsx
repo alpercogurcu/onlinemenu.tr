@@ -1,10 +1,10 @@
-import { applyNumpadKey, isNumpadKeyEnabled, type NumpadKey, type NumpadMode } from '../lib/numpad'
+import { applyNumpadKey, isNumpadKeyEnabled, type NumpadKey, type NumpadMode } from '@onlinemenu/pos-core'
 
 type NumpadProps = {
   value: string
   onChange: (next: string) => void
   mode: NumpadMode
-  /** Digit cap for integer/pin modes (see lib/numpad). */
+  /** Digit cap for integer/pin modes (see @onlinemenu/pos-core's numpad.ts). */
   maxLength?: number
   /** See NumpadOptions.pendingReplace. */
   pendingReplace?: boolean
@@ -46,7 +46,7 @@ const KEY_CLASS =
  * On-screen number pad — the ONLY way to enter an amount, count or PIN on the
  * kiosk (it has no soft keyboard; docs/pos-ux-spec.md §2 ilke 6). Controlled:
  * `value` is the string being edited and `onChange` receives the next one; all
- * key semantics live in lib/numpad.ts. Keys are 56px, the 8px grid gap keeps
+ * key semantics live in @onlinemenu/pos-core's numpad.ts. Keys are 56px, the 8px grid gap keeps
  * neighbours from being mis-hit.
  */
 export function Numpad({ value, onChange, mode, maxLength, pendingReplace, disabled = false }: NumpadProps) {

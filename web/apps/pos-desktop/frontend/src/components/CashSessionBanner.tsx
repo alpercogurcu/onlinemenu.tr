@@ -1,5 +1,5 @@
 import type { main } from '../../wailsjs/go/models'
-import { formatMoney } from '../lib/format'
+import { formatMoney } from '@onlinemenu/pos-core'
 
 type CashSessionBannerProps = {
   kind: 'missing' | 'stale'

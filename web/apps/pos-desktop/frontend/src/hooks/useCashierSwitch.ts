@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { JoinCashSession, ListCashSessionParticipants, SwitchCashier } from '../../wailsjs/go/main/App'
 import type { main } from '../../wailsjs/go/models'
-import { describeError } from '../lib/errors'
+import { describeError } from '@onlinemenu/pos-core'
 import { toParticipantView, type ParticipantView } from '../lib/cashierSwitch'
 
 export type UseCashierSwitchResult = {
@@ -9,7 +9,7 @@ export type UseCashierSwitchResult = {
   loading: boolean
   /** Generic failure message (already Turkish via describeError) — for
    * SwitchCashier's 401 this is the deliberately generic "doğrulama
-   * başarısız" message (see lib/errors.ts), never a specific reason. */
+   * başarısız" message (see @onlinemenu/pos-core's errors.ts), never a specific reason. */
   error: string
   refresh: () => Promise<void>
   /** Joins sessionId as the CURRENT principal, optionally setting their own

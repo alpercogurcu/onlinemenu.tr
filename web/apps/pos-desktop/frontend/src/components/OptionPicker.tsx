@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { MAX_LINE_QUANTITY, type LineOptions, type ProductSource } from '../lib/cart'
-import { formatMoney } from '../lib/format'
 import {
+  MAX_LINE_QUANTITY,
+  formatMoney,
+  type LineOptions,
+  type ProductSource,
   QUICK_NOTES,
   composeFreeNote,
   defaultSelection,
@@ -13,7 +15,7 @@ import {
   unmetGroupIds,
   type ModifierGroupSource,
   type OptionSelection,
-} from '../lib/options'
+} from '@onlinemenu/pos-core'
 
 type OptionPickerProps = {
   product: ProductSource & { modifier_groups: ModifierGroupSource[] }

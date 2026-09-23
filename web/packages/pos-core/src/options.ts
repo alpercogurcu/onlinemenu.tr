@@ -2,8 +2,8 @@
 // required, what the fast path pre-selects, how a tap changes a selection, and
 // how the chosen options become a price and a kitchen-readable note. Kept out
 // of the component so the rules are testable without a DOM, and declared on
-// narrow local wire types (not the generated, gitignored wailsjs models) for
-// the same reason as lib/branchFiscal.ts.
+// narrow local wire types (not any one app's generated client bindings) for
+// the same reason as cart.ts's ProductSource.
 
 export type ModifierSource = {
   id: string

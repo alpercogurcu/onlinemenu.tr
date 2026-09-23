@@ -1,5 +1,5 @@
 import type { main } from '../../wailsjs/go/models'
-import { canPickTable, type TargetKind } from '../lib/checkActions'
+import { canPickTable, type TargetKind } from '@onlinemenu/pos-core'
 import { PendingFiscalDot } from './PendingFiscalDot'
 
 type TablePlanProps = {

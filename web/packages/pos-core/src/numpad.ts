@@ -1,7 +1,7 @@
 // Pure key-press logic behind components/Numpad.tsx. The kiosk has no soft
 // keyboard (docs/pos-ux-spec.md §2 ilke 6), so every numeric entry — amount,
 // count, PIN — goes through this one state machine; the component is just a
-// key grid over it. Kept in lib/ so it is testable without a DOM.
+// key grid over it. Kept out of the component so it is testable without a DOM.
 //
 // Entry model for money is "whole lira by default, comma for kuruş" (typing
 // 2-0-0 is ₺200, never ₺2,00): it is how a Turkish cashier reads and says

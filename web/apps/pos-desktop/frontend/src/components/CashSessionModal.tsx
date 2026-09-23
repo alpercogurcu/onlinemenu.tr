@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import { computeDifference, emptyDenominationRows, type ClosingSnapshot, type DenominationRow } from '../lib/cashSession'
-import { formatMoney, parseMoneyInputToKurus } from '../lib/format'
+import { formatMoney, parseMoneyInputToKurus } from '@onlinemenu/pos-core'
 import { AmountDisplay } from './AmountDisplay'
 import { DenominationCounter } from './DenominationCounter'
 import { ErrorBanner } from './ErrorBanner'

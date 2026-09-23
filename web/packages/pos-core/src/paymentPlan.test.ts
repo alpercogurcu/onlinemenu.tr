@@ -8,15 +8,17 @@ import {
   selectionTotal,
   unpaidItems,
   type PayableItem,
+  type PaymentStatusSource,
 } from './paymentPlan'
-import type { TrackedPayment } from './fiscalStatus'
 
 function item(id: string, quantity: number, unitPrice: number): PayableItem {
   return { id, productId: `p-${id}`, name: `Ürün ${id}`, note: '', quantity, unitPrice }
 }
 
-function tracked(id: string, status: TrackedPayment['status'], itemIds?: string[]): TrackedPayment {
-  return { id, checkId: 'c1', amountTotal: 1000, status, receivedAmount: 1000, registeredAtMs: 0, itemIds }
+type Status = 'pending' | 'completed' | 'failed' | 'voided' | 'unknown'
+
+function tracked(id: string, status: Status, itemIds?: string[]): PaymentStatusSource {
+  return { status, itemIds }
 }
 
 describe('payableItems', () => {

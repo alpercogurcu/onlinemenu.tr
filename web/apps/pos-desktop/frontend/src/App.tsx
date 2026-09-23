@@ -67,19 +67,24 @@ import {
   removeNoticeFailure,
   type NoticeFailure,
 } from './lib/kitchenNotice'
-import { confirmMerge, moveNotice, targetPrompt, type TargetKind } from './lib/checkActions'
-import { itemsPaidBy, payableItems } from './lib/paymentPlan'
 import {
   addProductToPending,
+  confirmMerge,
   confirmedOrdersTotal,
+  describeError,
+  describeTableCleanError,
+  itemsPaidBy,
+  moveNotice,
+  payableItems,
   pendingTotal as sumPendingTotal,
   changePendingQuantity,
   removePendingLine,
+  targetPrompt,
   toOrderItemInputs,
   type LineOptions,
   type PendingLine,
-} from './lib/cart'
-import { describeError, describeTableCleanError } from './lib/errors'
+  type TargetKind,
+} from '@onlinemenu/pos-core'
 import {
   addKitchenFailure,
   applyKitchenPrintResult,

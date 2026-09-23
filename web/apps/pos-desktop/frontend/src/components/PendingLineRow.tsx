@@ -1,7 +1,4 @@
-import type { PendingLine } from '../lib/cart'
-import { pendingLineTotal } from '../lib/cart'
-import { formatMoney } from '../lib/format'
-import { composeOptionNote } from '../lib/options'
+import { composeOptionNote, formatMoney, pendingLineTotal, type PendingLine } from '@onlinemenu/pos-core'
 import { TriangleAlertIcon } from './icons'
 
 type PendingLineRowProps = {

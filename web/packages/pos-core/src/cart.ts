@@ -1,7 +1,12 @@
-import type { main } from '../../wailsjs/go/models'
 import { composeOptionNote, unitPriceWith, type SelectedModifier } from './options'
 
-/** Narrow shape this module needs from a ProductDTO — declared locally (not imported from the generated, gitignored wailsjs models) so it is testable without the bindings; see lib/branchFiscal.ts. */
+/**
+ * Narrow shape this module needs from a product — declared locally rather than
+ * imported from any one app's generated client bindings (Wails' wailsjs, a
+ * REST client's OpenAPI types, ...), so this package stays testable and
+ * reusable with no dependency on a specific backend client. Every caller's own
+ * ProductDTO satisfies this structurally with no adapter code.
+ */
 export type ProductSource = {
   id: string
   name: string
@@ -124,7 +129,28 @@ function orderNoteFor(line: PendingLine): string {
   return note ? `${note} | ${OPTIONS_UNAVAILABLE_NOTE}` : OPTIONS_UNAVAILABLE_NOTE
 }
 
-export function toOrderItemInputs(lines: PendingLine[]): main.OrderItemInputDTO[] {
+/**
+ * Wire shape of one order-item input, matching the backend's order-placement
+ * DTO field-for-field (see pos/http/handler.go's PlaceOrder request). Declared
+ * locally rather than imported from a generated client binding — see
+ * ProductSource's doc comment above. A caller's own generated type (e.g.
+ * pos-desktop's wailsjs `main.OrderItemInputDTO`, a class with the same public
+ * fields and no instance methods) accepts this array with no adapter: object
+ * literals of this shape are structurally assignable to it as-is.
+ */
+export type OrderItemInput = {
+  product_id: string
+  product_name: string
+  product_price_amount: number
+  product_currency: string
+  tax_rate_bps: number
+  quantity: number
+  unit_price_amount: number
+  note: string
+  modifier_ids: string[]
+}
+
+export function toOrderItemInputs(lines: PendingLine[]): OrderItemInput[] {
   return lines.map((l) => ({
     product_id: l.productId,
     product_name: l.productName,
@@ -138,6 +164,16 @@ export function toOrderItemInputs(lines: PendingLine[]): main.OrderItemInputDTO[
   }))
 }
 
+/** Narrow shape confirmedOrdersTotal needs from an order — see ProductSource's
+ * doc comment on why this is a local structural type. A caller's own order DTO
+ * (with extra fields such as id/status/items[].note) is assignable here as-is. */
+export type ConfirmedOrder = {
+  items: {
+    quantity: number
+    unit_price_amount: number
+  }[]
+}
+
 /**
  * Mirrors the backend's check-total computation
  * (pos/repo.CheckRepo.GetTotal: SUM(quantity * unit_price_amount) across
@@ -147,7 +183,7 @@ export function toOrderItemInputs(lines: PendingLine[]): main.OrderItemInputDTO[
  * that query or CloseCheck/RegisterCashPayment amounts will not match what
  * the backend expects.
  */
-export function confirmedOrdersTotal(orders: main.OrderDTO[]): number {
+export function confirmedOrdersTotal(orders: ConfirmedOrder[]): number {
   let total = 0
   for (const order of orders) {
     for (const item of order.items) {

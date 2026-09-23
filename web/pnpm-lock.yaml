@@ -268,6 +268,9 @@ importers:
       '@fontsource/ibm-plex-mono':
         specifier: ^5.2.7
         version: 5.2.7
+      '@onlinemenu/pos-core':
+        specifier: workspace:*
+        version: link:../../../packages/pos-core
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -313,6 +316,24 @@ importers:
         version: 4.1.8(@types/node@22.19.20)(jsdom@29.1.1)(vite@6.4.3(@types/node@22.19.20)(jiti@2.7.0)(lightningcss@1.32.0))
 
   packages/config: {}
+
+  packages/pos-core:
+    devDependencies:
+      '@onlinemenu/config':
+        specifier: workspace:*
+        version: link:../config
+      eslint:
+        specifier: ^9.29.0
+        version: 9.39.4(jiti@2.7.0)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.46.0
+        version: 8.61.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^4.1.5
+        version: 4.1.8(@types/node@22.19.20)(jsdom@29.1.1)(vite@7.3.5(@types/node@22.19.20)(jiti@2.7.0)(lightningcss@1.32.0))
 
   packages/types: {}
 

@@ -5,7 +5,6 @@
 //
 // All amounts are integers in kuruş.
 
-import type { TrackedPayment } from './fiscalStatus'
 import { parseMoneyInputToKurus } from './format'
 import { clampToRemaining, splitSuggestion } from './payment'
 
@@ -18,11 +17,13 @@ export type PayableItem = {
   name: string
   note: string
   quantity: number
-  /** Option-inclusive unit price (see lib/options unitPriceWith). */
+  /** Option-inclusive unit price (see options.ts's unitPriceWith). */
   unitPrice: number
 }
 
-/** Narrow shape this module needs from an OrderDTO — declared locally, see lib/branchFiscal.ts. */
+/** Narrow shape this module needs from an order — declared locally rather than
+ * imported from a generated client binding; see cart.ts's ProductSource doc
+ * comment for the same rationale. */
 export type OrderSource = {
   items: {
     id: string
@@ -57,16 +58,30 @@ export function payableItems(orders: readonly OrderSource[]): PayableItem[] {
 }
 
 /**
+ * Narrow shape itemsPaidBy needs from a tracked payment. Declared locally so
+ * this package does not depend on any one app's fuller fiscal-tracking model
+ * (e.g. pos-desktop's lib/fiscalStatus.ts, which additionally models the
+ * async fiscal-registration lifecycle — pending/completed/failed/voided/
+ * unknown — and branch-wide visibility across stations). A caller's richer
+ * tracked-payment type is assignable here as-is.
+ */
+export type PaymentStatusSource = {
+  status: string
+  itemIds?: string[]
+}
+
+/**
  * Items already covered by an item payment made from this station. Only
  * payments that still hold or have settled money count: a failed or voided one
- * releases its items, exactly as it releases its amount (see fiscalStatus).
+ * releases its items, exactly as it releases its amount (see the caller's
+ * fiscal-status module).
  *
  * This lives in memory only. After an app restart every item reads as unpaid
  * again while the money balance stays right (it is derived from the server) —
  * the accepted residual risk of docs/pos-ux-spec.md §3b; a server-side
  * per-item paid amount is the Faz-2 answer.
  */
-export function itemsPaidBy(tracked: readonly TrackedPayment[]): Set<string> {
+export function itemsPaidBy(tracked: readonly PaymentStatusSource[]): Set<string> {
   const paid = new Set<string>()
   for (const payment of tracked) {
     if (payment.status === 'failed' || payment.status === 'voided') continue
@@ -96,7 +111,7 @@ export type DueInput = {
 
 /**
  * What the next payment settles. Never more than `remaining`: the backend has
- * no overpayment guard (see lib/payment's clampToRemaining), so the clamp is
+ * no overpayment guard (see payment.ts's clampToRemaining), so the clamp is
  * the only thing that stops a mistyped or stale amount from over-collecting.
  */
 export function dueFor(input: DueInput): number {

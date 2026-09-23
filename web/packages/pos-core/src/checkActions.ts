@@ -4,7 +4,7 @@
 
 export type TargetKind = 'transfer' | 'merge' | 'move-items'
 
-/** Narrow shape this module needs from a TableDTO — declared locally, see lib/branchFiscal.ts. */
+/** Narrow shape this module needs from a TableDTO — declared locally, see cart.ts's ProductSource doc comment. */
 export type PlanTable = {
   name: string
   status: string

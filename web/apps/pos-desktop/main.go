@@ -14,11 +14,14 @@ import (
 //go:embed all:frontend/web-build
 var assets embed.FS
 
+// buildVersion is the git sha injected by `task pos:build:*` via -ldflags.
+var buildVersion = "dev"
+
 func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "onlinemenu.tr POS",
+		Title:  "onlinemenu.tr POS (" + buildVersion + ")",
 		Width:  1280,
 		Height: 800,
 		AssetServer: &assetserver.Options{

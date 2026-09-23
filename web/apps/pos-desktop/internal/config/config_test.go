@@ -316,3 +316,17 @@ func TestLoad_KitchenDispatcherEnabled(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestBuildDefaults(t *testing.T) {
+	buildAPIBaseURL, buildEnableDevLogin = "https://api.example.com", "false"
+	t.Cleanup(func() { buildAPIBaseURL, buildEnableDevLogin = "", "" })
+	t.Setenv("POS_API_BASE_URL", "")
+
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIBaseURL != "https://api.example.com" || cfg.EnableDevLogin {
+		t.Fatalf("build defaults not applied: %+v", cfg)
+	}
+}

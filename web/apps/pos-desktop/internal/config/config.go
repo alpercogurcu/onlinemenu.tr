@@ -79,10 +79,39 @@ type Config struct {
 // support.
 const defaultPrinterWidth = 48
 
+// Build-time defaults, injected with
+// -ldflags "-X onlinemenu.tr/pos-desktop/internal/config.buildAPIBaseURL=..."
+// so a release binary reaches production without any station-side setup.
+// Empty means "use the local dev default". config.json and POS_* env vars
+// still override these.
+var (
+	buildAPIBaseURL     string
+	buildKeycloakURL    string
+	buildKeycloakRealm  string
+	buildEnableDevLogin string
+)
+
 // defaultConfig is used when no config.json is present and no environment
 // override is set. It targets the local dev stack started via
 // `task compose:up` + `task backend:dev`.
 func defaultConfig() Config {
+	cfg := devDefaults()
+	if buildAPIBaseURL != "" {
+		cfg.APIBaseURL = buildAPIBaseURL
+	}
+	if buildKeycloakURL != "" {
+		cfg.KeycloakURL = buildKeycloakURL
+	}
+	if buildKeycloakRealm != "" {
+		cfg.KeycloakRealm = buildKeycloakRealm
+	}
+	if buildEnableDevLogin != "" {
+		cfg.EnableDevLogin = buildEnableDevLogin != "false"
+	}
+	return cfg
+}
+
+func devDefaults() Config {
 	return Config{
 		APIBaseURL:               "http://localhost:8080",
 		KeycloakURL:              "http://localhost:8090",

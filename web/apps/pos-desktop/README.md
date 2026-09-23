@@ -188,7 +188,8 @@ budur — build config'i değil.
 `internal/config.Load(dataDir)` öncelik sırası:
 1. `POS_API_BASE_URL` ortam değişkeni (dev kolaylığı)
 2. `<dataDir>/config.json` (`{"api_base_url": "..."}`)
-3. Varsayılan: `http://localhost:8080`
+3. Derleme zamanı varsayılanı (`task pos:build:*` prod adreslerini `-ldflags` ile gömer)
+4. Kod varsayılanı: `http://localhost:8080` (dev)
 
 `dataDir` çalışma zamanında `os.UserConfigDir()/onlinemenu-pos-desktop`
 olarak çözülür (macOS: `~/Library/Application Support/...`).
@@ -276,6 +277,49 @@ token + membership_id'den bir CTX token yeniden türetilir
 (varsayılan `true` — `false` yaparak dev-login formunu gizler, bkz.
 `DevLoginEnabled` binding'i) — hepsi `internal/config`'in mevcut
 env > config.json > default önceliğini izler.
+
+## Sahaya kurulum (Windows)
+
+Bu bölüm kurulumu yapan kişi içindir. Derleme macOS'tan yapılır:
+`task pos:build:windows` → `web/apps/pos-desktop/build/bin/` altında
+`pos-desktop-amd64-installer.exe` (kurulum sihirbazı, `makensis` gerekir:
+`brew install makensis`) ve `pos-desktop.exe` (taşınabilir). Çıktılar git dışıdır.
+Pencere başlığındaki parantez içi değer derlemenin git sha'sıdır.
+
+**Prod adresleri derlemeye gömülüdür** (`https://api.diverstreetfood.com`,
+`https://auth.diverstreetfood.com`, realm `onlinemenu`, dev girişi kapalı) —
+kasada adres ayarı yapılmaz.
+
+1. **WebView2:** Windows 10/11'de genelde yüklüdür. Yüklü değilse Wails kurulum
+   sırasında Microsoft'un WebView2 önyükleyicisini indirir (internet gerekir);
+   çevrimdışı kasada WebView2 Runtime'ı önceden kurun.
+2. **Kurulum:** `pos-desktop-amd64-installer.exe` çalıştırılır. Kod imzalı
+   olmadığından SmartScreen "Bilinmeyen yayıncı" uyarısı verir: *Ek bilgi → Yine de çalıştır*.
+3. **İlk açılış:** "Keycloak ile giriş" düğmesi varsayılan tarayıcıyı açar; kasiyer
+   e-posta/parolasıyla girer, tarayıcı "giriş tamamlandı" der, uygulama açılır.
+   Tarayıcıda 127.0.0.1 üzerine yerel geri dönüş kullanılır; güvenlik yazılımı
+   engellemesin.
+4. **Yazıcı ayarı:** `%AppData%\onlinemenu-pos-desktop\config.json`
+   (`C:\Users\<kullanıcı>\AppData\Roaming\...`) dosyası elle oluşturulur:
+   ```json
+   {
+     "printer_addr": "192.168.1.50:9100",
+     "kitchen_printer_addr": "192.168.1.60:9100",
+     "printer_width": 48,
+     "business_name": "Diver Street Food",
+     "branch_name": "Serdivan"
+   }
+   ```
+   Yazıcıya sabit IP verin (DHCP rezervasyonu), TCP 9100 açık olmalı. Adres yoksa
+   uygulama sahte yazıcıya basar — fiş çıkmaz. Değişiklik için uygulamayı yeniden açın.
+5. **Mutfak dağıtıcısı:** QR siparişlerini mutfak yazıcısına basan
+   `kitchen_dispatcher_enabled` (varsayılan `true`) bir şubede **yalnız bir kasada**
+   açık olmalı; diğer kasalarda `"kitchen_dispatcher_enabled": false` yazın, yoksa her
+   QR siparişi kasa sayısı kadar basılır.
+6. **Kasiyer girişi:** Her kasiyer kendi Keycloak hesabıyla girer (şube/rol hesaba
+   bağlıdır). Oturum kalıcıdır (Windows Kimlik Yöneticisi); kapatıp açınca yeniden
+   giriş gerekmez.
+7. **Kaldırma/temizlik:** Ayarları sıfırlamak için `config.json` silinir.
 
 ## Wails binding'leri (şu an)
 

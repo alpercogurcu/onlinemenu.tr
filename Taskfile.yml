@@ -1,5 +1,13 @@
 version: '3'
 
+vars:
+  # POS istemcisinin prod varsayılanları (derlemeye gömülür; kasada ayar gerekmez).
+  POS_LDFLAGS: >-
+    -X onlinemenu.tr/pos-desktop/internal/config.buildAPIBaseURL=https://api.diverstreetfood.com
+    -X onlinemenu.tr/pos-desktop/internal/config.buildKeycloakURL=https://auth.diverstreetfood.com
+    -X onlinemenu.tr/pos-desktop/internal/config.buildKeycloakRealm=onlinemenu
+    -X onlinemenu.tr/pos-desktop/internal/config.buildEnableDevLogin=false
+
 dotenv: ['backend/.env']
 
 includes:
@@ -127,6 +135,31 @@ tasks:
     dir: web/apps/pos-desktop
     cmds:
       - wails build
+
+  pos:build:windows:
+    desc: "POS desktop Windows amd64 prod derlemesi (macOS'tan çapraz; çıktı build/bin/, git dışı). NSIS varsa kurulum sihirbazı, yoksa taşınabilir .exe"
+    dir: web/apps/pos-desktop
+    vars:
+      SHA:
+        sh: git rev-parse --short HEAD
+    cmds:
+      - |
+        NSIS=""
+        command -v makensis >/dev/null 2>&1 && NSIS="-nsis"
+        wails generate module >/dev/null && wails build -skipbindings -skipembedcreate -platform windows/amd64 $NSIS -ldflags "{{.POS_LDFLAGS}} -X main.buildVersion={{.SHA}}"
+        ls -lh build/bin/
+
+  pos:build:mac:
+    desc: "POS desktop macOS universal prod derlemesi (çıktı build/bin/, git dışı)"
+    dir: web/apps/pos-desktop
+    vars:
+      SHA:
+        sh: git rev-parse --short HEAD
+    cmds:
+      - |
+        export CGO_LDFLAGS="-framework UniformTypeIdentifiers"
+        wails generate module >/dev/null && wails build -skipbindings -skipembedcreate -platform darwin/universal -ldflags "{{.POS_LDFLAGS}} -X main.buildVersion={{.SHA}}"
+        ls -lh build/bin/
 
   pos:test:
     desc: "POS desktop Go testleri (race + cover)"

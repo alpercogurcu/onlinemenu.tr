@@ -100,3 +100,6 @@ deploy/.api-image
 
 # b2b personel davet çıktıları (kişisel veri)
 deploy/b2b-staff.local.*
+
+# Kişisel Claude kuralları
+CLAUDE.local.md

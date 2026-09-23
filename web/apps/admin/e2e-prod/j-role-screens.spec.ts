@@ -186,8 +186,11 @@ test.describe("(j) rol ekranları", () => {
         await manager.api.del(`/api/v1/catalog/menus/${menu.id}/items/${productId}`)
       }
 
+      // An unused group answers `null`, not [] (Go nil slice) — the admin
+      // hook folds it with `?? []`, so does this probe.
       const assignedTo = async () =>
-        json<string[]>(await manager.api.get(`/api/v1/catalog/modifier-groups/${groupId}/products`), 200)
+        (await json<string[] | null>(await manager.api.get(`/api/v1/catalog/modifier-groups/${groupId}/products`), 200)) ??
+        []
 
       page = await openAs(browser, ACCOUNTS.manager())
       await gotoSpa(page, `/catalog/modifiers/${groupId}`)

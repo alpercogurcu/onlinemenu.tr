@@ -190,6 +190,12 @@ tasks:
     cmds:
       - POS_LIVE_API_URL="${POS_LIVE_API_URL:-http://localhost:8081}" go test -tags live -run TestLiveSmoke -count=1 -v .
 
+  pos:test:liveprod:
+    desc: "POS desktop prod SALT-OKUNUR smoke (derleme varsayılanlarıyla). Gerekli env: E2E_PROD_CLIENT_ID/SECRET, PROD_SMOKE_EMAIL/PASSWORD (deploy/.env.diverserver.local'dan); yoksa skip"
+    dir: web/apps/pos-desktop
+    cmds:
+      - go test -ldflags "{{.POS_LDFLAGS}}" -tags liveprod -run TestLiveProdReadOnly -count=1 -v .
+
   pos:typecheck:
     desc: "POS desktop frontend tip denetimi (tsc --noEmit)"
     dir: web

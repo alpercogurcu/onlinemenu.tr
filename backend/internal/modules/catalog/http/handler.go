@@ -724,7 +724,7 @@ func (h *Handler) listProductModifierGroups(w http.ResponseWriter, r *http.Reque
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, ids)
+	respondJSON(w, http.StatusOK, nonNilIDs(ids))
 }
 
 // listProductOptions answers every sellable product's option tree in one
@@ -768,7 +768,7 @@ func (h *Handler) listGroupProducts(w http.ResponseWriter, r *http.Request) {
 		h.error(w, r, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, ids)
+	respondJSON(w, http.StatusOK, nonNilIDs(ids))
 }
 
 func (h *Handler) removeModifierGroup(w http.ResponseWriter, r *http.Request) {
@@ -981,6 +981,14 @@ func (h *Handler) removeMenuItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// nonNilIDs keeps an empty list encoding as [] rather than null.
+func nonNilIDs(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {

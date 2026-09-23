@@ -24,6 +24,7 @@ excludeFiles:
   - "internal/modules/catalog/service/category_products_http_integration_test\\.go"
   - "internal/modules/catalog/service/branch_override_integration_test\\.go"
   - "internal/modules/catalog/service/product_options_http_integration_test\\.go"
+  - "internal/modules/catalog/service/product_delete_integration_test\\.go"
   - "internal/modules/identity/repo/role_tenant_guard_test\\.go"
   - "internal/modules/tenant/http/branch_directory_integration_test\\.go"
 

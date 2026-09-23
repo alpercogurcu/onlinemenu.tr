@@ -29,7 +29,7 @@ import (
 
 var catalogManagerRoleID = uuid.MustParse("00000001-0000-0000-0000-000000000006")
 
-func categoryProductsMux(t *testing.T) *chi.Mux {
+func testEngine(t *testing.T) *auth.Engine {
 	t.Helper()
 	engine, err := auth.NewEngine(
 		auth.EngineConfig{BundlePath: "../../../../configs/opa/bundles"},
@@ -37,6 +37,12 @@ func categoryProductsMux(t *testing.T) *chi.Mux {
 		zap.NewNop(),
 	)
 	require.NoError(t, err)
+	return engine
+}
+
+func categoryProductsMux(t *testing.T) *chi.Mux {
+	t.Helper()
+	engine := testEngine(t)
 
 	h := cataloghttp.NewHandler(cataloghttp.Params{
 		Products: newProductService(),

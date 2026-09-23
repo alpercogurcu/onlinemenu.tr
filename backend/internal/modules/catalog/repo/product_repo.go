@@ -165,6 +165,18 @@ func (r *ProductRepo) Delete(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
 	return nil
 }
 
+// PurgeReferences removes everything that points at a product from the
+// catalog's junction/config tables. Called on soft delete: the row stays for
+// order history, but nothing may keep offering or configuring it.
+func (r *ProductRepo) PurgeReferences(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	for _, table := range []string{"menu_items", "product_modifier_groups", "branch_product_overrides", "product_channel_availability"} {
+		if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE product_id = $1", id); err != nil {
+			return fmt.Errorf("catalog/repo/product: purge %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func scanProduct(row pgx.Row) (domain.Product, error) {
 	var (
 		p         domain.Product

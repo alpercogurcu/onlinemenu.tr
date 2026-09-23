@@ -184,10 +184,18 @@ func (s *ProductService) Update(ctx context.Context, tenantID uuid.UUID, p domai
 	return updated, nil
 }
 
-// Delete soft-deletes a product (sets is_active=false).
+// Delete soft-deletes a product (sets is_active=false) and, in the same
+// transaction, drops its menu items, modifier-group links, branch overrides and
+// channel availability. The products row is kept for order history; the links
+// are cleared because a deleted product has no reactivation flow that would
+// need them, and stale rows would otherwise resurface with old prices/menus if
+// the product were ever switched back on.
 func (s *ProductService) Delete(ctx context.Context, tenantID, productID uuid.UUID) error {
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		return s.productRepo.Delete(ctx, tx, productID)
+		if err := s.productRepo.Delete(ctx, tx, productID); err != nil {
+			return err
+		}
+		return s.productRepo.PurgeReferences(ctx, tx, productID)
 	})
 	if err != nil {
 		return wrapErr(err, "catalog/service/product: delete: %w")

@@ -67,6 +67,11 @@ export function useBreadcrumbLabel(label: string | undefined) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// Top-level sections that have an index page of their own. The others
+// (/pos, /catalog, /settings, /inventory, ...) are only sidebar groups: a
+// link to them is a 404, so their crumb is plain text.
+const SECTIONS_WITH_PAGE: ReadonlySet<string> = new Set(["parties"])
+
 function isUuid(segment: string): boolean {
   return UUID_RE.test(segment)
 }
@@ -163,7 +168,8 @@ export default function DynamicBreadcrumb() {
         ROUTE_NAMES[segment] ||
         titleCased
     }
-    return { href, label, isCurrent }
+    const linkable = !isCurrent && (index > 0 || SECTIONS_WITH_PAGE.has(segment))
+    return { href, label, isCurrent, linkable }
   })
 
   if (pathSegments.length === 0) return null
@@ -185,6 +191,8 @@ export default function DynamicBreadcrumb() {
             <BreadcrumbItem>
               {item.isCurrent ? (
                 <BreadcrumbPage>{item.label}</BreadcrumbPage>
+              ) : !item.linkable ? (
+                <span>{item.label}</span>
               ) : (
                 <BreadcrumbLink asChild>
                   <Link href={item.href}>{item.label}</Link>

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { addProductToPending, toOrderItemInputs } from "@onlinemenu/pos-core"
 
 import {
+  describeCheckActionError,
   describeOrderError,
   isRetryable,
   newIdempotencyKey,
@@ -29,6 +30,27 @@ function httpError(status: number, data: unknown): AxiosError {
 function networkError(): AxiosError {
   return new AxiosError("Network Error", "ERR_NETWORK", { headers: new AxiosHeaders() }, {})
 }
+
+describe("describeCheckActionError (adisyon kapat/iptal)", () => {
+  // Web has no payment screen; a cashier pressing "Kapat" on an unpaid check
+  // saw only "Adisyon kapatılamadı" (2026-09-23 prod sweep).
+  it("explains an unpaid check and where the payment is taken", () => {
+    const msg = describeCheckActionError(httpError(409, { error: "x", code: "insufficient_payment" }))
+    expect(msg).toContain("tam ödenmemiş")
+    expect(msg).toContain("POS")
+  })
+
+  it("keeps pos-core wording for other coded conflicts", () => {
+    expect(describeCheckActionError(httpError(409, { error: "x", code: "check_has_payments" }))).toContain(
+      "Ödemesi alınmış",
+    )
+    expect(describeCheckActionError(httpError(409, { error: "x", code: "fiscal_pending" }))).toContain("Mali kayıt")
+  })
+
+  it("says a lost connection in plain words", () => {
+    expect(describeCheckActionError(networkError())).toBe("Bağlantı kurulamadı. Tekrar deneyin.")
+  })
+})
 
 describe("error adapter", () => {
   it("rebuilds the status + body text pos-core parses (JSON and plain-text bodies)", () => {

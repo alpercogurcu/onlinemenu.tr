@@ -105,6 +105,70 @@ describe("KitchenOrderCard", () => {
     expect(screen.getByRole("button", { name: "Kabul Et" })).toBeInTheDocument()
     expect(screen.queryByText("Kasa onayı bekleniyor")).not.toBeInTheDocument()
   })
+
+  // 2026-09-23 prod sweep: the waiter screen and the QR menu both fold the
+  // chosen options into the line note ("Acılı | Trüflü patates(+80)"), and an
+  // allergy warning travels as the order note — the card rendered neither,
+  // so the kitchen cooked the plain product.
+  it("shows each line's note (the chosen options) and the order note", () => {
+    const detail = baseDetail()
+    detail.note = "Alerji: fıstık"
+    detail.items = [
+      { ...detail.items[0], product_name: "Smash Burger", quantity: 2, note: "Acılı | Trüflü patates(+80) | Soğansız" },
+    ]
+    render(
+      <KitchenOrderCard
+        order={baseOrder({ status: "accepted" })}
+        detail={detail}
+        now={Date.now()}
+        isNew={false}
+        onAdvance={() => {}}
+        isMutating={false}
+        canAccept={true}
+      />,
+    )
+
+    expect(screen.getByText("Acılı | Trüflü patates(+80) | Soğansız")).toBeInTheDocument()
+    expect(screen.getByText("Alerji: fıstık")).toBeInTheDocument()
+    // Quantity leads the line so it is read before the product name.
+    expect(screen.getByTestId("kds-item-qty")).toHaveTextContent("2×")
+  })
+
+  it("names a late ticket in words, not only in red", () => {
+    const occurredAt = new Date("2026-09-23T12:00:00Z").toISOString()
+    const now = new Date("2026-09-23T12:25:00Z").getTime()
+    render(
+      <KitchenOrderCard
+        order={baseOrder({ status: "accepted", occurredAt })}
+        detail={baseDetail()}
+        now={now}
+        isNew={false}
+        onAdvance={() => {}}
+        isMutating={false}
+        canAccept={true}
+      />,
+    )
+
+    expect(screen.getByText("Gecikti")).toBeInTheDocument()
+  })
+
+  it("does not mark an on-time ticket as late", () => {
+    const occurredAt = new Date("2026-09-23T12:00:00Z").toISOString()
+    const now = new Date("2026-09-23T12:03:00Z").getTime()
+    render(
+      <KitchenOrderCard
+        order={baseOrder({ status: "accepted", occurredAt })}
+        detail={baseDetail()}
+        now={now}
+        isNew={false}
+        onAdvance={() => {}}
+        isMutating={false}
+        canAccept={true}
+      />,
+    )
+
+    expect(screen.queryByText("Gecikti")).not.toBeInTheDocument()
+  })
 })
 
 describe("KitchenPage device-dark root", () => {

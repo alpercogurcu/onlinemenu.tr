@@ -162,8 +162,18 @@ test.describe("rol bazlı görünürlük", () => {
 
       await loginAs(page, USERS.cashier)
       await gotoSpa(page, `/pos/checks/${checkId}`)
-      await expect(page.getByText("Kalan")).toBeVisible()
-      await expect(page.getByRole("button", { name: "Kapat" })).toBeVisible()
+      await expect(page.getByText("Kalan", { exact: true })).toBeVisible()
+      // The web takes no payment: an unpaid check's "Kapat" is locked and
+      // says where the money is taken (2026-09-23 sweep).
+      await expect(page.getByRole("button", { name: "Kapat" })).toBeDisabled()
+      await expect(page.getByText(/POS uygulamasından alın/)).toBeVisible()
+      // "İptal" asks first — dismissing the dialog leaves the check open.
+      await page.getByRole("button", { name: "İptal" }).click()
+      const dialog = page.getByRole("alertdialog")
+      await expect(dialog).toBeVisible()
+      await dialog.getByRole("button", { name: "Vazgeç" }).click()
+      await expect(dialog).toHaveCount(0)
+      await expect(page.getByText("Açık", { exact: true }).first()).toBeVisible()
     } finally {
       const cashier = await devToken(request, USERS.cashier)
       await request.post(`${API_URL}/api/v1/pos/checks/${checkId}/cancel`, {

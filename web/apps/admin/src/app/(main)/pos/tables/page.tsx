@@ -1,6 +1,6 @@
 "use client"
 
-import { LayoutGrid, Pencil, Plus, QrCode, ShoppingBasket, Users } from "lucide-react"
+import { LayoutGrid, Pencil, Plus, QrCode, ReceiptText, ShoppingBasket, Users } from "lucide-react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { useEffect, useState } from "react"
@@ -46,14 +46,19 @@ export default function TablesPage() {
   // is granted to cashier/shift_manager/waiter/kitchen/bar, but every action
   // on the page is narrower. A control the role cannot use is not rendered at
   // all — a visible button whose save always fails is what users reported.
-  //   storefront.qr.read  — cashier/shift_manager
+  //   storefront.qr.manage — issue/rotate/revoke a table's code. The QR dialog
+  //                          is useless with read alone: the raw token is shown
+  //                          only when issued, so a cashier would meet two
+  //                          greyed-out buttons. The button follows .manage.
   //   pos.table.manage    — zone/table CRUD and any status move (shift_manager)
   //   pos.table.clean     — only cleaning -> empty (cashier/shift_manager/waiter)
-  const canViewQR = useCan("storefront.qr.read")
+  const canViewQR = useCan("storefront.qr.manage")
   const canManage = useCan("pos.table.manage")
   const canClean = useCan("pos.table.clean")
   //   pos.order.place     — tapping a table opens the web order screen
   const canOrder = useCan("pos.order.place")
+  //   pos.check.read      — an occupied table links to its adisyon
+  const canReadChecks = useCan("pos.check.read")
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches } = useBranches(tenantId)
   // Non-null for a branch-scoped operator — they always work their own
@@ -119,7 +124,9 @@ export default function TablesPage() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("title")}</h1>
-          <p className="text-muted-foreground">{t("subtitle")}</p>
+          <p className="text-muted-foreground">
+            {canManage ? t("subtitle") : canOrder ? t("subtitleOrder") : t("subtitleView")}
+          </p>
         </div>
 
         <div className="flex flex-wrap items-end gap-3">
@@ -279,6 +286,17 @@ export default function TablesPage() {
                             </Link>
                           ) : (
                             summary
+                          )}
+
+                          {canReadChecks && table.active_check_id && (
+                            <Link
+                              href={`/pos/checks/${table.active_check_id}`}
+                              aria-label={t("openCheckAria", { table: table.name })}
+                              className="mx-4 mb-2 flex min-h-11 items-center justify-center gap-1 rounded-md border text-sm font-medium hover:bg-accent/60"
+                            >
+                              <ReceiptText className="size-4" aria-hidden="true" />
+                              {t("openCheck")}
+                            </Link>
                           )}
 
                           {(transitionsFor(table.status).length > 0 || canViewQR || canManage) && (

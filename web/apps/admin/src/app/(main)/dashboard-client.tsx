@@ -34,6 +34,7 @@ import { useChecks } from "@/hooks/use-pos"
 import { periodRange, useCalendarDay, useSaleDetails, type ReportPeriod } from "@/hooks/use-reports"
 import { useBranches } from "@/hooks/use-tenant"
 import { formatKurus } from "@/lib/money"
+import { axisLira, fillDailySeries } from "@/lib/report-chart"
 import { useAuthStore } from "@/store/auth-store"
 
 // dd.MM label for the AreaChart x-axis — by_day's `date` is a plain
@@ -164,30 +165,37 @@ export default function DashboardClient() {
               <CardDescription>{t("chart.description")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={report.data?.by_day ?? []}>
-                  <defs>
-                    <linearGradient id="colorSatis" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="date" tickFormatter={dayLabel} className="text-xs" />
-                  <YAxis className="text-xs" />
-                  <Tooltip
-                    labelFormatter={dayLabel}
-                    formatter={(value: number) => [formatKurus(value), t("chart.tooltipLabel")]}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="gross"
-                    stroke="var(--color-primary)"
-                    strokeWidth={2}
-                    fill="url(#colorSatis)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {report.data && report.data.by_day.length === 0 ? (
+                <p className="flex h-[300px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+                  {t("chart.empty")}
+                </p>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <AreaChart data={fillDailySeries(report.data?.by_day ?? [], from, to)}>
+                    <defs>
+                      <linearGradient id="colorSatis" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                    <XAxis dataKey="date" tickFormatter={dayLabel} className="text-xs" />
+                    <YAxis className="text-xs" tickFormatter={axisLira} width={80} />
+                    <Tooltip
+                      labelFormatter={dayLabel}
+                      formatter={(value: number) => [formatKurus(value), t("chart.tooltipLabel")]}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="gross"
+                      stroke="var(--color-primary)"
+                      strokeWidth={2}
+                      fill="url(#colorSatis)"
+                      isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 

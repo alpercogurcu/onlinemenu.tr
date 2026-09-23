@@ -19,7 +19,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCan } from "@/hooks/use-can"
 import {
   useCreateQRCode,
@@ -56,10 +55,8 @@ export function QRCodeDialog({
 }: QRCodeDialogProps) {
   const t = useTranslations("storefront")
 
-  // Cosmetic-only gate (see lib/permissions.ts): a cashier holds
-  // storefront.qr.read (can open this dialog and see the active code) but
-  // not storefront.qr.manage, so create/rotate/revoke render disabled with a
-  // tooltip instead of a working button that would just 403. The backend
+  // Cosmetic-only gate (see lib/permissions.ts): without storefront.qr.manage
+  // the create/rotate/revoke buttons are not rendered at all. The backend
   // (authz.rego) is the real enforcement point regardless of this value.
   const canManage = useCan("storefront.qr.manage")
 
@@ -248,7 +245,6 @@ export function QRCodeDialog({
                   onClick={handleRevoke}
                   disabled={busy}
                   canManage={canManage}
-                  deniedLabel={t("qr.manageDenied")}
                 >
                   {revokeQR.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -262,7 +258,6 @@ export function QRCodeDialog({
                   onClick={handleRotate}
                   disabled={busy}
                   canManage={canManage}
-                  deniedLabel={t("qr.manageDenied")}
                 >
                   {rotateQR.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -277,7 +272,6 @@ export function QRCodeDialog({
                 onClick={handleCreate}
                 disabled={busy || branchId === ""}
                 canManage={canManage}
-                deniedLabel={t("qr.manageDenied")}
               >
                 {createQR.isPending ? (
                   <Loader2 className="size-4 animate-spin" />
@@ -294,38 +288,20 @@ export function QRCodeDialog({
   )
 }
 
-// Wraps a manage-only action button (create/rotate/revoke) with the
-// disabled+tooltip cosmetic gate: when the current role cannot perform
-// storefront.qr.manage (see lib/permissions.ts), the button renders disabled
-// and a tooltip explains why, instead of firing a request the backend would
-// 403 on. A plain `disabled` Button does not reliably dispatch hover/focus
-// events for the tooltip trigger in every browser, hence the focusable
-// wrapping span (the standard Radix pattern for disabled-trigger tooltips).
+// Wraps a manage-only action button (create/rotate/revoke). A role without
+// storefront.qr.manage does not get the button at all — not a disabled one
+// with a tooltip: operators read a greyed-out control as "something I should
+// be able to do" (2026-09-23). The backend (authz.rego) enforces regardless.
 function ManageActionButton({
   canManage,
-  deniedLabel,
   disabled,
   children,
   ...buttonProps
-}: ComponentProps<typeof Button> & { canManage: boolean; deniedLabel: string }) {
-  if (canManage) {
-    return (
-      <Button disabled={disabled} {...buttonProps}>
-        {children}
-      </Button>
-    )
-  }
-
+}: ComponentProps<typeof Button> & { canManage: boolean }) {
+  if (!canManage) return null
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} className="inline-flex">
-          <Button disabled className="pointer-events-none" {...buttonProps}>
-            {children}
-          </Button>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>{deniedLabel}</TooltipContent>
-    </Tooltip>
+    <Button disabled={disabled} {...buttonProps}>
+      {children}
+    </Button>
   )
 }

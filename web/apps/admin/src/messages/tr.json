@@ -50,6 +50,8 @@
   "posTables": {
     "title": "Masalar",
     "subtitle": "Bölge ve masa tanımlayın, masa durumlarını takip edin, masaya QR kodu basın.",
+    "subtitleOrder": "Masaya dokunarak sipariş alın; dolu masanın adisyonunu buradan açın.",
+    "subtitleView": "Masaların doluluk durumunu görün.",
     "branch": "Şube",
     "branchPlaceholder": "Şube seçin",
     "noBranch": "Önce bir şube seçin",
@@ -117,13 +119,20 @@
       "updated": "Masa güncellendi",
       "createFailed": "Masa oluşturulamadı",
       "updateFailed": "Masa güncellenemedi"
-    }
+    },
+    "openCheck": "Adisyonu aç",
+    "openCheckAria": "{table} adisyonunu aç"
   },
   "posChecks": {
     "title": "Adisyonlar",
     "subtitle": "Tüm adisyonları görüntüleyin ve yönetin.",
     "listTitle": "Adisyon Listesi",
     "empty": "Adisyon bulunamadı",
+    "emptyOpen": "Açık adisyon yok",
+    "showAll": "Tüm adisyonları göster",
+    "filterLabel": "Adisyon süzgeci",
+    "filterOpen": "Açık ({count})",
+    "filterAll": "Tümü",
     "columnTable": "Masa",
     "columnPax": "Kişi",
     "columnTotal": "Tutar",
@@ -146,6 +155,12 @@
     "cancelled": "\"{table}\" adisyonu iptal edildi",
     "closeFailed": "Adisyon kapatılamadı",
     "cancelFailed": "Adisyon iptal edilemedi",
+    "cancelConfirm": {
+      "title": "\"{table}\" adisyonu iptal edilsin mi?",
+      "description": "Adisyon iptal edilir ve toplamı satışa yazılmaz. Bu işlem geri alınamaz.",
+      "confirm": "Adisyonu iptal et",
+      "keep": "Vazgeç"
+    },
     "openDetail": "\"{table}\" adisyonunun detayını aç",
     "orderStatus": {
       "pending": "Bekliyor",
@@ -188,7 +203,11 @@
       "remaining": "Kalan",
       "paymentsTitle": "Ödemeler",
       "noPayments": "Henüz tamamlanmış ödeme yok.",
-      "paymentsUnavailable": "Ödeme bilgisi yüklenemedi."
+      "paymentsUnavailable": "Ödeme bilgisi yüklenemedi.",
+      "accept": "Siparişi kabul et",
+      "accepted": "Sipariş kabul edildi, mutfağa düştü",
+      "acceptFailed": "Sipariş kabul edilemedi",
+      "closeNeedsPayment": "Kalan {amount} ödenmeden kapatılamaz. Ödemeyi kasadaki POS uygulamasından alın."
     }
   },
   "catalogMenus": {
@@ -460,7 +479,16 @@
       "usedBy": {
         "title": "Bu grubu kullanan ürünler",
         "empty": "Henüz hiçbir üründe kullanılmıyor",
-        "hint": "Buradaki değişiklik {n} üründe de geçerli olur."
+        "hint": "Buradaki değişiklik {n} üründe de geçerli olur.",
+        "emptyAssign": "Henüz hiçbir üründe kullanılmıyor. “Ürüne ekle” ile bu grubu bir ürüne bağlayın; sipariş ekranında o ürün seçilince bu seçenekler sorulur.",
+        "add": "Ürüne ekle",
+        "searchPlaceholder": "Ürün ara",
+        "noCandidates": "Eklenecek ürün yok",
+        "added": "\"{product}\" ürününe eklendi",
+        "removed": "\"{product}\" ürününden çıkarıldı",
+        "removeAria": "{product} — gruptan çıkar",
+        "undo": "Geri al",
+        "saveFirst": "Ürünlere eklemek için önce grubu kaydedin."
       },
       "save": "Kaydet",
       "cancel": "Vazgeç",
@@ -579,7 +607,8 @@
     "chart": {
       "title": "Günlük Satış",
       "description": "Seçilen dönemin günlük satış grafiği",
-      "tooltipLabel": "Satış"
+      "tooltipLabel": "Satış",
+      "empty": "Bu dönemde satış yok."
     },
     "payments": {
       "title": "Ödemeler",
@@ -595,14 +624,16 @@
         "comp": "İkram",
         "noCharge": "Ödemesiz",
         "openAccount": "Açık Hesap"
-      }
+      },
+      "empty": "Bu dönemde ödeme yok."
     },
     "tax": {
       "title": "KDV Dağılımı",
       "rate": "Oran",
       "base": "Matrah",
       "tax": "KDV",
-      "gross": "Brüt"
+      "gross": "Brüt",
+      "empty": "Bu dönemde satış yok."
     },
     "cashSessions": {
       "title": "Kasa Oturumları",

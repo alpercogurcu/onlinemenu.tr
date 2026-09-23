@@ -159,17 +159,19 @@ export function KitchenOrderCard({
   canAccept: boolean
 }) {
   const awaitingCounter = order.status === "pending" && !canAccept
+  const tone = elapsedTone(order.occurredAt, now)
   return (
     <Card
       className={cn(
         "border-t-4 bg-card text-card-foreground",
         COLUMN_ACCENT[order.status as (typeof COLUMN_ORDER)[number]],
+        tone === "late" && "ring-2 ring-status-danger-border",
         isNew && "animate-pulse ring-4 ring-status-warning-border",
       )}
     >
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex min-w-0 items-center gap-2 text-lg">
+          <CardTitle className="flex min-w-0 items-center gap-2 text-xl font-bold">
             <span className="truncate">{order.tableLabel || "Masasız"}</span>
             {/* Only "online_qr" is badged. A missing source (older backend,
                 omitempty on the wire) and the "pos" default both render
@@ -186,23 +188,51 @@ export function KitchenOrderCard({
               </Badge>
             )}
           </CardTitle>
-          <span
-            className={cn("shrink-0 font-mono text-sm tabular-nums", ELAPSED_TONE_CLASS[elapsedTone(order.occurredAt, now)])}
-          >
-            {formatElapsed(order.occurredAt, now)}
+          <span className="flex shrink-0 items-center gap-2">
+            {/* Colour alone does not carry "late" across a kitchen: the word
+                does, for colour-blind cooks and glare-washed tablets. */}
+            {tone === "late" && (
+              <Badge variant="danger">
+                <AlertTriangle className="mr-1 size-3.5" />
+                Gecikti
+              </Badge>
+            )}
+            <span className={cn("font-mono text-base font-semibold tabular-nums", ELAPSED_TONE_CLASS[tone])}>
+              {formatElapsed(order.occurredAt, now)}
+            </span>
           </span>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {detail ? (
-          <ul className="space-y-1">
-            {detail.items.map((item) => (
-              <li key={item.id} className="flex justify-between text-sm">
-                <span>{item.product_name}</span>
-                <span className="text-muted-foreground">×{item.quantity}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            {/* The order note is where an allergy or "acele" travels; it is
+                the one line a cook must not miss, so it leads the card. */}
+            {detail.note && (
+              <p className="flex items-start gap-2 rounded-md border border-status-warning-border bg-status-warning-bg px-3 py-2 text-base font-semibold text-status-warning-fg break-words">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span>{detail.note}</span>
+              </p>
+            )}
+            <ul className="space-y-2">
+              {detail.items.map((item) => (
+                <li key={item.id} className="flex gap-2 text-lg leading-snug">
+                  <span data-testid="kds-item-qty" className="w-9 shrink-0 font-bold tabular-nums">
+                    {item.quantity}×
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium break-words">{item.product_name}</span>
+                    {/* Line note = chosen options + free text, composed by
+                        the waiter screen / QR menu (pos-core composeOptionNote,
+                        storefront lineNote). */}
+                    {item.note && (
+                      <span className="block text-base font-semibold text-status-info-fg break-words">{item.note}</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
         ) : (
           <Skeleton className="h-10 w-full" />
         )}

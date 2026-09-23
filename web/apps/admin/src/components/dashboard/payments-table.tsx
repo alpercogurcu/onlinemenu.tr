@@ -48,7 +48,17 @@ export function PaymentsTable({ payments }: { payments: SaleDetailsPayment[] }) 
             <TableHead className="text-right">{t("total")}</TableHead>
           </TableRow>
         </TableHeader>
-        <TableBody>{rows(completed)}</TableBody>
+        <TableBody>
+          {completed.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={3} className="text-center text-muted-foreground">
+                {t("empty")}
+              </TableCell>
+            </TableRow>
+          ) : (
+            rows(completed)
+          )}
+        </TableBody>
       </Table>
 
       {voided.length > 0 && (

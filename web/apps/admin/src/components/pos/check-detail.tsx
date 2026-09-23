@@ -5,8 +5,9 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import Link from "next/link"
-import type { ReactNode } from "react"
+import { type ReactNode, useState } from "react"
 
+import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
 import { useBreadcrumbLabel } from "@/components/layouts/dynamic-breadcrumb"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui/table"
 import { useCan } from "@/hooks/use-can"
 import {
+  useAcceptOrder,
   useCancelCheck,
   useCheck,
   useCheckOrders,
@@ -30,6 +32,7 @@ import {
 } from "@/hooks/use-pos"
 import { formatKurus } from "@/lib/money"
 import { checkDurationLabel } from "@/lib/pos-format"
+import { describeCheckActionError } from "@/lib/pos-order"
 import { checkStatusVariant, orderStatusVariant } from "@/lib/status-badge"
 import { cn } from "@/lib/utils"
 import type { Check, CheckSettlement, Order, OrderStatus } from "@/types"
@@ -55,8 +58,18 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function OrderCard({ order }: { order: Order }) {
+function OrderCard({ order, canAccept }: { order: Order; canAccept: boolean }) {
   const t = useTranslations("posChecks")
+  const acceptOrder = useAcceptOrder()
+
+  async function accept() {
+    try {
+      await acceptOrder.mutateAsync(order.id)
+      toast.success(t("detail.accepted"))
+    } catch (err) {
+      toast.error(t("detail.acceptFailed"), { description: describeCheckActionError(err) })
+    }
+  }
   const billed = !NOT_BILLED.has(order.status)
   const orderTotal = order.items.reduce((sum, it) => sum + it.quantity * it.unit_price_amount, 0)
 
@@ -81,13 +94,21 @@ function OrderCard({ order }: { order: Order }) {
         <span className={cn("ml-auto text-sm font-medium tabular-nums", !billed && "line-through")}>
           {formatKurus(orderTotal)}
         </span>
+        {/* A waiter's order waits for the counter (pos.order.accept); the
+            cashier reading the check accepts it here instead of hunting for
+            it on the kitchen board. */}
+        {order.status === "pending" && canAccept && (
+          <Button size="sm" className="w-full sm:w-auto" onClick={() => void accept()} disabled={acceptOrder.isPending}>
+            {t("detail.accept")}
+          </Button>
+        )}
       </header>
       {order.rejection_reason && (
         <p className="px-4 pt-2 text-xs text-destructive">
           {t("detail.rejectionReason", { reason: order.rejection_reason })}
         </p>
       )}
-      {order.note && <p className="px-4 pt-2 text-xs text-muted-foreground">{order.note}</p>}
+      {order.note && <p className="px-4 pt-2 text-sm font-medium text-status-warning-fg">{order.note}</p>}
       <Table>
         <TableHeader>
           <TableRow>
@@ -106,7 +127,7 @@ function OrderCard({ order }: { order: Order }) {
                 <TableCell>
                   <div className="font-medium">{item.product_name}</div>
                   {(item.note || optionCount > 0) && (
-                    <div className="text-xs text-muted-foreground">
+                    <div className="text-sm text-muted-foreground">
                       {[item.note, optionCount > 0 ? t("detail.optionCount", { count: optionCount }) : ""]
                         .filter(Boolean)
                         .join(" · ")}
@@ -128,6 +149,15 @@ function OrderCard({ order }: { order: Order }) {
   )
 }
 
+// Same rule as the POS till (pos-desktop lib/fiscalStatus collectableRemaining):
+// money in flight is already reserved, so it is NOT still owed — showing it
+// as "kalan" is exactly the misreading that led to double collection.
+function unpaidAmount(check: Check, settlement: CheckSettlement | undefined): number {
+  const paid = (settlement?.completed ?? []).reduce((sum, p) => sum + p.amount_total, 0)
+  const pending = settlement?.pending_total ?? 0
+  return Math.max((check.total ?? 0) - paid - pending, 0)
+}
+
 function Summary({
   check,
   settlement,
@@ -138,13 +168,9 @@ function Summary({
   settlementState: "hidden" | "loading" | "error" | "ready"
 }) {
   const t = useTranslations("posChecks")
-  const total = check.total ?? 0
   const paid = (settlement?.completed ?? []).reduce((sum, p) => sum + p.amount_total, 0)
   const pending = settlement?.pending_total ?? 0
-  // Same rule as the POS till (pos-desktop lib/fiscalStatus collectableRemaining):
-  // money in flight is already reserved, so it is NOT still owed — showing it
-  // as "kalan" is exactly the misreading that led to double collection.
-  const remaining = Math.max(total - paid - pending, 0)
+  const remaining = unpaidAmount(check, settlement)
 
   return (
     <Card>
@@ -213,6 +239,8 @@ export function CheckDetail({ checkId }: { checkId: string }) {
   const canSeeMoney = useCan("payment.fiscal_status.read")
   const canClose = useCan("pos.check.close")
   const canCancel = useCan("pos.check.cancel")
+  const canAccept = useCan("pos.order.accept")
+  const [confirmCancel, setConfirmCancel] = useState(false)
 
   const checkQuery = useCheck(checkId)
   const ordersQuery = useCheckOrders(checkId)
@@ -243,8 +271,8 @@ export function CheckDetail({ checkId }: { checkId: string }) {
         await cancelCheck.mutateAsync(check.id)
         toast.success(t("cancelled", { table: check.table_label }))
       }
-    } catch {
-      toast.error(t(kind === "close" ? "closeFailed" : "cancelFailed"))
+    } catch (err) {
+      toast.error(t(kind === "close" ? "closeFailed" : "cancelFailed"), { description: describeCheckActionError(err) })
     }
   }
 
@@ -277,6 +305,10 @@ export function CheckDetail({ checkId }: { checkId: string }) {
   }
 
   const isOpen = check.status === "open"
+  // Only when the money state is actually known: a role without the
+  // settlement read, or a failed read, keeps "Kapat" and lets the server
+  // answer (describeCheckActionError explains a refusal).
+  const owed = settlementState === "ready" ? unpaidAmount(check, settlementQuery.data) : 0
 
   return (
     <div className="space-y-6">
@@ -293,14 +325,14 @@ export function CheckDetail({ checkId }: { checkId: string }) {
         {isOpen && (canClose || canCancel) && (
           <div className="flex gap-2">
             {canClose && (
-              <Button variant="outline" onClick={() => void run("close")} disabled={closeCheck.isPending}>
+              <Button variant="outline" onClick={() => void run("close")} disabled={closeCheck.isPending || owed > 0}>
                 {t("close")}
               </Button>
             )}
             {canCancel && (
               <Button
                 variant="ghost"
-                onClick={() => void run("cancel")}
+                onClick={() => setConfirmCancel(true)}
                 disabled={cancelCheck.isPending}
                 className="text-destructive hover:text-destructive"
               >
@@ -308,6 +340,11 @@ export function CheckDetail({ checkId }: { checkId: string }) {
               </Button>
             )}
           </div>
+        )}
+        {isOpen && canClose && owed > 0 && (
+          <p className="w-full text-sm text-muted-foreground sm:text-right">
+            {t("detail.closeNeedsPayment", { amount: formatKurus(owed) })}
+          </p>
         )}
       </div>
 
@@ -334,13 +371,27 @@ export function CheckDetail({ checkId }: { checkId: string }) {
           ) : orders.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("detail.noOrders")}</p>
           ) : (
-            orders.map((order) => <OrderCard key={order.id} order={order} />)
+            orders.map((order) => <OrderCard key={order.id} order={order} canAccept={canAccept} />)
           )}
         </div>
         <div>
           <Summary check={check} settlement={settlementQuery.data} settlementState={settlementState} />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmCancel}
+        onOpenChange={setConfirmCancel}
+        title={t("cancelConfirm.title", { table: check.table_label })}
+        description={t("cancelConfirm.description")}
+        confirmLabel={t("cancelConfirm.confirm")}
+        cancelLabel={t("cancelConfirm.keep")}
+        destructive
+        onConfirm={async () => {
+          await run("cancel")
+          setConfirmCancel(false)
+        }}
+      />
     </div>
   )
 }

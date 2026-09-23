@@ -71,6 +71,21 @@ export function describeOrderError(err: unknown): OrderError {
   return { kind: "other", code, message: describeError(text) }
 }
 
+// Web has no payment screen (payments are taken on the POS desktop app), so
+// an unpaid check's "Kapat" must say where to go, not just that it failed.
+const UNPAID_HINT = "Ödemeyi kasadaki POS uygulamasından alın."
+// Not in pos-core's code table (the desktop client never cancels a paid check).
+const HAS_PAYMENTS_MESSAGE = "Ödemesi alınmış adisyon iptal edilemez — önce ödemeyi kasadan iade edin."
+
+/** Message for a failed adisyon "Kapat" / "İptal" on the web panel. */
+export function describeCheckActionError(err: unknown): string {
+  if (axios.isAxiosError(err) && !err.response) return "Bağlantı kurulamadı. Tekrar deneyin."
+  const text = toPosCoreErrorText(err)
+  if (/"code"\s*:\s*"check_has_payments"/.test(text)) return HAS_PAYMENTS_MESSAGE
+  const message = describeError(text)
+  return errorCode(text) === "insufficient_payment" ? `${message} ${UNPAID_HINT}` : message
+}
+
 /**
  * Worth a "Tekrar dene": a lost response (same Idempotency-Key replays it) or
  * a table somebody else just opened (the retry reads the fresh floor plan and

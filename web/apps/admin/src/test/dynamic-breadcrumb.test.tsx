@@ -88,4 +88,23 @@ describe("DynamicBreadcrumb", () => {
 
     expect(screen.getByText("Detay")).toBeInTheDocument()
   })
+
+  // 2026-09-23 prod sweep: every screen prefetched /pos, /catalog or
+  // /settings and got 404 — those sections have no index page, so a tap on
+  // the crumb landed on "sayfa bulunamadı".
+  it("does not link a section crumb that has no page of its own", () => {
+    pathname = "/pos/checks"
+    render(<DynamicBreadcrumb />, { wrapper: Wrapper })
+
+    expect(screen.getByText("POS")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "POS" })).not.toBeInTheDocument()
+  })
+
+  it("still links an intermediate crumb that is a real page", () => {
+    pathname = "/catalog/products/0b0d3f4e-8e0a-4c1e-9b4a-2f1c6d7e8a9b"
+    render(<DynamicBreadcrumb />, { wrapper: Wrapper })
+
+    expect(screen.queryByRole("link", { name: "Katalog" })).not.toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Ürünler" })).toHaveAttribute("href", "/catalog/products")
+  })
 })

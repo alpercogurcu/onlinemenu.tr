@@ -26,6 +26,13 @@ export function TaxTable({ rows }: { rows: SaleDetailsTaxRate[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
+        {rows.length === 0 && (
+          <TableRow>
+            <TableCell colSpan={4} className="text-center text-muted-foreground">
+              {t("empty")}
+            </TableCell>
+          </TableRow>
+        )}
         {rows.map((row) => (
           <TableRow key={row.rate_bps}>
             <TableCell>{formatRate(row.rate_bps)}</TableCell>

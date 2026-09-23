@@ -63,7 +63,7 @@
   },
   "confirmation": {
     "title": "Siparişiniz alındı",
-    "description": "Siparişiniz mutfağa iletildi. Durumu bu sayfadan takip edebilirsiniz.",
+    "description": "Siparişiniz personele iletildi. Onaylanınca hazırlanmaya başlar; durumunu bu sayfadan takip edebilirsiniz.",
     "trackOrder": "Siparişi takip et",
     "backToMenu": "Menüye dön"
   },

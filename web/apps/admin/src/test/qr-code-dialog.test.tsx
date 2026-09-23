@@ -100,12 +100,14 @@ describe("QRCodeDialog manage-action gating", () => {
     useAuthStore.getState().logout()
   })
 
-  it("disables QR üret for a cashier (storefront.qr.read only, no manage)", async () => {
+  // "Yetkisiz öğe hiç görünmez" (2026-09-23): a greyed-out button with a
+  // tooltip still reads as "something I should be able to do" to a cashier.
+  it("hides QR üret from a cashier (storefront.qr.read only, no manage)", async () => {
     loginAs([CASHIER_ID])
     renderDialog()
 
-    const createButton = await screen.findByRole("button", { name: /QR üret/ })
-    expect(createButton).toBeDisabled()
+    expect(await screen.findByText("Bu masanın aktif QR kodu yok.")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /QR üret/ })).not.toBeInTheDocument()
   })
 
   it("enables QR üret for a shift_manager (holds storefront.qr.manage)", async () => {
@@ -116,10 +118,10 @@ describe("QRCodeDialog manage-action gating", () => {
     expect(createButton).not.toBeDisabled()
   })
 
-  it("keeps QR üret disabled with no session at all", async () => {
+  it("shows no QR üret with no session at all", async () => {
     renderDialog()
 
-    const createButton = await screen.findByRole("button", { name: /QR üret/ })
-    expect(createButton).toBeDisabled()
+    expect(await screen.findByText("Bu masanın aktif QR kodu yok.")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /QR üret/ })).not.toBeInTheDocument()
   })
 })

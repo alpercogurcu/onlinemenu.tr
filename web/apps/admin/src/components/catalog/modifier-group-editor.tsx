@@ -8,6 +8,7 @@ import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
+import { GroupProductsCard } from "@/components/catalog/group-products-card"
 import { ModifierGroupForm } from "@/components/catalog/modifier-group-form"
 import { ModifierOptionsEditor } from "@/components/catalog/modifier-options-editor"
 import { ModifierPreview } from "@/components/catalog/modifier-preview"
@@ -226,34 +227,18 @@ export function ModifierGroupEditor({ groupId }: ModifierGroupEditorProps) {
             modifiers={modifiers}
           />
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("usedBy.title")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {productIds.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("usedBy.empty")}</p>
-              ) : (
-                <>
-                  <ul className="space-y-1 text-sm">
-                    {productIds.map((id) => {
-                      const product = products.find((p) => p.id === id)
-                      return (
-                        <li key={id}>
-                          <Link href={`/catalog/products/${id}`} className="text-primary hover:underline">
-                            {product?.name ?? id.slice(0, 8)}
-                          </Link>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                  <p className="text-xs text-muted-foreground">
-                    {t("usedBy.hint", { n: productIds.length })}
-                  </p>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          {isNew || !groupId ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t("usedBy.title")}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{t("usedBy.saveFirst")}</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <GroupProductsCard groupId={groupId} />
+          )}
         </div>
       </div>
 

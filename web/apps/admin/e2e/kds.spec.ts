@@ -20,6 +20,9 @@ test("mutfak yeni bileti görür ve kabul eder; cihaz koyu modu sayfaya sınırl
       branch_id: BRANCH_ID,
       check_id: checkId,
       order_channel: "dine_in",
+      // The kitchen must read both: the line note carries the chosen options
+      // (pos-core composeOptionNote), the order note an allergy/rush warning.
+      note: "Alerji: fıstık",
       items: [
         {
           product_id: PRODUCT_ID,
@@ -29,6 +32,7 @@ test("mutfak yeni bileti görür ve kabul eder; cihaz koyu modu sayfaya sınırl
           tax_rate_bps: 1000,
           quantity: 1,
           unit_price_amount: 32000,
+          note: "Acılı | Soğansız",
         },
       ],
     },
@@ -47,6 +51,8 @@ test("mutfak yeni bileti görür ve kabul eder; cihaz koyu modu sayfaya sınırl
     await card.scrollIntoViewIfNeeded()
     await expect(card).toBeVisible()
     await expect(card.getByText("Kasa onayı bekleniyor")).toBeVisible()
+    await expect(card.getByText("Acılı | Soğansız")).toBeVisible()
+    await expect(card.getByText("Alerji: fıstık")).toBeVisible()
     await expect(card.getByRole("button", { name: "Kabul Et" })).toHaveCount(0)
 
     const accept = await request.post(`${API_URL}/api/v1/pos/orders/${orderId}/accept`, { headers })

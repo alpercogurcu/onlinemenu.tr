@@ -91,3 +91,19 @@ export function isLongOpenCheck(openedAt: string, now: Date = new Date(), thresh
   if (Number.isNaN(openedMs)) return false
   return now.getTime() - openedMs >= thresholdMs
 }
+
+// checkDurationLabel renders the "Süre" figure with two different formatters
+// on purpose. An open check is a live, still-growing figure and keeps the
+// relative-time reading ("az önce", "3s+" once it has been open too long). A
+// closed/cancelled one is a finished span measured opened_at -> closed_at, so
+// it must be a duration: a QR check that lived 14 seconds reads "14 sn", where
+// formatOpenDuration would have printed "az önce" — forever.
+export function checkDurationLabel(check: {
+  status: string
+  opened_at: string
+  closed_at: string | null
+}): string {
+  if (check.status === "open") return formatOpenDuration(check.opened_at)
+  if (!check.closed_at) return "—"
+  return formatCheckDuration(check.opened_at, new Date(check.closed_at))
+}

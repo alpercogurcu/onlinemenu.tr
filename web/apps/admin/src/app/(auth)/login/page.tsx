@@ -21,6 +21,7 @@ import api from "@/lib/api"
 import { buildAuthorizeUrl, callbackRedirectUri, savePkceParams } from "@/lib/keycloak"
 import { generateCodeChallenge, generateCodeVerifier, generateNonce, generateState } from "@/lib/pkce"
 import { clearSilentAttempt } from "@/lib/session-restore"
+import { currentHomeRoute } from "@/lib/route-permissions"
 import { useAuthStore } from "@/store/auth-store"
 
 // Dev-login form (email-only, no password check server-side) is a local
@@ -83,7 +84,7 @@ export default function LoginPage() {
       const { token, tenant_id, user } = response.data
       setSession(token, { id: user.id, name: user.full_name, email: user.email }, tenant_id)
       toast.success("Giriş başarılı")
-      router.push("/")
+      router.push(currentHomeRoute() ?? "/")
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         toast.error("E-posta veya şifre hatalı")

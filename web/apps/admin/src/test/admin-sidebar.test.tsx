@@ -74,11 +74,26 @@ describe("resolveEnabledModules", () => {
   })
 })
 
+const MANAGER_ROLE_ID = "00000001-0000-0000-0000-000000000006"
+
+function signInAs(roleId: string) {
+  const enc = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url")
+  setAccessToken(`${enc({ alg: "HS256", typ: "CTX" })}.${enc({ rids: [roleId] })}.sig`)
+  useAuthStore.setState({ user: { id: "u1", name: "U", email: "u@x" }, tenantId: "tenant-1" })
+}
+
+// Module filtering is exercised as the manager: every item is permitted to
+// that role, so what disappears here is due to the module intersection alone.
 describe("AdminSidebar", () => {
   beforeEach(() => {
-    useAuthStore.setState({ tenantId: "tenant-1" })
+    signInAs(MANAGER_ROLE_ID)
     tenantModules.value = undefined
     tenantModules.isError = false
+  })
+
+  afterEach(() => {
+    clearAccessToken()
+    useAuthStore.setState({ user: null, tenantId: null })
   })
 
   it("never renders the sections whose module the API does not mount", () => {
@@ -152,16 +167,17 @@ describe("AdminSidebar branch pricing item", () => {
     expect(screen.getByRole("link", { name: "Şube Fiyatları" })).toHaveAttribute("href", "/catalog/branch-pricing")
   })
 
-  it("hides it from any other role, and keeps the group labels unchanged", () => {
+  it("hides it from any other role; a cashier sees only the POS section", () => {
     signIn(ROLE.cashier)
     render(<AdminSidebar />, { wrapper: Wrapper })
 
     expect(screen.queryByText("Şube Fiyatları")).not.toBeInTheDocument()
-    expect(groupLabels()).toEqual(["Genel", "POS", "Katalog", "Stok", "Ödeme", "İşletme"])
+    expect(groupLabels()).toEqual(["POS"])
   })
 
-  it("hides it when nobody is signed in", () => {
+  it("renders no section at all when nobody is signed in (fail closed)", () => {
     render(<AdminSidebar />, { wrapper: Wrapper })
     expect(screen.queryByText("Şube Fiyatları")).not.toBeInTheDocument()
+    expect(groupLabels()).toEqual([])
   })
 })

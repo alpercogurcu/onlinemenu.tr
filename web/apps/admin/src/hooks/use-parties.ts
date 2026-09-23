@@ -7,13 +7,20 @@ interface PartyListResponse {
   parties: Party[]
 }
 
-export function useParties(params?: { limit?: number; offset?: number; type?: string }) {
+// `enabled` lets a screen shared with non-manager roles (the warehouse role
+// on inventory pages) skip a request that can only answer 403: party.party.read
+// is manager-only.
+export function useParties(
+  params?: { limit?: number; offset?: number; type?: string },
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: ["parties", params],
     queryFn: async () => {
       const { data } = await api.get<PartyListResponse>("/api/v1/parties/", { params })
       return data?.parties ?? []
     },
+    enabled: options?.enabled ?? true,
   })
 }
 

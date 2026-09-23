@@ -1,130 +1,97 @@
 import { afterEach, describe, expect, it } from "vitest"
 
+import matrix from "@/generated/permission-matrix.json"
 import { clearAccessToken, setAccessToken } from "@/lib/api"
-import { can } from "@/lib/permissions"
+import { can, currentRoleNames, isKnownAction } from "@/lib/permissions"
 
-const SYSTEM_ROLE_IDS = {
+const ROLE_IDS = {
   cashier: "00000001-0000-0000-0000-000000000001",
-  shiftManager: "00000001-0000-0000-0000-000000000002",
+  shift_manager: "00000001-0000-0000-0000-000000000002",
+  driver: "00000001-0000-0000-0000-000000000003",
+  kitchen: "00000001-0000-0000-0000-000000000004",
+  bar: "00000001-0000-0000-0000-000000000005",
   manager: "00000001-0000-0000-0000-000000000006",
-}
+  warehouse: "00000001-0000-0000-0000-000000000007",
+  waiter: "00000001-0000-0000-0000-000000000008",
+} as const
 
 function base64UrlEncode(obj: unknown): string {
   return Buffer.from(JSON.stringify(obj)).toString("base64url")
 }
 
-// Builds a CTX-token-shaped string (same 3-segment base64url layout as a
-// JWT — see context_token.go's `sign`) carrying the given role ids in the
-// `rids` claim. Signature is a placeholder: lib/permissions.ts only reads
-// the payload, exactly like decodeJwtPayload, and never verifies it (that
-// happens server-side).
+// CTX-token-shaped string (context_token.go's 3-segment layout) carrying the
+// given role ids in `rids`. lib/permissions.ts only decodes the payload.
 function ctxToken(roleIds: string[]): string {
-  const header = base64UrlEncode({ alg: "HS256", typ: "CTX" })
-  const payload = base64UrlEncode({ rids: roleIds })
-  return `${header}.${payload}.fake-signature`
+  return `${base64UrlEncode({ alg: "HS256", typ: "CTX" })}.${base64UrlEncode({ rids: roleIds })}.fake-signature`
 }
 
-describe("can (cosmetic client-side permission gate)", () => {
-  afterEach(() => {
-    clearAccessToken()
+describe("generated permission matrix", () => {
+  it("names exactly the system roles the tests (and authz.rego) know", () => {
+    expect(matrix.roles).toEqual(
+      Object.fromEntries(Object.entries(ROLE_IDS).map(([name, id]) => [id, name])),
+    )
   })
 
-  it("denies a gated action when there is no session token", () => {
-    expect(can("storefront.qr.manage")).toBe(false)
+  it("grants the manager wildcard every action", () => {
+    for (const [action, roles] of Object.entries(matrix.actions)) {
+      expect(roles, action).toContain("manager")
+    }
+  })
+})
+
+describe("can (matrix-backed, fail-closed)", () => {
+  afterEach(() => clearAccessToken())
+
+  it("denies everything without a session token", () => {
+    expect(can("pos.check.read")).toBe(false)
   })
 
-  it("denies a gated action for a role without it (cashier)", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.cashier]))
-    expect(can("storefront.qr.manage")).toBe(false)
-  })
-
-  it("allows a gated action for a role that holds it (shift_manager)", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.shiftManager]))
-    expect(can("storefront.qr.manage")).toBe(true)
-  })
-
-  it("allows every gated action for the manager wildcard role", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.manager]))
-    expect(can("storefront.qr.manage")).toBe(true)
-  })
-
-  it("allows an action that has no ACTION_ROLES entry regardless of role", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.cashier]))
-    expect(can("storefront.qr.read")).toBe(true)
+  it("denies an action the matrix does not know — even for the manager", () => {
+    setAccessToken(ctxToken([ROLE_IDS.manager]))
+    expect(isKnownAction("pos.check.typo")).toBe(false)
+    expect(can("pos.check.typo")).toBe(false)
   })
 
   it("fails closed on a malformed token", () => {
     setAccessToken("not-a-ctx-token")
-    expect(can("storefront.qr.manage")).toBe(false)
+    expect(can("pos.check.read")).toBe(false)
   })
 
-  it("fails closed on an unrecognized (e.g. custom tenant) role id", () => {
+  it("fails closed on an unrecognized (tenant clone / custom) role id", () => {
     setAccessToken(ctxToken(["11111111-1111-1111-1111-111111111111"]))
-    expect(can("storefront.qr.manage")).toBe(false)
-  })
-})
-
-describe("can (pos.report.read)", () => {
-  afterEach(() => {
-    clearAccessToken()
+    expect(currentRoleNames().size).toBe(0)
+    expect(can("pos.check.read")).toBe(false)
   })
 
-  it("denies the sales report for a cashier", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.cashier]))
-    expect(can("pos.report.read")).toBe(false)
-  })
-
-  it("allows the sales report for a shift_manager", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.shiftManager]))
-    expect(can("pos.report.read")).toBe(true)
-  })
-
-  it("allows the sales report for the manager wildcard role", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.manager]))
-    expect(can("pos.report.read")).toBe(true)
-  })
-})
-
-describe("can (pos.order.accept)", () => {
-  afterEach(() => {
-    clearAccessToken()
-  })
-
-  it("denies accepting a ticket for the kitchen role", () => {
-    setAccessToken(ctxToken(["00000001-0000-0000-0000-000000000004"]))
-    expect(can("pos.order.accept")).toBe(false)
-  })
-
-  it("allows accepting a ticket for a cashier", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.cashier]))
-    expect(can("pos.order.accept")).toBe(true)
-  })
-})
-
-// ADR-DATA-009 §6: the action is granted to no named role, only to the manager
-// wildcard. It must have an (empty) ACTION_ROLES entry — an absent entry
-// defaults to "allowed" and would show every role a screen the API 403s.
-describe("can (catalog.branch_override.manage)", () => {
-  afterEach(() => {
-    clearAccessToken()
-  })
-
-  it("allows the manager wildcard role", () => {
-    setAccessToken(ctxToken([SYSTEM_ROLE_IDS.manager]))
-    expect(can("catalog.branch_override.manage")).toBe(true)
-  })
-
+  // Spot checks against authz.rego decisions that shaped the UI work. The
+  // matrix itself is proven against the real engine in Go; these guard the
+  // lookup, not the policy.
   it.each([
-    ["cashier", SYSTEM_ROLE_IDS.cashier],
-    ["shift_manager", SYSTEM_ROLE_IDS.shiftManager],
-    ["kitchen", "00000001-0000-0000-0000-000000000004"],
-    ["waiter", "00000001-0000-0000-0000-000000000008"],
-  ])("denies the %s role", (_name, roleId) => {
-    setAccessToken(ctxToken([roleId]))
-    expect(can("catalog.branch_override.manage")).toBe(false)
+    ["waiter", "pos.order.place", true],
+    ["waiter", "pos.check.close", false],
+    ["waiter", "catalog.product.read", true],
+    ["waiter", "catalog.product.update", false],
+    ["waiter", "payment.fiscal_status.read", false],
+    ["waiter", "storefront.qr.read", false],
+    ["cashier", "pos.check.close", true],
+    ["cashier", "pos.report.read", false],
+    ["cashier", "storefront.qr.manage", false],
+    ["shift_manager", "storefront.qr.manage", true],
+    ["shift_manager", "pos.report.read", true],
+    ["shift_manager", "catalog.branch_override.manage", false],
+    ["kitchen", "pos.order.advance", true],
+    ["kitchen", "pos.order.accept", false],
+    ["warehouse", "inventory.supply_policy.read", true],
+    ["warehouse", "inventory.supply_policy.create", false],
+    ["manager", "catalog.branch_override.manage", true],
+  ] as const)("%s → %s = %s", (role, action, expected) => {
+    setAccessToken(ctxToken([ROLE_IDS[role]]))
+    expect(can(action)).toBe(expected)
   })
 
-  it("denies without a session", () => {
-    expect(can("catalog.branch_override.manage")).toBe(false)
+  it("unions the grants of several roles", () => {
+    setAccessToken(ctxToken([ROLE_IDS.waiter, ROLE_IDS.kitchen]))
+    expect(can("pos.order.place")).toBe(true)
+    expect(can("pos.order.advance")).toBe(true)
   })
 })

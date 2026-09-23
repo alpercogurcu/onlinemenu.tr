@@ -29,13 +29,33 @@ export const PRODUCTS = {
 
 export type SeededProduct = (typeof PRODUCTS)[keyof typeof PRODUCTS]
 
+// Each role lands on its own home after sign-in (lib/route-permissions.ts
+// homeRouteFor): manager/shift -> "/", cashier -> /pos/checks, waiter ->
+// /pos/tables, kitchen -> /pos/kitchen.
+export const HOME = {
+  [USERS.manager]: "/",
+  [USERS.shift]: "/",
+  [USERS.cashier]: "/pos/checks",
+  [USERS.waiter]: "/pos/tables",
+  [USERS.kitchen]: "/pos/kitchen",
+} as Record<string, string>
+
 export async function loginAs(page: Page, email: string) {
   await page.goto("/login")
   await page.getByLabel("E-posta").fill(email)
   await page.getByLabel("Şifre").fill("dev")
   await page.getByRole("button", { name: "Giriş Yap (dev)" }).click()
-  await page.waitForURL((url) => url.pathname === "/")
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"))
+  const home = HOME[email]
+  if (home) await page.waitForURL((url) => url.pathname === home)
   await expect(page.locator('[data-sidebar="group-label"]').first()).toBeVisible()
+}
+
+/** Sidebar link targets, in menu order. */
+export async function sidebarLinks(page: Page): Promise<string[]> {
+  return page
+    .locator('a[data-sidebar="menu-button"][href]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute("href") ?? ""))
 }
 
 // The CTX token lives in memory only, so a hard navigation drops the

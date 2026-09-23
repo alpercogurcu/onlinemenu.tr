@@ -11,8 +11,8 @@ import {
   SidebarHeader,
   SidebarRail,
 } from "@/components/ui/sidebar"
-import { useCan } from "@/hooks/use-can"
 import { useEnabledModules } from "@/lib/modules"
+import { canAccessRoute } from "@/lib/route-permissions"
 import { useAuthStore } from "@/store/auth-store"
 
 import { MenuGenerator } from "./menu-generator"
@@ -24,12 +24,13 @@ export default function AdminSidebar({
 }: React.ComponentProps<typeof Sidebar>) {
   const t = useTranslations()
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
+  // Subscribed so the menu re-derives when the session (CTX token) changes.
+  useAuthStore((s) => s.user)
   const enabledModules = useEnabledModules(tenantId)
-  const canManageBranchPricing = useCan("catalog.branch_override.manage")
 
   const tFn = (key: string) => t(key as Parameters<typeof t>[0])
 
-  const sections = getSidebarSections(tFn, { canManageBranchPricing }).filter(
+  const sections = getSidebarSections(tFn, canAccessRoute).filter(
     (section) => !section.module || enabledModules.includes(section.module),
   )
 

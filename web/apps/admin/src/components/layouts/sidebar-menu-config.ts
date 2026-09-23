@@ -65,14 +65,7 @@ export function getPOSMenuConfig(t: (key: string) => string): MenuItem[] {
   ]
 }
 
-// `canManageBranchPricing` is resolved by the caller (AdminSidebar, via
-// useCan) because this config is plain data — it cannot call a hook. The item
-// is hidden rather than disabled: a role that can never open it has no use
-// for a dead link.
-export function getCatalogMenuConfig(
-  t: (key: string) => string,
-  canManageBranchPricing = false,
-): MenuItem[] {
+export function getCatalogMenuConfig(t: (key: string) => string): MenuItem[] {
   return [
     {
       title: t("navigation.products"),
@@ -94,15 +87,11 @@ export function getCatalogMenuConfig(
       url: "/catalog/menus",
       icon: FileText,
     },
-    ...(canManageBranchPricing
-      ? [
-          {
-            title: t("navigation.branchPricing"),
-            url: "/catalog/branch-pricing",
-            icon: Store,
-          },
-        ]
-      : []),
+    {
+      title: t("navigation.branchPricing"),
+      url: "/catalog/branch-pricing",
+      icon: Store,
+    },
   ]
 }
 
@@ -230,14 +219,19 @@ export function getSettingsMenuConfig(
   ]
 }
 
+// `canOpen` decides per item whether the current principal may open the
+// screen. AdminSidebar passes lib/route-permissions' canAccessRoute, i.e. the
+// same registry the layout's RouteGuard enforces, so the menu can never
+// advertise a screen the guard (or the API) refuses. Sections left empty are
+// dropped.
 export function getSidebarSections(
   t: (key: string) => string,
-  options: { canManageBranchPricing?: boolean } = {},
+  canOpen: (url: string) => boolean = () => true,
 ): SidebarSection[] {
-  return [
+  const sections: SidebarSection[] = [
     { label: t("navigation.general"), items: getOverviewMenuConfig(t) },
     { label: t("navigation.pos"), module: "pos", items: getPOSMenuConfig(t) },
-    { label: t("navigation.catalog"), module: "catalog", items: getCatalogMenuConfig(t, options.canManageBranchPricing) },
+    { label: t("navigation.catalog"), module: "catalog", items: getCatalogMenuConfig(t) },
     { label: t("navigation.inventory"), module: "inventory", items: getInventoryMenuConfig(t) },
     { label: t("navigation.parties"), module: "party", items: getPartyMenuConfig(t) },
     // Payments are served by the pos module (payment/public is consumed
@@ -247,4 +241,7 @@ export function getSidebarSections(
     { label: t("navigation.hr"), module: "hr", items: getHRMenuConfig(t) },
     { label: t("navigation.business"), items: getSettingsMenuConfig(t) },
   ]
+  return sections
+    .map((section) => ({ ...section, items: section.items.filter((item) => canOpen(item.url)) }))
+    .filter((section) => section.items.length > 0)
 }

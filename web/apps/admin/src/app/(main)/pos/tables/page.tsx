@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useCan } from "@/hooks/use-can"
 import { currentBranchId } from "@/lib/permissions"
 import { tableStatusVariant } from "@/lib/status-badge"
@@ -42,13 +41,16 @@ interface SelectedTable {
 
 export default function TablesPage() {
   const t = useTranslations("posTables")
-  const tCommon = useTranslations("storefront")
-  // Cosmetic-only gate (see lib/permissions.ts): pos.table.read (this page)
-  // is granted to cashier/shift_manager/waiter/kitchen/bar, but
-  // storefront.qr.read is narrower (cashier/shift_manager only) — without
-  // this, a kitchen/bar user could open the QR dialog and hit a silent 403
-  // on its first fetch. The button renders disabled with a tooltip instead.
+  // Cosmetic-only gates (see lib/permissions.ts): pos.table.read (this page)
+  // is granted to cashier/shift_manager/waiter/kitchen/bar, but every action
+  // on the page is narrower. A control the role cannot use is not rendered at
+  // all — a visible button whose save always fails is what users reported.
+  //   storefront.qr.read  — cashier/shift_manager
+  //   pos.table.manage    — zone/table CRUD and any status move (shift_manager)
+  //   pos.table.clean     — only cleaning -> empty (cashier/shift_manager/waiter)
   const canViewQR = useCan("storefront.qr.read")
+  const canManage = useCan("pos.table.manage")
+  const canClean = useCan("pos.table.clean")
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches } = useBranches(tenantId)
   // Non-null for a branch-scoped operator — they always work their own
@@ -94,6 +96,12 @@ export default function TablesPage() {
   const zoneList = zones ?? []
   const tableCount = (plan ?? []).reduce((sum, z) => sum + z.tables.length, 0)
 
+  function transitionsFor(status: PosTableStatus): ManualTableStatus[] {
+    if (canManage) return MANUAL_TRANSITIONS[status]
+    if (canClean && status === "cleaning") return ["empty"]
+    return []
+  }
+
   async function handleStatusChange(table: PosTable, status: ManualTableStatus) {
     try {
       await setStatus.mutateAsync({ id: table.id, status })
@@ -138,17 +146,21 @@ export default function TablesPage() {
             )}
           </div>
 
-          <Button variant="outline" onClick={() => setZoneDialog({})} disabled={branchId === ""}>
-            <LayoutGrid className="size-4" />
-            {t("addZone")}
-          </Button>
-          <Button
-            onClick={() => setTableDialog({})}
-            disabled={branchId === "" || zoneList.length === 0}
-          >
-            <Plus className="size-4" />
-            {t("addTable")}
-          </Button>
+          {canManage && (
+            <>
+              <Button variant="outline" onClick={() => setZoneDialog({})} disabled={branchId === ""}>
+                <LayoutGrid className="size-4" />
+                {t("addZone")}
+              </Button>
+              <Button
+                onClick={() => setTableDialog({})}
+                disabled={branchId === "" || zoneList.length === 0}
+              >
+                <Plus className="size-4" />
+                {t("addTable")}
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -165,10 +177,12 @@ export default function TablesPage() {
       ) : zoneList.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
           <p className="text-muted-foreground">{t("emptyZones")}</p>
-          <Button onClick={() => setZoneDialog({})}>
-            <LayoutGrid className="size-4" />
-            {t("addFirstZone")}
-          </Button>
+          {canManage && (
+            <Button onClick={() => setZoneDialog({})}>
+              <LayoutGrid className="size-4" />
+              {t("addFirstZone")}
+            </Button>
+          )}
         </div>
       ) : (
         <>
@@ -188,19 +202,23 @@ export default function TablesPage() {
                       {t("zonePassive")}
                     </Badge>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setZoneDialog({ zone })}
-                    aria-label={t("editZoneAria", { zone: zone.name })}
-                  >
-                    <Pencil className="size-3.5" />
-                    {t("editZone")}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setTableDialog({ zoneId: zone.id })}>
-                    <Plus className="size-3.5" />
-                    {t("addTable")}
-                  </Button>
+                  {canManage && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setZoneDialog({ zone })}
+                        aria-label={t("editZoneAria", { zone: zone.name })}
+                      >
+                        <Pencil className="size-3.5" />
+                        {t("editZone")}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setTableDialog({ zoneId: zone.id })}>
+                        <Plus className="size-3.5" />
+                        {t("addTable")}
+                      </Button>
+                    </>
+                  )}
                 </div>
 
                 {zoneTables.length === 0 ? (
@@ -235,62 +253,51 @@ export default function TablesPage() {
                             {t("capacity", { count: table.capacity })}
                           </div>
 
-                          <Select
-                            aria-label={t("statusChangeAria", { table: table.name })}
-                            className="h-8 text-xs"
-                            value=""
-                            disabled={setStatus.isPending}
-                            onValueChange={(next) => {
-                              if (next === "") return
-                              void handleStatusChange(table, next as ManualTableStatus)
-                            }}
-                          >
-                            <SelectItem value="">{t("statusChange")}</SelectItem>
-                            {MANUAL_TRANSITIONS[table.status].map((next) => (
-                              <SelectItem key={next} value={next}>
-                                {t(`status.${next}`)}
-                              </SelectItem>
-                            ))}
-                          </Select>
-
-                          <div className="flex gap-2">
-                            {canViewQR ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="flex-1"
-                                onClick={() => setQrTable({ id: table.id, label: table.name })}
-                              >
-                                <QrCode className="size-3.5" />
-                                {t("qrAction")}
-                              </Button>
-                            ) : (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span tabIndex={0} className="flex-1">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="pointer-events-none w-full"
-                                      disabled
-                                    >
-                                      <QrCode className="size-3.5" />
-                                      {t("qrAction")}
-                                    </Button>
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>{tCommon("qr.viewDenied")}</TooltipContent>
-                              </Tooltip>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setTableDialog({ table })}
-                              aria-label={t("editTableAria", { table: table.name })}
+                          {transitionsFor(table.status).length > 0 && (
+                            <Select
+                              aria-label={t("statusChangeAria", { table: table.name })}
+                              className="h-8 text-xs"
+                              value=""
+                              disabled={setStatus.isPending}
+                              onValueChange={(next) => {
+                                if (next === "") return
+                                void handleStatusChange(table, next as ManualTableStatus)
+                              }}
                             >
-                              <Pencil className="size-3.5" />
-                            </Button>
-                          </div>
+                              <SelectItem value="">{t("statusChange")}</SelectItem>
+                              {transitionsFor(table.status).map((next) => (
+                                <SelectItem key={next} value={next}>
+                                  {t(`status.${next}`)}
+                                </SelectItem>
+                              ))}
+                            </Select>
+                          )}
+
+                          {(canViewQR || canManage) && (
+                            <div className="flex gap-2">
+                              {canViewQR && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="flex-1"
+                                  onClick={() => setQrTable({ id: table.id, label: table.name })}
+                                >
+                                  <QrCode className="size-3.5" />
+                                  {t("qrAction")}
+                                </Button>
+                              )}
+                              {canManage && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setTableDialog({ table })}
+                                  aria-label={t("editTableAria", { table: table.name })}
+                                >
+                                  <Pencil className="size-3.5" />
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     ))}

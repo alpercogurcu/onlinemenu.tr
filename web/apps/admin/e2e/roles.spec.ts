@@ -1,70 +1,169 @@
-import { expect, test } from "@playwright/test"
+import { randomUUID } from "node:crypto"
 
-import { USERS, errorToast, gotoSpa, loginAs, sidebarGroups } from "./fixtures/auth"
+import { type Page, expect, test } from "@playwright/test"
+
+import { API_URL, BRANCH_ID, PRODUCTS, USERS, devToken, gotoSpa, loginAs, sidebarLinks } from "./fixtures/auth"
 
 const NO_REPORT = "Bu rapor için Shift Müdürü yetkisi gerekir."
 
-test.describe("rol bazlı ekranlar", () => {
-  test("yönetici gün sonu raporunu görür", async ({ page }) => {
+// Reviewed expectation, derived from the generated OPA matrix through
+// lib/route-permissions.ts (same table as src/test/route-permissions.test.ts).
+// Manager is omitted here: the sidebar still depends on the tenant's enabled
+// modules for them, and route-permissions.test.ts pins "manager sees all".
+const MENU: Record<string, string[]> = {
+  [USERS.shift]: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen", "/payment/payments"],
+  [USERS.cashier]: ["/pos/tables", "/pos/checks", "/pos/kitchen"],
+  [USERS.waiter]: ["/pos/tables", "/pos/checks"],
+  [USERS.kitchen]: ["/pos/tables", "/pos/kitchen"],
+}
+
+// Screens each role must NOT reach — every one must render the access-denied
+// state and must not cause a single 4xx from the API (the page never mounts).
+const FORBIDDEN: Record<string, string[]> = {
+  [USERS.shift]: ["/catalog/products", "/catalog/branch-pricing", "/settings/users", "/inventory/warehouses"],
+  [USERS.cashier]: ["/catalog/products", "/catalog/products/new", "/payment/payments", "/settings/branches"],
+  [USERS.waiter]: [
+    "/catalog/products",
+    "/catalog/products/new",
+    `/catalog/products/${PRODUCTS.adana.id}`,
+    "/catalog/categories",
+    "/pos/kitchen",
+    "/payment/payments",
+    "/settings/users",
+    "/inventory/stock-levels",
+  ],
+  [USERS.kitchen]: ["/pos/checks", "/catalog/products", "/settings/users", "/payment/payments"],
+}
+
+// Records every 4xx the API answers while `run` executes.
+async function apiErrorsDuring(page: Page, run: () => Promise<void>): Promise<string[]> {
+  const errors: string[] = []
+  const listener = (res: { status(): number; url(): string; request(): { method(): string } }) => {
+    const url = res.url()
+    const isApi = url.startsWith(API_URL) || url.includes("/api/core") || url.includes("/api/v1/")
+    if (isApi && res.status() >= 400 && res.status() < 500) {
+      errors.push(`${res.status()} ${res.request().method()} ${url}`)
+    }
+  }
+  page.on("response", listener)
+  try {
+    await run()
+    // Let any late query settle before judging.
+    await page.waitForLoadState("networkidle").catch(() => {})
+  } finally {
+    page.off("response", listener)
+  }
+  return errors
+}
+
+test.describe("rol bazlı görünürlük", () => {
+  for (const [email, expected] of Object.entries(MENU)) {
+    test(`${email}: menü yalnız izinli ekranlar, yasak rotalar erişim-yok ve ağda 4xx yok`, async ({ page }) => {
+      const loginErrors = await apiErrorsDuring(page, () => loginAs(page, email))
+      expect(loginErrors, "girişte/ana sayfada 4xx").toEqual([])
+
+      expect(await sidebarLinks(page)).toEqual(expected)
+
+      for (const path of FORBIDDEN[email]) {
+        const errors = await apiErrorsDuring(page, async () => {
+          await gotoSpa(page, path)
+          await expect(page.getByTestId("access-denied")).toBeVisible()
+        })
+        expect(errors, `${path} 4xx üretmemeli`).toEqual([])
+      }
+    })
+  }
+
+  test("yönetici gösterge panelinde raporu görür, tüm bölümler açık", async ({ page }) => {
     await loginAs(page, USERS.manager)
     await expect(page.getByText(NO_REPORT)).toHaveCount(0)
-    expect(await sidebarGroups(page)).toEqual(["Genel", "POS", "Katalog", "Stok", "Ödeme", "İşletme"])
+    expect(await page.locator('[data-sidebar="group-label"]').allTextContents()).toEqual([
+      "Genel",
+      "POS",
+      "Katalog",
+      "Stok",
+      "Ödeme",
+      "İşletme",
+    ])
   })
 
-  test("shift müdürü raporu görür", async ({ page }) => {
-    await loginAs(page, USERS.shift)
-    await expect(page.getByText(NO_REPORT)).toHaveCount(0)
-  })
-
-  test("kasiyer raporu göremez, ürün ekleyemez", async ({ page }) => {
-    await loginAs(page, USERS.cashier)
-    await expect(page.getByText(NO_REPORT)).toBeVisible()
-
-    await gotoSpa(page, "/catalog/products")
-    await expect(page.getByRole("table")).toBeVisible()
-    await page.getByRole("button", { name: "Ürün ekle" }).click()
-    await page.waitForURL((url) => url.pathname === "/catalog/products/new")
-    await page.locator("#product-name").fill("e2e-kasiyer-urun")
-    await page.locator("#product-price").fill("10")
-    await page.getByRole("button", { name: "Kaydet" }).click()
-    await expect(errorToast(page)).toBeVisible()
-    expect(new URL(page.url()).pathname).toBe("/catalog/products/new")
-  })
-
-  test("garson masaları ve kataloğu görür; QR ve ürün ekleme yetkisi yok", async ({ page }) => {
-    await loginAs(page, USERS.waiter)
-    await gotoSpa(page, "/pos/tables")
-    await expect(page.getByText("Masa 1", { exact: true })).toBeVisible()
-    // Waiter holds pos.table.read but not storefront.qr.read: the QR action
-    // renders, but disabled with an explanatory tooltip.
-    const qrButtons = page.getByRole("button", { name: /QR/i })
-    await expect(qrButtons.first()).toBeDisabled()
-    await expect(page.getByRole("button", { name: /QR/i, disabled: false })).toHaveCount(0)
-
-    // Taking orders needs the catalog: the list loads (read-only grant)…
-    await gotoSpa(page, "/catalog/products")
-    await expect(page.getByRole("table")).toBeVisible()
-    await expect(page.getByText("Yüklenemedi.")).toHaveCount(0)
-
-    // …but every write is manager-only: saving a new product is refused.
-    await page.getByRole("button", { name: "Ürün ekle" }).click()
-    await page.waitForURL((url) => url.pathname === "/catalog/products/new")
-    await page.locator("#product-name").fill("e2e-garson-urun")
-    await page.locator("#product-price").fill("10")
-    await page.getByRole("button", { name: "Kaydet" }).click()
-    await expect(errorToast(page)).toBeVisible()
-    expect(new URL(page.url()).pathname).toBe("/catalog/products/new")
-  })
-
-  test("mutfak KDS'yi canlı görür, kullanıcı listesine erişemez", async ({ page }) => {
+  test("mutfak '/' adresine gelince mutfak ekranına yönlendirilir", async ({ page }) => {
     await loginAs(page, USERS.kitchen)
-    await gotoSpa(page, "/pos/kitchen")
-    await expect(page.getByText("Canlı", { exact: true })).toBeVisible()
-
     await gotoSpa(page, "/pos/tables")
-    await expect(page.getByText("Masa 1", { exact: true })).toBeVisible()
+    await page.evaluate(() => {
+      ;(window as unknown as { next: { router: { push: (p: string) => void } } }).next.router.push("/")
+    })
+    await page.waitForURL((url) => url.pathname === "/pos/kitchen")
+    await expect(page.getByText("Canlı", { exact: true })).toBeVisible()
+  })
 
-    await gotoSpa(page, "/settings/users")
-    await expect(page.getByText("Üyeler yüklenemedi")).toBeVisible()
+  test("garson masalarda yönetim/QR kontrolü görmez", async ({ page }) => {
+    await loginAs(page, USERS.waiter)
+    await expect(page.getByText("Masa 1", { exact: true })).toBeVisible()
+    await expect(page.getByRole("button", { name: /QR/i })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: "Bölge ekle" })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: /Masa ekle/i })).toHaveCount(0)
+  })
+
+  test("adisyon detayı: garson kalemleri görür, ödeme/kapat yok; kasiyer ödeme özetini ve kapat'ı görür", async ({
+    page,
+    request,
+  }) => {
+    const { token } = await devToken(request, USERS.waiter)
+    const headers = { Authorization: `Bearer ${token}` }
+    const label = `E2E-DETAY-${randomUUID().slice(0, 6)}`
+    const opened = await request.post(`${API_URL}/api/v1/pos/checks`, {
+      headers,
+      data: { branch_id: BRANCH_ID, table_label: label, pax: 3 },
+    })
+    expect(opened.status(), await opened.text()).toBe(201)
+    const checkId = ((await opened.json()) as { id: string }).id
+    const order = await request.post(`${API_URL}/api/v1/pos/orders`, {
+      headers: { ...headers, "Idempotency-Key": `e2e-roles-${randomUUID()}` },
+      data: {
+        branch_id: BRANCH_ID,
+        check_id: checkId,
+        order_channel: "dine_in",
+        items: [
+          {
+            product_id: PRODUCTS.adana.id,
+            product_name: PRODUCTS.adana.name,
+            product_price_amount: PRODUCTS.adana.price,
+            product_currency: "TRY",
+            tax_rate_bps: 1000,
+            quantity: 2,
+            unit_price_amount: PRODUCTS.adana.price,
+          },
+        ],
+      },
+    })
+    expect(order.status(), await order.text()).toBe(201)
+
+    try {
+      await loginAs(page, USERS.waiter)
+      const errors = await apiErrorsDuring(page, async () => {
+        await gotoSpa(page, "/pos/checks")
+        await page.getByRole("link", { name: `"${label}" adisyonunun detayını aç` }).click()
+        await page.waitForURL((url) => url.pathname === `/pos/checks/${checkId}`)
+        await expect(page.getByRole("heading", { name: label })).toBeVisible()
+        await expect(page.getByText(PRODUCTS.adana.name)).toBeVisible()
+        await expect(page.getByText("2×")).toBeVisible()
+      })
+      expect(errors, "garson detayında 4xx (settlement dahil) olmamalı").toEqual([])
+      await expect(page.getByText("Kalan")).toHaveCount(0)
+      await expect(page.getByRole("button", { name: "Kapat" })).toHaveCount(0)
+      await expect(page.getByRole("button", { name: "İptal" })).toHaveCount(0)
+
+      await loginAs(page, USERS.cashier)
+      await gotoSpa(page, `/pos/checks/${checkId}`)
+      await expect(page.getByText("Kalan")).toBeVisible()
+      await expect(page.getByRole("button", { name: "Kapat" })).toBeVisible()
+    } finally {
+      const cashier = await devToken(request, USERS.cashier)
+      await request.post(`${API_URL}/api/v1/pos/checks/${checkId}/cancel`, {
+        headers: { Authorization: `Bearer ${cashier.token}`, "Idempotency-Key": `e2e-roles-${randomUUID()}` },
+        data: {},
+      })
+    }
   })
 })

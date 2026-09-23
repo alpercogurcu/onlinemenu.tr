@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 
 import api from "@/lib/api"
-import type { Check, Order, OrderStatus, PosTable, PosTableStatus, PosZone, PosZonePlan } from "@/types"
+import type { Check, CheckSettlement, Order, OrderStatus, PosTable, PosTableStatus, PosZone, PosZonePlan } from "@/types"
 
 // useTables returns the branch floor plan already grouped by zone — that is
 // the backend's response shape (zonePlanResponse), not a client-side grouping,
@@ -168,6 +168,22 @@ export function useCheckOrders(checkId: string) {
       return data ?? []
     },
     enabled: Boolean(checkId),
+  })
+}
+
+// Money state of one check (payment module, GET /payments/checks/{id}/settlement):
+// completed payments (id + amount only) and the pending total. Governed by
+// payment.fiscal_status.read (cashier/shift_manager + manager). Callers pass
+// `enabled: can("payment.fiscal_status.read")` so a role without it (waiter,
+// kitchen) never fires a request that can only answer 403.
+export function useCheckSettlement(checkId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["checks", checkId, "settlement"],
+    queryFn: async () => {
+      const { data } = await api.get<CheckSettlement>(`/api/v1/payments/checks/${checkId}/settlement`)
+      return data
+    },
+    enabled: enabled && Boolean(checkId),
   })
 }
 

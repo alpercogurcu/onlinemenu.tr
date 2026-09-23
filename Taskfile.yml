@@ -139,10 +139,17 @@ tasks:
       - go test -race -cover ./...
 
   pos:test:web:
-    desc: "POS desktop frontend testleri (vitest — lib/fiscalStatus para aritmetiği)"
+    desc: "POS desktop frontend testleri (vitest — lib/fiscalStatus para aritmetiği) + @onlinemenu/pos-core"
     dir: web
     cmds:
       - pnpm --filter @onlinemenu/pos-desktop test:run
+      - pnpm --filter @onlinemenu/pos-core test:run
+
+  pos:build:web:
+    desc: "POS desktop frontend production build (vite build — wails CLI olmadan doğrulama için)"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/pos-desktop build
 
   pos:test:live:
     desc: "POS desktop Go katmanı canlı smoke (çalışan dev API; POS_LIVE_API_URL, varsayılan http://localhost:8081). Dev DB'ye SMOKE-* kayıtları yazar — prod'a yöneltme"
@@ -161,6 +168,24 @@ tasks:
     dir: web
     cmds:
       - pnpm --filter @onlinemenu/pos-desktop lint
+
+  pos-core:test:
+    desc: "@onlinemenu/pos-core testleri (vitest — cart/options/numpad/payment/checkActions/errors kuralları)"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/pos-core test:run
+
+  pos-core:typecheck:
+    desc: "@onlinemenu/pos-core tip denetimi (tsc --noEmit)"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/pos-core typecheck
+
+  pos-core:lint:
+    desc: "@onlinemenu/pos-core eslint"
+    dir: web
+    cmds:
+      - pnpm --filter @onlinemenu/pos-core lint
 
   pos:generate:
     desc: "POS desktop Wails binding'lerini üret (frontend/wailsjs, commit edilmez)"
@@ -353,6 +378,14 @@ tasks:
     desc: "Prod deploy sonrası /healthz, /readyz, admin ve menu uçlarını doğrula (API_URL, ADMIN_URL, MENU_URL gerekli)"
     cmds:
       - bash deploy/smoke.sh
+
+  authz:gen:
+    desc: "OPA politikasından admin izin matrisini üret (web/apps/admin/src/generated/permission-matrix.json)"
+    dir: ./backend
+    env:
+      UPDATE_PERMISSION_MATRIX: "1"
+    cmds:
+      - go test ./internal/platform/auth -run TestPermissionMatrix_GeneratedFileIsCurrent -count=1
 
   ci:
     desc: "CI pipeline lokalde simüle et"

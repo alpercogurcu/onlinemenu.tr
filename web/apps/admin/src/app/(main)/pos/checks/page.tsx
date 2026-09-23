@@ -1,7 +1,10 @@
 "use client"
 
-import { ClipboardList, QrCode, Users } from "lucide-react"
+import { ChevronRight, ClipboardList, QrCode, Users } from "lucide-react"
 import { useTranslations } from "next-intl"
+
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,33 +18,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { useCan } from "@/hooks/use-can"
 import { useCancelCheck, useChecks, useCloseCheck } from "@/hooks/use-pos"
 import { checkStatusVariant } from "@/lib/status-badge"
 import { cn } from "@/lib/utils"
-import {
-  formatCheckDuration,
-  formatCheckTotal,
-  formatOpenDuration,
-  isLongOpenCheck,
-} from "@/lib/pos-format"
-import type { Check } from "@/types"
+import { checkDurationLabel, formatCheckTotal, isLongOpenCheck } from "@/lib/pos-format"
 import { toast } from "sonner"
-
-// durationFor renders the "Süre" column with two different formatters on
-// purpose. An open check is a live, still-growing figure and keeps the
-// relative-time reading ("az önce", "3s+" once it has been open too long).
-// A closed/cancelled one is a finished span measured opened_at -> closed_at,
-// so it must be a duration: a QR check that lived 14 seconds reads "14 sn",
-// where formatOpenDuration would have printed "az önce" — forever, including
-// a month later.
-function durationFor(check: Check): string {
-  if (check.status === "open") return formatOpenDuration(check.opened_at)
-  if (!check.closed_at) return "—"
-  return formatCheckDuration(check.opened_at, new Date(check.closed_at))
-}
 
 export default function ChecksPage() {
   const t = useTranslations("posChecks")
+  const router = useRouter()
+  // Close/cancel are counter decisions (cashier/shift_manager + manager); a
+  // waiter reads checks but gets no buttons that the API would refuse.
+  const canClose = useCan("pos.check.close")
+  const canCancel = useCan("pos.check.cancel")
+  const hasActions = canClose || canCancel
   const { data, isLoading } = useChecks({ refetchInterval: 30_000 })
   const closeCheck = useCloseCheck()
   const cancelCheck = useCancelCheck()
@@ -101,15 +92,29 @@ export default function ChecksPage() {
                   <TableHead>{t("columnOpenedAt")}</TableHead>
                   <TableHead>{t("columnClosedAt")}</TableHead>
                   <TableHead>{t("columnDuration")}</TableHead>
-                  <TableHead className="w-[160px]">{t("columnActions")}</TableHead>
+                  {hasActions && <TableHead className="w-[160px]">{t("columnActions")}</TableHead>}
+                  <TableHead className="w-8" aria-hidden />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {checks.map((check) => (
-                  <TableRow key={check.id}>
+                  <TableRow
+                    key={check.id}
+                    className="cursor-pointer"
+                    onClick={() => router.push(`/pos/checks/${check.id}`)}
+                  >
                     <TableCell className="font-medium">
                       <span className="flex items-center gap-2">
-                        {check.table_label}
+                        {/* The row is clickable for the pointer; this link is the
+                            keyboard/screen-reader path to the same page. */}
+                        <Link
+                          href={`/pos/checks/${check.id}`}
+                          className="hover:underline"
+                          aria-label={t("openDetail", { table: check.table_label })}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {check.table_label}
+                        </Link>
                         {/* Rendered only when the API actually sends `source`.
                             It does not today (checkResponse omits the field —
                             see the CheckSource doc comment in types), so this
@@ -154,30 +159,39 @@ export default function ChecksPage() {
                           : "text-muted-foreground",
                       )}
                     >
-                      {durationFor(check)}
+                      {checkDurationLabel(check)}
                     </TableCell>
-                    <TableCell>
-                      {check.status === "open" && (
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleClose(check.id, check.table_label)}
-                            disabled={closeCheck.isPending}
-                          >
-                            {t("close")}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleCancel(check.id, check.table_label)}
-                            disabled={cancelCheck.isPending}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            {t("cancel")}
-                          </Button>
-                        </div>
-                      )}
+                    {hasActions && (
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        {check.status === "open" && (
+                          <div className="flex gap-2">
+                            {canClose && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleClose(check.id, check.table_label)}
+                                disabled={closeCheck.isPending}
+                              >
+                                {t("close")}
+                              </Button>
+                            )}
+                            {canCancel && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleCancel(check.id, check.table_label)}
+                                disabled={cancelCheck.isPending}
+                                className="text-destructive hover:text-destructive"
+                              >
+                                {t("cancel")}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </TableCell>
+                    )}
+                    <TableCell className="text-muted-foreground">
+                      <ChevronRight className="size-4" aria-hidden />
                     </TableCell>
                   </TableRow>
                 ))}

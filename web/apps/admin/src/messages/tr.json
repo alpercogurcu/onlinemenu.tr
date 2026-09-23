@@ -39,7 +39,12 @@
     "fiscalTerminals": "Fiscal Terminaller",
     "fiscalSections": "Kısım Eşleme",
     "detail": "Detay",
-    "branchPricing": "Şube Fiyatları"
+    "branchPricing": "Şube Fiyatları",
+    "accessDenied": {
+      "title": "Bu sayfaya erişim yetkiniz yok",
+      "body": "Rolünüz bu ekranı kullanmaya izin vermiyor. Yetkiye ihtiyacınız varsa yöneticinize başvurun.",
+      "home": "Ana sayfama dön"
+    }
   },
   "posTables": {
     "title": "Masalar",
@@ -137,7 +142,51 @@
     "closed": "\"{table}\" adisyonu kapatıldı",
     "cancelled": "\"{table}\" adisyonu iptal edildi",
     "closeFailed": "Adisyon kapatılamadı",
-    "cancelFailed": "Adisyon iptal edilemedi"
+    "cancelFailed": "Adisyon iptal edilemedi",
+    "openDetail": "\"{table}\" adisyonunun detayını aç",
+    "orderStatus": {
+      "pending": "Bekliyor",
+      "accepted": "Kabul edildi",
+      "preparing": "Hazırlanıyor",
+      "ready": "Hazır",
+      "delivered": "Teslim edildi",
+      "rejected": "Reddedildi",
+      "cancelled": "İptal"
+    },
+    "detail": {
+      "back": "Adisyonlara dön",
+      "notFound": "Adisyon bulunamadı veya görüntüleme yetkiniz yok.",
+      "loadFailed": "Adisyon yüklenemedi.",
+      "table": "Masa",
+      "pax": "Kişi",
+      "openedAt": "Açılış",
+      "closedAt": "Kapanış",
+      "duration": "Süre",
+      "note": "Not",
+      "ordersTitle": "Siparişler",
+      "noOrders": "Bu adisyonda henüz sipariş yok.",
+      "orderAt": "{time} siparişi",
+      "channel": {
+        "dine_in": "Masada",
+        "takeaway": "Paket",
+        "delivery": "Teslimat"
+      },
+      "colQty": "Adet",
+      "colProduct": "Ürün",
+      "colUnitPrice": "Birim fiyat",
+      "colLineTotal": "Tutar",
+      "optionCount": "+{count} seçenek",
+      "notCounted": "Toplama dahil değil",
+      "rejectionReason": "Red nedeni: {reason}",
+      "summaryTitle": "Hesap özeti",
+      "total": "Adisyon toplamı",
+      "paid": "Ödenen",
+      "pending": "Onay bekleyen ödeme",
+      "remaining": "Kalan",
+      "paymentsTitle": "Ödemeler",
+      "noPayments": "Henüz tamamlanmış ödeme yok.",
+      "paymentsUnavailable": "Ödeme bilgisi yüklenemedi."
+    }
   },
   "catalogMenus": {
     "title": "Menüler",

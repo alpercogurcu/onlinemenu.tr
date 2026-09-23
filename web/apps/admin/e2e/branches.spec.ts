@@ -1176,7 +1176,7 @@ test.describe("çoklu şube", () => {
     await expect(page.getByRole("link", { name: "Şube Fiyatları" })).toHaveCount(0)
 
     await gotoSpa(page, "/catalog/branch-pricing")
-    await expect(page.getByText("Bu sayfaya erişim yetkiniz yok")).toBeVisible()
+    await expect(page.getByTestId("access-denied")).toBeVisible()
     await expect(page.getByTestId(/^branch-pricing-row-/)).toHaveCount(0)
   })
 })

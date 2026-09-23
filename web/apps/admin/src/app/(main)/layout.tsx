@@ -3,6 +3,7 @@
 import type { ReactNode } from "react"
 import { useEffect, useLayoutEffect, useState } from "react"
 
+import RouteGuard from "@/components/auth/route-guard"
 import SessionGuard from "@/components/auth/session-guard"
 import AdminSidebar from "@/components/layouts/admin-sidebar"
 import DynamicBreadcrumb from "@/components/layouts/dynamic-breadcrumb"
@@ -80,7 +81,9 @@ function MainShell({ children }: Readonly<{ children: ReactNode }>) {
             </div>
           </header>
           <div>
-            <div className="p-4">{children}</div>
+            <div className="p-4">
+              <RouteGuard>{children}</RouteGuard>
+            </div>
           </div>
         </SidebarInset>
       </div>

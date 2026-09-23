@@ -16,6 +16,7 @@ import { fetchContexts, fetchMe, selectMembershipContext } from "@/lib/identity-
 import { decodeJwtPayload } from "@/lib/jwt"
 import { consumePkceParams } from "@/lib/keycloak"
 import { setKeycloakTokens, setSelectedMembershipId, tokensFromResponse } from "@/lib/keycloak-token-store"
+import { currentHomeRoute } from "@/lib/route-permissions"
 import {
   clearSessionHint,
   consumeReturnPath,
@@ -80,7 +81,7 @@ export default function AuthCallbackClient() {
     setSession(ctxToken, { id: me.id, name: me.full_name, email: me.email }, context?.tenant_id ?? "")
     // replace() keeps the spent ?code= URL out of history, so Back cannot
     // land on an already-consumed authorization code.
-    router.replace(consumeReturnPath() ?? "/")
+    router.replace(consumeReturnPath() ?? currentHomeRoute() ?? "/")
   }
 
   // Every non-success exit has to drop the one-shot redirect state, otherwise

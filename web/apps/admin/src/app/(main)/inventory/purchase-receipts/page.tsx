@@ -34,6 +34,7 @@ import {
   useStockItems,
   useWarehouses,
 } from "@/hooks/use-inventory"
+import { useCan } from "@/hooks/use-can"
 import { useParties } from "@/hooks/use-parties"
 import type { StockItem } from "@/types"
 
@@ -120,7 +121,8 @@ export default function PurchaseReceiptsPage() {
     warehouse_id: warehouseId || undefined,
   })
   const { data: stockItems } = useStockItems()
-  const { data: suppliers } = useParties({ type: "supplier" })
+  const canReadParties = useCan("party.party.read")
+  const { data: suppliers } = useParties({ type: "supplier" }, { enabled: canReadParties })
   const createReceipt = useCreatePurchaseReceipt()
 
   const [dialogOpen, setDialogOpen] = useState(false)

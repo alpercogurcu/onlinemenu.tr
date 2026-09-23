@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useCreateSupplyPolicy, useStockItems, useSupplyPolicies } from "@/hooks/use-inventory"
+import { useCan } from "@/hooks/use-can"
 import { useParties } from "@/hooks/use-parties"
 import type { SupplyMode, SupplyPolicy, SupplyScope } from "@/types"
 
@@ -94,7 +95,11 @@ export default function SupplyPoliciesPage() {
 
   const { data: policies, isLoading } = useSupplyPolicies()
   const { data: stockItems } = useStockItems()
-  const { data: suppliers } = useParties({ type: "supplier" })
+  const canReadParties = useCan("party.party.read")
+  // Supply policy CREATE is the franchisor's commercial call (manager-only,
+  // ADR-DATA-007); the warehouse role reads the list but gets no add button.
+  const canCreate = useCan("inventory.supply_policy.create")
+  const { data: suppliers } = useParties({ type: "supplier" }, { enabled: canReadParties })
   const createPolicy = useCreateSupplyPolicy()
 
   const stockItemNames = new Map((stockItems ?? []).map((item) => [item.id, item.name]))
@@ -155,10 +160,12 @@ export default function SupplyPoliciesPage() {
             Stok kalemlerinin şubeler tarafından nasıl temin edilebileceğini tanımlayın.
           </p>
         </div>
-        <Button onClick={handleOpen}>
-          <Plus className="size-4" />
-          Politika Ekle
-        </Button>
+        {canCreate && (
+          <Button onClick={handleOpen}>
+            <Plus className="size-4" />
+            Politika Ekle
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -182,10 +189,12 @@ export default function SupplyPoliciesPage() {
               <p className="text-sm text-muted-foreground mt-1 mb-4">
                 Politika tanımlanmayan kalemler varsayılan olarak «Yalnızca Merkezden» kabul edilir.
               </p>
-              <Button onClick={handleOpen}>
-                <Plus className="size-4" />
-                İlk politikayı ekle
-              </Button>
+              {canCreate && (
+                <Button onClick={handleOpen}>
+                  <Plus className="size-4" />
+                  İlk politikayı ekle
+                </Button>
+              )}
             </div>
           ) : (
             <Table>

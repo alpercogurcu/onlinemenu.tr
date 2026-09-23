@@ -152,6 +152,8 @@ export interface OrderItem {
   quantity: number
   unit_price_amount: number
   note: string
+  // Selected option (modifier) ids. The DTO carries ids only, no names.
+  modifier_ids?: string[]
 }
 export interface Order {
   id: string
@@ -160,10 +162,19 @@ export interface Order {
   branch_id: string
   order_channel: string
   status: OrderStatus
+  rejection_reason?: string
   note: string
   items: OrderItem[]
   created_at: string
   updated_at: string
+}
+
+// Payment — per-check settlement (payment module checkSettlementResponse).
+export interface CheckSettlement {
+  check_id: string
+  as_of: string
+  completed: { payment_id: string; amount_total: number }[]
+  pending_total: number
 }
 
 // Payment

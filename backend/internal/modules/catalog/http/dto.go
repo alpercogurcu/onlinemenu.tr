@@ -199,3 +199,52 @@ func toMenuItemResponse(mi domain.MenuItem) menuItemResponse {
 		IsActive:      mi.IsActive,
 	}
 }
+
+// productOptionsResponse is one product's option tree for an order-taking
+// client (GET /catalog/products/modifier-groups). Deliberately lean — no
+// timestamps or tenant ids — because a POS reads it for every sellable product
+// in one call. max_selections null means "no cap"; a group whose options are
+// all inactive comes with an empty modifiers list.
+type productOptionsResponse struct {
+	ProductID uuid.UUID              `json:"product_id"`
+	Groups    []groupOptionsResponse `json:"groups"`
+}
+
+type groupOptionsResponse struct {
+	ID            uuid.UUID        `json:"id"`
+	Name          string           `json:"name"`
+	SelectionType string           `json:"selection_type"`
+	MinSelections int16            `json:"min_selections"`
+	MaxSelections *int16           `json:"max_selections"`
+	IsRequired    bool             `json:"is_required"`
+	SortOrder     int16            `json:"sort_order"`
+	Modifiers     []optionResponse `json:"modifiers"`
+}
+
+type optionResponse struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	PriceDelta int64     `json:"price_delta"`
+	SortOrder  int16     `json:"sort_order"`
+}
+
+func toProductOptionsResponse(p domain.ProductOptions) productOptionsResponse {
+	groups := make([]groupOptionsResponse, len(p.Groups))
+	for i, g := range p.Groups {
+		mods := make([]optionResponse, len(g.Modifiers))
+		for j, m := range g.Modifiers {
+			mods[j] = optionResponse{ID: m.ID, Name: m.Name, PriceDelta: m.PriceDelta, SortOrder: m.SortOrder}
+		}
+		groups[i] = groupOptionsResponse{
+			ID:            g.Group.ID,
+			Name:          g.Group.Name,
+			SelectionType: string(g.Group.SelectionType),
+			MinSelections: g.Group.MinSelections,
+			MaxSelections: g.Group.MaxSelections,
+			IsRequired:    g.Group.IsRequired,
+			SortOrder:     g.Group.SortOrder,
+			Modifiers:     mods,
+		}
+	}
+	return productOptionsResponse{ProductID: p.ProductID, Groups: groups}
+}

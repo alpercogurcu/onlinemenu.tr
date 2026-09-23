@@ -91,6 +91,7 @@ export default function DynamicBreadcrumb() {
     tables: t("tables"),
     checks: t("checks"),
     kitchen: t("kitchen"),
+    order: t("order"),
     catalog: t("catalog"),
     products: t("products"),
     categories: t("categories"),

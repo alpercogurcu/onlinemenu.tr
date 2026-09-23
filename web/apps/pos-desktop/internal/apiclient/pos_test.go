@@ -655,69 +655,47 @@ func TestClient_GetOrder_NotFoundIsAnError(t *testing.T) {
 	}
 }
 
-func TestClient_ModifierCalls_UseCatalogRoutesAndDecode(t *testing.T) {
-	tests := []struct {
-		name     string
-		wantPath string
-		body     string
-		call     func(c *Client) (int, error)
-	}{
-		{
-			name:     "all groups",
-			wantPath: "/api/v1/catalog/modifier-groups",
-			body:     `[{"id":"g1","name":"Acı","selection_type":"single","min_selections":1,"max_selections":null,"is_required":true,"sort_order":1}]`,
-			call: func(c *Client) (int, error) {
-				groups, err := c.ListModifierGroups(t.Context())
-				if err == nil && (groups[0].MaxSelections != nil || !groups[0].IsRequired || groups[0].SelectionType != "single") {
-					t.Fatalf("group decoded wrong: %+v", groups[0])
-				}
-				return len(groups), err
-			},
-		},
-		{
-			name:     "product group ids",
-			wantPath: "/api/v1/catalog/products/p-1/modifier-groups",
-			body:     `["g1","g2"]`,
-			call: func(c *Client) (int, error) {
-				ids, err := c.ListProductModifierGroupIDs(t.Context(), "p-1")
-				return len(ids), err
-			},
-		},
-		{
-			name:     "modifiers of a group",
-			wantPath: "/api/v1/catalog/modifier-groups/g1/modifiers",
-			body:     `[{"id":"m1","group_id":"g1","name":"Lavaş","price_delta":500,"is_active":true,"sort_order":1},{"id":"m2","group_id":"g1","name":"Eski","price_delta":-100,"is_active":false,"sort_order":2}]`,
-			call: func(c *Client) (int, error) {
-				mods, err := c.ListModifiers(t.Context(), "g1")
-				if err == nil && (mods[0].PriceDelta != 500 || mods[1].PriceDelta != -100 || mods[1].IsActive) {
-					t.Fatalf("modifiers decoded wrong: %+v", mods)
-				}
-				return len(mods), err
-			},
-		},
+func TestClient_ListProductOptions_OneRouteDecodesTheTree(t *testing.T) {
+	const body = `[{"product_id":"p-1","groups":[
+		{"id":"g1","name":"Acı","selection_type":"single","min_selections":1,"max_selections":null,"is_required":true,"sort_order":1,
+		 "modifiers":[{"id":"m1","name":"Lavaş","price_delta":500,"sort_order":1},{"id":"m2","name":"İndirimli","price_delta":-100,"sort_order":2}]},
+		{"id":"g2","name":"Boy","selection_type":"single","min_selections":0,"max_selections":1,"is_required":false,"sort_order":2,"modifiers":[]}]}]`
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/catalog/products/modifier-groups" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	tree, err := c.ListProductOptions(t.Context(), "b-1")
+	if err != nil {
+		t.Fatalf("ListProductOptions: %v", err)
 	}
-	wantCounts := []int{1, 2, 2}
+	if gotQuery != "branch_id=b-1" {
+		t.Fatalf("query = %q, want branch_id=b-1", gotQuery)
+	}
+	if len(tree) != 1 || tree[0].ProductID != "p-1" || len(tree[0].Groups) != 2 {
+		t.Fatalf("tree = %+v", tree)
+	}
+	g := tree[0].Groups[0]
+	if g.ID != "g1" || !g.IsRequired || g.MaxSelections != nil || len(g.Modifiers) != 2 {
+		t.Fatalf("group = %+v", g)
+	}
+	if !g.Modifiers[0].IsActive || !g.Modifiers[1].IsActive || g.Modifiers[1].PriceDelta != -100 {
+		t.Fatalf("modifiers = %+v, want active with signed deltas", g.Modifiers)
+	}
+	if tree[0].Groups[1].MaxSelections == nil || len(tree[0].Groups[1].Modifiers) != 0 {
+		t.Fatalf("empty group = %+v", tree[0].Groups[1])
+	}
 
-	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != tt.wantPath {
-					t.Fatalf("request = %s %s, want GET %s", r.Method, r.URL.Path, tt.wantPath)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(tt.body))
-			}))
-			defer srv.Close()
-
-			c := New(srv.URL, &memStore{token: "tok", saved: true})
-			got, err := tt.call(c)
-			if err != nil {
-				t.Fatalf("call: %v", err)
-			}
-			if got != wantCounts[i] {
-				t.Fatalf("decoded %d items, want %d", got, wantCounts[i])
-			}
-		})
+	if _, err := c.ListProductOptions(t.Context(), ""); err != nil || gotQuery != "" {
+		t.Fatalf("no branch: err=%v query=%q, want no branch_id parameter", err, gotQuery)
 	}
 }
 

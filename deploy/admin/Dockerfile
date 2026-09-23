@@ -15,7 +15,9 @@
 # =============================================================================
 
 FROM node:22-alpine AS base
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+# Must be the pnpm that wrote web/pnpm-lock.yaml (web/package.json
+# "packageManager"); an older pnpm under --frozen-lockfile can refuse it.
+RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
 WORKDIR /repo
 
 FROM base AS deps
@@ -24,6 +26,7 @@ COPY apps/admin/package.json apps/admin/
 COPY apps/menu/package.json apps/menu/
 COPY apps/pos-desktop/frontend/package.json apps/pos-desktop/frontend/
 COPY packages/config/package.json packages/config/
+COPY packages/pos-core/package.json packages/pos-core/
 COPY packages/types/package.json packages/types/
 COPY packages/ui-kit/package.json packages/ui-kit/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \

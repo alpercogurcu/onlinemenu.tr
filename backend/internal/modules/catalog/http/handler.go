@@ -68,6 +68,8 @@ func (h *Handler) RegisterRoutes(r *chi.Mux) {
 		r.With(h.permit("catalog.category.read")).Get("/categories/{id}", h.getCategory)
 
 		r.With(h.permit("catalog.product.read")).Get("/products", h.listProducts)
+		// Static segment: chi matches it before /products/{id}.
+		r.With(h.permit("catalog.product.read")).Get("/products/modifier-groups", h.listProductOptions)
 		r.With(h.permit("catalog.product.create")).Post("/products", h.createProduct)
 		r.With(h.permit("catalog.product.read")).Get("/products/{id}", h.getProduct)
 		r.With(h.permit("catalog.product.update")).Put("/products/{id}", h.updateProduct)
@@ -723,6 +725,32 @@ func (h *Handler) listProductModifierGroups(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	respondJSON(w, http.StatusOK, ids)
+}
+
+// listProductOptions answers every sellable product's option tree in one
+// request, so an order screen resolves options without one call per product
+// (the per-product route below stays for the catalog editor). branch_id goes
+// through the same guard as the product listings: a branch-bound principal
+// defaults to, and may only name, its own branch.
+func (h *Handler) listProductOptions(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := requireTenantID(w, r)
+	if !ok {
+		return
+	}
+	branchID, ok := h.branchIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	trees, err := h.modifiers.ListProductOptions(r.Context(), tenantID, branchID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	out := make([]productOptionsResponse, len(trees))
+	for i, tree := range trees {
+		out[i] = toProductOptionsResponse(tree)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) listGroupProducts(w http.ResponseWriter, r *http.Request) {

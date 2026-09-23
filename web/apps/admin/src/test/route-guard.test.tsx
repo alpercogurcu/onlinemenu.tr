@@ -83,7 +83,7 @@ describe("RouteGuard", () => {
       </RouteGuard>,
     )
     expect(screen.getByText("Bu sayfaya erişim yetkiniz yok")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Ana sayfama dön" })).toHaveAttribute("href", "/pos/tables")
+    expect(screen.getByRole("link", { name: "Ana sayfama dön" })).toHaveAttribute("href", "/pos/order")
     expect(Page).not.toHaveBeenCalled()
   })
 

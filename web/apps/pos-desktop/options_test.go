@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,63 +11,50 @@ import (
 	"onlinemenu.tr/pos-desktop/internal/apiclient"
 )
 
-// fakeOptionsAPI serves a tiny catalog and counts calls so cache behaviour is
-// observable.
+// fakeOptionsAPI serves a tiny option tree and counts calls so cache behaviour
+// is observable.
 type fakeOptionsAPI struct {
 	mu sync.Mutex
 
-	products        map[string]apiclient.Product
-	productFetches  map[string]int
-	groups          []apiclient.ModifierGroup
-	productGroupIDs map[string][]string
-	modifiers       map[string][]apiclient.Modifier
-
-	groupsErr     error
-	productErr    map[string]error
-	modifiersErr  map[string]error
-	groupsCalls   int
-	productCalls  map[string]int
-	modifierCalls map[string]int
+	branch         string
+	tree           []apiclient.ProductOptions
+	treeErr        error
+	treeCalls      map[string]int
+	products       map[string]apiclient.Product
+	productFetches map[string]int
+	productErr     map[string]error
 }
 
 func newFakeOptionsAPI() *fakeOptionsAPI {
 	return &fakeOptionsAPI{
-		products:        map[string]apiclient.Product{},
-		productFetches:  map[string]int{},
-		productGroupIDs: map[string][]string{},
-		modifiers:       map[string][]apiclient.Modifier{},
-		productErr:      map[string]error{},
-		modifiersErr:    map[string]error{},
-		productCalls:    map[string]int{},
-		modifierCalls:   map[string]int{},
+		treeCalls:      map[string]int{},
+		products:       map[string]apiclient.Product{},
+		productFetches: map[string]int{},
+		productErr:     map[string]error{},
 	}
 }
 
-func (f *fakeOptionsAPI) ListModifierGroups(context.Context) ([]apiclient.ModifierGroup, error) {
+func (f *fakeOptionsAPI) ListProductOptions(_ context.Context, branchID string) ([]apiclient.ProductOptions, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.groupsCalls++
-	return f.groups, f.groupsErr
+	f.treeCalls[branchID]++
+	return f.tree, f.treeErr
 }
 
-func (f *fakeOptionsAPI) ListProductModifierGroupIDs(_ context.Context, productID string) ([]string, error) {
+func (f *fakeOptionsAPI) CurrentBranchID() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.productCalls[productID]++
-	if err := f.productErr[productID]; err != nil {
-		return nil, err
-	}
-	return f.productGroupIDs[productID], nil
+	return f.branch
 }
 
-func (f *fakeOptionsAPI) ListModifiers(_ context.Context, groupID string) ([]apiclient.Modifier, error) {
+func (f *fakeOptionsAPI) calls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.modifierCalls[groupID]++
-	if err := f.modifiersErr[groupID]; err != nil {
-		return nil, err
+	total := 0
+	for _, n := range f.treeCalls {
+		total += n
 	}
-	return f.modifiers[groupID], nil
+	return total
 }
 
 func (f *fakeOptionsAPI) GetProduct(_ context.Context, productID string) (apiclient.Product, error) {
@@ -85,20 +73,23 @@ func (f *fakeOptionsAPI) GetProduct(_ context.Context, productID string) (apicli
 
 func int16Ptr(v int16) *int16 { return &v }
 
-func spiceGroup() (apiclient.ModifierGroup, []apiclient.Modifier) {
-	return apiclient.ModifierGroup{ID: "g-spice", Name: "Acı", SelectionType: "single", MinSelections: 1, IsRequired: true, SortOrder: 1},
-		[]apiclient.Modifier{
-			{ID: "m-hot", GroupID: "g-spice", Name: "Acılı", PriceDelta: 0, IsActive: true, SortOrder: 2},
-			{ID: "m-mild", GroupID: "g-spice", Name: "Acısız", PriceDelta: 0, IsActive: true, SortOrder: 1},
-			{ID: "m-old", GroupID: "g-spice", Name: "Kaldırıldı", PriceDelta: 0, IsActive: false, SortOrder: 3},
-		}
+// Groups arrive in the server's assignment order with active options only
+// (the apiclient marks them IsActive) — spice first, then extra.
+func spiceGroup() apiclient.ProductOptionGroup {
+	return apiclient.ProductOptionGroup{
+		ModifierGroup: apiclient.ModifierGroup{ID: "g-spice", Name: "Acı", SelectionType: "single", MinSelections: 1, IsRequired: true, SortOrder: 5},
+		Modifiers: []apiclient.Modifier{
+			{ID: "m-mild", GroupID: "g-spice", Name: "Acısız", IsActive: true, SortOrder: 1},
+			{ID: "m-hot", GroupID: "g-spice", Name: "Acılı", IsActive: true, SortOrder: 2},
+		},
+	}
 }
 
-func extraGroup() (apiclient.ModifierGroup, []apiclient.Modifier) {
-	return apiclient.ModifierGroup{ID: "g-extra", Name: "Ekstra", SelectionType: "multiple", MaxSelections: int16Ptr(2), SortOrder: 2},
-		[]apiclient.Modifier{
-			{ID: "m-cheese", GroupID: "g-extra", Name: "Peynir", PriceDelta: 1500, IsActive: true, SortOrder: 1},
-		}
+func extraGroup() apiclient.ProductOptionGroup {
+	return apiclient.ProductOptionGroup{
+		ModifierGroup: apiclient.ModifierGroup{ID: "g-extra", Name: "Ekstra", SelectionType: "multiple", MaxSelections: int16Ptr(2), SortOrder: 1},
+		Modifiers:     []apiclient.Modifier{{ID: "m-cheese", GroupID: "g-extra", Name: "Peynir", PriceDelta: 1500, IsActive: true, SortOrder: 1}},
+	}
 }
 
 func newResolverWithClock(api optionsAPI, now *time.Time) *optionsResolver {
@@ -107,38 +98,30 @@ func newResolverWithClock(api optionsAPI, now *time.Time) *optionsResolver {
 	return r
 }
 
-func TestOptionsResolver_Enrich_AttachesSortedActiveModifiers(t *testing.T) {
+func TestOptionsResolver_Enrich_AttachesGroupsInServerOrder(t *testing.T) {
 	api := newFakeOptionsAPI()
-	spice, spiceMods := spiceGroup()
-	extra, extraMods := extraGroup()
-	api.groups = []apiclient.ModifierGroup{extra, spice}
-	api.modifiers[spice.ID] = spiceMods
-	api.modifiers[extra.ID] = extraMods
-	api.productGroupIDs["lahmacun"] = []string{extra.ID, spice.ID}
+	api.tree = []apiclient.ProductOptions{{ProductID: "lahmacun", Groups: []apiclient.ProductOptionGroup{spiceGroup(), extraGroup()}}}
 
 	products := []ProductDTO{{ID: "lahmacun", Name: "Lahmacun"}, {ID: "cay", Name: "Çay"}}
 	newOptionsResolver(api).enrich(context.Background(), products)
 
 	lahmacun := products[0]
-	if lahmacun.OptionsUnavailable {
-		t.Fatal("lahmacun.OptionsUnavailable = true, want false")
-	}
-	if len(lahmacun.ModifierGroups) != 2 {
-		t.Fatalf("lahmacun has %d groups, want 2", len(lahmacun.ModifierGroups))
+	if lahmacun.OptionsUnavailable || len(lahmacun.ModifierGroups) != 2 {
+		t.Fatalf("lahmacun = %+v, want two groups", lahmacun)
 	}
 	if got := lahmacun.ModifierGroups[0].ID; got != "g-spice" {
-		t.Fatalf("groups[0] = %q, want g-spice (sorted by sort_order)", got)
+		t.Fatalf("groups[0] = %q, want g-spice (assignment order from the server, not group sort_order)", got)
 	}
-	spiceDTO := lahmacun.ModifierGroups[0]
-	if !spiceDTO.IsRequired || spiceDTO.SelectionType != "single" || spiceDTO.MinSelections != 1 {
-		t.Fatalf("spice group rules = %+v", spiceDTO)
+	spice := lahmacun.ModifierGroups[0]
+	if !spice.IsRequired || spice.SelectionType != "single" || spice.MinSelections != 1 {
+		t.Fatalf("spice group rules = %+v", spice)
 	}
-	if len(spiceDTO.Modifiers) != 2 || spiceDTO.Modifiers[0].ID != "m-mild" || spiceDTO.Modifiers[1].ID != "m-hot" {
-		t.Fatalf("spice modifiers = %+v, want active only, sorted [m-mild m-hot]", spiceDTO.Modifiers)
+	if len(spice.Modifiers) != 2 || spice.Modifiers[0].ID != "m-mild" || spice.Modifiers[1].ID != "m-hot" {
+		t.Fatalf("spice modifiers = %+v", spice.Modifiers)
 	}
-	extraDTO := lahmacun.ModifierGroups[1]
-	if extraDTO.MaxSelections != 2 || extraDTO.Modifiers[0].PriceDelta != 1500 {
-		t.Fatalf("extra group = %+v", extraDTO)
+	extra := lahmacun.ModifierGroups[1]
+	if extra.MaxSelections != 2 || extra.Modifiers[0].PriceDelta != 1500 {
+		t.Fatalf("extra group = %+v", extra)
 	}
 
 	cay := products[1]
@@ -150,24 +133,40 @@ func TestOptionsResolver_Enrich_AttachesSortedActiveModifiers(t *testing.T) {
 	}
 }
 
-func TestOptionsResolver_Enrich_NoAssignedGroupsSkipsGroupCatalog(t *testing.T) {
+func TestOptionsResolver_Enrich_OneRequestForAWholeGrid(t *testing.T) {
 	api := newFakeOptionsAPI()
-	products := []ProductDTO{{ID: "cay"}}
+	api.tree = []apiclient.ProductOptions{{ProductID: "p0", Groups: []apiclient.ProductOptionGroup{spiceGroup()}}}
+	products := make([]ProductDTO, 30)
+	for i := range products {
+		products[i] = ProductDTO{ID: fmt.Sprintf("p%d", i)}
+	}
 	newOptionsResolver(api).enrich(context.Background(), products)
-	if api.groupsCalls != 0 {
-		t.Fatalf("group catalog fetched %d times for products without groups, want 0", api.groupsCalls)
+	if got := api.calls(); got != 1 {
+		t.Fatalf("option requests for a 30-tile grid = %d, want 1 (production rate-limits per IP)", got)
+	}
+}
+
+func TestOptionsResolver_Enrich_AsksForTheSessionBranchAndCachesPerBranch(t *testing.T) {
+	api := newFakeOptionsAPI()
+	api.branch = "b-1"
+	r := newOptionsResolver(api)
+	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
+	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
+	api.branch = "b-2"
+	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
+	if api.treeCalls["b-1"] != 1 || api.treeCalls["b-2"] != 1 {
+		t.Fatalf("tree calls = %v, want one per branch", api.treeCalls)
 	}
 }
 
 func TestOptionsResolver_Enrich_DropsEmptyOptionalGroupButFlagsEmptyRequiredGroup(t *testing.T) {
 	api := newFakeOptionsAPI()
-	optional := apiclient.ModifierGroup{ID: "g-opt", Name: "Sos", SelectionType: "multiple", SortOrder: 1}
-	required := apiclient.ModifierGroup{ID: "g-req", Name: "Boy", SelectionType: "single", IsRequired: true, SortOrder: 1}
-	api.groups = []apiclient.ModifierGroup{optional, required}
-	api.modifiers["g-opt"] = []apiclient.Modifier{{ID: "m1", GroupID: "g-opt", Name: "Kapalı", IsActive: false}}
-	api.modifiers["g-req"] = nil
-	api.productGroupIDs["a"] = []string{"g-opt"}
-	api.productGroupIDs["b"] = []string{"g-req"}
+	optional := apiclient.ProductOptionGroup{ModifierGroup: apiclient.ModifierGroup{ID: "g-opt", Name: "Sos", SelectionType: "multiple"}, Modifiers: []apiclient.Modifier{}}
+	required := apiclient.ProductOptionGroup{ModifierGroup: apiclient.ModifierGroup{ID: "g-req", Name: "Boy", SelectionType: "single", IsRequired: true}, Modifiers: []apiclient.Modifier{}}
+	api.tree = []apiclient.ProductOptions{
+		{ProductID: "a", Groups: []apiclient.ProductOptionGroup{optional}},
+		{ProductID: "b", Groups: []apiclient.ProductOptionGroup{required}},
+	}
 
 	products := []ProductDTO{{ID: "a"}, {ID: "b"}}
 	newOptionsResolver(api).enrich(context.Background(), products)
@@ -180,101 +179,50 @@ func TestOptionsResolver_Enrich_DropsEmptyOptionalGroupButFlagsEmptyRequiredGrou
 	}
 }
 
-func TestOptionsResolver_Enrich_FailSoftPerProduct(t *testing.T) {
+func TestOptionsResolver_Enrich_TreeFailureFlagsEveryProduct(t *testing.T) {
 	api := newFakeOptionsAPI()
-	spice, spiceMods := spiceGroup()
-	api.groups = []apiclient.ModifierGroup{spice}
-	api.modifiers[spice.ID] = spiceMods
-	api.productGroupIDs["ok"] = []string{spice.ID}
-	api.productErr["broken"] = errors.New("boom")
-
-	products := []ProductDTO{{ID: "ok"}, {ID: "broken"}}
-	newOptionsResolver(api).enrich(context.Background(), products)
-
-	if products[0].OptionsUnavailable || len(products[0].ModifierGroups) != 1 {
-		t.Fatalf("healthy product = %+v", products[0])
-	}
-	if !products[1].OptionsUnavailable || len(products[1].ModifierGroups) != 0 {
-		t.Fatalf("broken product = %+v, want unavailable with no groups", products[1])
-	}
-}
-
-func TestOptionsResolver_Enrich_GroupCatalogFailureFlagsOnlyProductsWithGroups(t *testing.T) {
-	api := newFakeOptionsAPI()
-	api.groupsErr = errors.New("boom")
-	api.productGroupIDs["with"] = []string{"g-spice"}
+	api.treeErr = errors.New("boom")
 
 	products := []ProductDTO{{ID: "with"}, {ID: "without"}}
 	newOptionsResolver(api).enrich(context.Background(), products)
 
-	if !products[0].OptionsUnavailable {
-		t.Fatal("product with assigned groups must be flagged when the group catalog is unreachable")
-	}
-	if products[1].OptionsUnavailable {
-		t.Fatal("product without groups needs no catalog and must stay plain")
-	}
-}
-
-func TestOptionsResolver_Enrich_ModifierFailureFlagsProductsUsingThatGroup(t *testing.T) {
-	api := newFakeOptionsAPI()
-	spice, spiceMods := spiceGroup()
-	extra, _ := extraGroup()
-	api.groups = []apiclient.ModifierGroup{spice, extra}
-	api.modifiers[spice.ID] = spiceMods
-	api.modifiersErr[extra.ID] = errors.New("boom")
-	api.productGroupIDs["a"] = []string{spice.ID}
-	api.productGroupIDs["b"] = []string{spice.ID, extra.ID}
-
-	products := []ProductDTO{{ID: "a"}, {ID: "b"}}
-	newOptionsResolver(api).enrich(context.Background(), products)
-
-	if products[0].OptionsUnavailable || len(products[0].ModifierGroups) != 1 {
-		t.Fatalf("product a = %+v", products[0])
-	}
-	if !products[1].OptionsUnavailable {
-		t.Fatal("product b uses the failed group and must be flagged: offering only part of its options would silently drop the rest")
+	for _, p := range products {
+		if !p.OptionsUnavailable || p.ModifierGroups == nil {
+			t.Fatalf("product = %+v, want flagged (options unknown) with an empty group list", p)
+		}
 	}
 }
 
 func TestOptionsResolver_Enrich_CachesWithinTTL(t *testing.T) {
 	api := newFakeOptionsAPI()
-	spice, spiceMods := spiceGroup()
-	api.groups = []apiclient.ModifierGroup{spice}
-	api.modifiers[spice.ID] = spiceMods
-	api.productGroupIDs["p"] = []string{spice.ID}
+	api.tree = []apiclient.ProductOptions{{ProductID: "p", Groups: []apiclient.ProductOptionGroup{spiceGroup()}}}
 
 	now := time.Now()
 	r := newResolverWithClock(api, &now)
 	for i := 0; i < 3; i++ {
 		r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
 	}
-	if api.groupsCalls != 1 || api.productCalls["p"] != 1 || api.modifierCalls[spice.ID] != 1 {
-		t.Fatalf("calls groups=%d product=%d modifiers=%d, want 1 each (tile taps must not wait on the network)",
-			api.groupsCalls, api.productCalls["p"], api.modifierCalls[spice.ID])
+	if got := api.calls(); got != 1 {
+		t.Fatalf("tree calls = %d, want 1 (tile taps must not wait on the network)", got)
 	}
 
 	now = now.Add(optionsCacheTTL + time.Second)
 	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
-	if api.groupsCalls != 2 || api.productCalls["p"] != 2 || api.modifierCalls[spice.ID] != 2 {
-		t.Fatalf("after TTL calls groups=%d product=%d modifiers=%d, want 2 each", api.groupsCalls, api.productCalls["p"], api.modifierCalls[spice.ID])
+	if got := api.calls(); got != 2 {
+		t.Fatalf("after TTL tree calls = %d, want 2", got)
 	}
 }
 
 func TestOptionsResolver_Enrich_ServesStaleCacheWhenRefreshFails(t *testing.T) {
 	api := newFakeOptionsAPI()
-	spice, spiceMods := spiceGroup()
-	api.groups = []apiclient.ModifierGroup{spice}
-	api.modifiers[spice.ID] = spiceMods
-	api.productGroupIDs["p"] = []string{spice.ID}
+	api.tree = []apiclient.ProductOptions{{ProductID: "p", Groups: []apiclient.ProductOptionGroup{spiceGroup()}}}
 
 	now := time.Now()
 	r := newResolverWithClock(api, &now)
 	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
 
 	now = now.Add(optionsCacheTTL + time.Second)
-	api.groupsErr = errors.New("offline")
-	api.productErr["p"] = errors.New("offline")
-	api.modifiersErr[spice.ID] = errors.New("offline")
+	api.treeErr = errors.New("offline")
 
 	products := []ProductDTO{{ID: "p"}}
 	r.enrich(context.Background(), products)
@@ -285,17 +233,12 @@ func TestOptionsResolver_Enrich_ServesStaleCacheWhenRefreshFails(t *testing.T) {
 
 func TestOptionsResolver_Reset_DropsCache(t *testing.T) {
 	api := newFakeOptionsAPI()
-	spice, spiceMods := spiceGroup()
-	api.groups = []apiclient.ModifierGroup{spice}
-	api.modifiers[spice.ID] = spiceMods
-	api.productGroupIDs["p"] = []string{spice.ID}
-
 	r := newOptionsResolver(api)
 	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
 	r.reset()
 	r.enrich(context.Background(), []ProductDTO{{ID: "p"}})
-	if api.groupsCalls != 2 {
-		t.Fatalf("groupsCalls = %d, want 2 after reset", api.groupsCalls)
+	if got := api.calls(); got != 2 {
+		t.Fatalf("tree calls = %d, want 2 after reset", got)
 	}
 }
 

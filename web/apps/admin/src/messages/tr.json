@@ -6,6 +6,7 @@
     "tables": "Masalar",
     "checks": "Adisyonlar",
     "kitchen": "Mutfak Ekranı",
+    "order": "Sipariş Al",
     "catalog": "Katalog",
     "products": "Ürünler",
     "newProduct": "Yeni Ürün",
@@ -66,6 +67,8 @@
     "floor": "{floor}. kat",
     "qrAction": "QR",
     "hasOpenCheck": "Açık adisyon",
+    "orderAction": "Sipariş al",
+    "orderAria": "{table} — sipariş al",
     "statusChange": "Durum değiştir",
     "statusChangeAria": "{table} masasının durumunu değiştir",
     "statusChanged": "{table} → {status}",
@@ -610,6 +613,100 @@
       "expected": "Beklenen",
       "counted": "Sayılan",
       "difference": "Fark"
+    }
+  },
+  "posOrder": {
+    "pickTitle": "Masa seçin",
+    "pickSubtitle": "Sipariş almak istediğiniz masaya dokunun.",
+    "branch": "Şube",
+    "noBranch": "Önce bir şube seçin",
+    "noTables": "Bu şubede masa yok. Masa tanımı için yöneticinize başvurun.",
+    "zonesAria": "Bölgeler",
+    "tableAria": "{table}, {status}",
+    "openTotal": "{total}",
+    "cleaningTitle": "{table} temizlikte",
+    "cleaningBody": "Masa temizlendiyse boş olarak işaretleyip siparişe geçin.",
+    "cleaningConfirm": "Temizlendi, sipariş al",
+    "cleaningCancel": "Vazgeç",
+    "cleaningFailed": "Masa durumu değiştirilemedi",
+    "backToTables": "Masalar",
+    "tableNotFound": "Masa bulunamadı. Masalar ekranından yeniden seçin.",
+    "cleaningBanner": "Bu masa temizlikte. Sipariş göndermeden önce temizlendi olarak işaretleyin.",
+    "markClean": "Temizlendi",
+    "categoriesAria": "Kategoriler",
+    "otherCategory": "Diğer",
+    "loadingProducts": "Ürünler yükleniyor…",
+    "noProducts": "Bu kategoride satışta ürün yok.",
+    "catalogFailed": "Ürünler yüklenemedi.",
+    "retry": "Tekrar dene",
+    "hasOptions": "Seçenekli",
+    "optionsUnavailable": "Seçenekler alınamadı — ürün seçeneksiz eklendi, mutfağa sözlü iletin.",
+    "inCart": "Sepette {count}",
+    "addProductAria": "{product}, {price} — sepete ekle",
+    "added": "{product} eklendi",
+    "sent": {
+      "title": "Masada olanlar",
+      "summary": "{count} kalem · {total}",
+      "empty": "Henüz sipariş yok.",
+      "detail": "Adisyon detayı",
+      "status": {
+        "pending": "Bekliyor",
+        "accepted": "Onaylandı",
+        "preparing": "Hazırlanıyor",
+        "ready": "Hazır",
+        "delivered": "Teslim edildi",
+        "rejected": "Reddedildi",
+        "cancelled": "İptal"
+      }
+    },
+    "cart": {
+      "title": "Yeni sipariş",
+      "empty": "Sepet boş. Ürünlere dokunarak ekleyin.",
+      "open": "Sepeti aç",
+      "summary": "{count} kalem",
+      "total": "Toplam",
+      "send": "Mutfağa gönder",
+      "sending": "Gönderiliyor…",
+      "decrease": "{product} adedini azalt",
+      "increase": "{product} adedini artır",
+      "remove": "Sil",
+      "removeAria": "{product} satırını sil",
+      "quantity": "Adet",
+      "close": "Kapat"
+    },
+    "picker": {
+      "close": "Kapat",
+      "note": "Not",
+      "customNote": "Not yaz",
+      "customNotePlaceholder": "Örn. az tuzlu",
+      "quantity": "Adet",
+      "decrease": "Adedi azalt",
+      "increase": "Adedi artır",
+      "lineTotal": "Tutar",
+      "cancel": "Vazgeç",
+      "add": "Sepete ekle",
+      "required": "Bu gruptan bir seçim yapın.",
+      "maxReached": "En fazla {max} seçim yapılabilir.",
+      "loading": "Seçenekler yükleniyor…"
+    },
+    "success": {
+      "title": "Mutfağa gönderildi",
+      "body": "{table} · {count} kalem · {total}",
+      "backToTables": "Masalara dön",
+      "continue": "Bu masaya ekle",
+      "occupiedJoined": "Masada açık adisyon varmış; sipariş o adisyona eklendi."
+    },
+    "leave": {
+      "title": "Gönderilmemiş sipariş var",
+      "body": "Sepetteki {count} kalem mutfağa gönderilmedi. Çıkarsanız silinecek.",
+      "stay": "Kalsın",
+      "discard": "Sil ve çık"
+    },
+    "status": {
+      "empty": "Boş",
+      "occupied": "Dolu",
+      "reserved": "Rezerve",
+      "cleaning": "Temizlikte"
     }
   }
 }

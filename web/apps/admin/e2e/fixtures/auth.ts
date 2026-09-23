@@ -31,12 +31,12 @@ export type SeededProduct = (typeof PRODUCTS)[keyof typeof PRODUCTS]
 
 // Each role lands on its own home after sign-in (lib/route-permissions.ts
 // homeRouteFor): manager/shift -> "/", cashier -> /pos/checks, waiter ->
-// /pos/tables, kitchen -> /pos/kitchen.
+// /pos/order (the order screen's table plan), kitchen -> /pos/kitchen.
 export const HOME = {
   [USERS.manager]: "/",
   [USERS.shift]: "/",
   [USERS.cashier]: "/pos/checks",
-  [USERS.waiter]: "/pos/tables",
+  [USERS.waiter]: "/pos/order",
   [USERS.kitchen]: "/pos/kitchen",
 } as Record<string, string>
 

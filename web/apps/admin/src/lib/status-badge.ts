@@ -93,3 +93,18 @@ export function branchSaleStateVariant(state: BranchSaleState): StatusBadgeVaria
       return "warning"
   }
 }
+
+// Whole-surface tint for a status (e.g. a table tile on the order screen's
+// floor plan), from the same tokens the Badge variants use. Literal class
+// strings on purpose: Tailwind only generates what it can read in source.
+const STATUS_SURFACE: Record<StatusBadgeVariant, string> = {
+  success: "border-status-success-border bg-status-success-bg text-status-success-fg",
+  warning: "border-status-warning-border bg-status-warning-bg text-status-warning-fg",
+  info: "border-status-info-border bg-status-info-bg text-status-info-fg",
+  danger: "border-status-danger-border bg-status-danger-bg text-status-danger-fg",
+  neutral: "border-border bg-card text-foreground",
+}
+
+export function statusSurfaceClass(variant: StatusBadgeVariant): string {
+  return STATUS_SURFACE[variant]
+}

@@ -20,6 +20,9 @@ export const ROUTE_PERMISSIONS = {
   "/": "pos.report.read",
 
   "/pos/tables": "pos.table.read",
+  // Web order screen (garson/kasiyer/yönetici): opening a check on the first
+  // send needs pos.check.open, which every pos.order.place holder also has.
+  "/pos/order": "pos.order.place",
   "/pos/checks": "pos.check.read",
   "/pos/checks/[id]": "pos.check.read",
   // The kitchen display exists to move tickets along; a waiter reads orders
@@ -112,13 +115,13 @@ export function canAccessRoute(pathname: string): boolean {
 
 // Landing screen per role, most specific operational role first. A principal
 // holding several roles lands on the first one listed that it can open.
-// "/pos/order" is reserved for the web order screen (separate work item); the
-// waiter lands on the table plan until it exists.
+// The waiter lands on the web order screen's table plan (/pos/order): one
+// floor plan, and every tap on it leads to taking an order.
 const ROLE_HOMES: ReadonlyArray<readonly [role: string, path: string]> = [
   ["manager", "/"],
   ["shift_manager", "/"],
   ["cashier", "/pos/checks"],
-  ["waiter", "/pos/tables"],
+  ["waiter", "/pos/order"],
   ["kitchen", "/pos/kitchen"],
   ["bar", "/pos/kitchen"],
   ["warehouse", "/inventory/stock-levels"],
@@ -142,4 +145,24 @@ export function homeRouteFor(roles: Iterable<string>): string | null {
 
 export function currentHomeRoute(): string | null {
   return homeRouteFor(currentRoleNames())
+}
+
+export type FloorPlanRoute = "/pos/tables" | "/pos/order"
+
+/**
+ * Which screen the menu's "Masalar" opens. There is one floor plan per role:
+ * whoever manages tables or prints table QR codes needs the management board
+ * (/pos/tables); whoever only takes orders gets the order screen's plan
+ * (/pos/order), where every tap leads to an order and a table in cleaning can
+ * still be freed; a read-only role (kitchen/bar) keeps the board.
+ */
+export function floorPlanRouteFor(roles: Iterable<string>): FloorPlanRoute {
+  const held = [...roles]
+  const managesTables = rolesCan(held, "pos.table.manage") || rolesCan(held, "storefront.qr.read")
+  if (!managesTables && rolesCanAccess(held, "/pos/order")) return "/pos/order"
+  return "/pos/tables"
+}
+
+export function currentFloorPlanRoute(): FloorPlanRoute {
+  return floorPlanRouteFor(currentRoleNames())
 }

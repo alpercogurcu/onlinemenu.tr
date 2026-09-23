@@ -10,6 +10,7 @@ import { getSidebarSections } from "@/components/layouts/sidebar-menu-config"
 import { isKnownAction } from "@/lib/permissions"
 import {
   ROUTE_PERMISSIONS,
+  floorPlanRouteFor,
   homeRouteFor,
   matchRoute,
   rolesCanAccess,
@@ -74,12 +75,13 @@ describe("matchRoute", () => {
     ["/catalog/products/new", "/catalog/products/new"],
     ["/catalog/products/abc", "/catalog/products/[id]"],
     ["/catalog/products?q=x", "/catalog/products"],
+    ["/pos/order?branch=b&table=t", "/pos/order"],
   ])("%s -> %s", (pathname, pattern) => {
     expect(matchRoute(pathname)).toBe(pattern)
   })
 
   it("does not match unregistered paths (fail closed)", () => {
-    expect(matchRoute("/pos/order")).toBeNull()
+    expect(matchRoute("/pos/orders")).toBeNull()
     expect(rolesCanAccess(["manager"], "/nope")).toBe(false)
   })
 })
@@ -90,7 +92,8 @@ describe("matchRoute", () => {
 const EXPECTED_MENU: Record<string, string[]> = {
   shift_manager: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen", "/payment/payments"],
   cashier: ["/pos/tables", "/pos/checks", "/pos/kitchen"],
-  waiter: ["/pos/tables", "/pos/checks"],
+  // One floor plan: the waiter's "Masalar" is the order screen's plan.
+  waiter: ["/pos/order", "/pos/checks"],
   kitchen: ["/pos/tables", "/pos/kitchen"],
   bar: ["/pos/tables", "/pos/kitchen"],
   warehouse: [
@@ -105,7 +108,7 @@ const EXPECTED_MENU: Record<string, string[]> = {
 }
 
 function menuFor(role: string): string[] {
-  return getSidebarSections((k) => k, (url) => rolesCanAccess([role], url)).flatMap((s) =>
+  return getSidebarSections((k) => k, (url) => rolesCanAccess([role], url), floorPlanRouteFor([role])).flatMap((s) =>
     s.items.map((i) => i.url),
   )
 }
@@ -127,12 +130,37 @@ describe("sidebar per role", () => {
   })
 })
 
+describe("web order screen", () => {
+  it("is open to every role that may place an order, and only to them", () => {
+    for (const role of ["manager", "shift_manager", "cashier", "waiter"]) {
+      expect(rolesCanAccess([role], "/pos/order?table=x"), role).toBe(true)
+    }
+    for (const role of ["kitchen", "bar", "warehouse", "driver"]) {
+      expect(rolesCanAccess([role], "/pos/order"), role).toBe(false)
+    }
+  })
+})
+
+describe("floorPlanRouteFor", () => {
+  it.each([
+    [["waiter"], "/pos/order"],
+    [["cashier"], "/pos/tables"],
+    [["shift_manager"], "/pos/tables"],
+    [["manager"], "/pos/tables"],
+    [["kitchen"], "/pos/tables"],
+    [["bar"], "/pos/tables"],
+    [["waiter", "cashier"], "/pos/tables"],
+  ])("%j -> %s", (roles, route) => {
+    expect(floorPlanRouteFor(roles)).toBe(route)
+  })
+})
+
 describe("homeRouteFor", () => {
   it.each([
     [["manager"], "/"],
     [["shift_manager"], "/"],
     [["cashier"], "/pos/checks"],
-    [["waiter"], "/pos/tables"],
+    [["waiter"], "/pos/order"],
     [["kitchen"], "/pos/kitchen"],
     [["bar"], "/pos/kitchen"],
     [["warehouse"], "/inventory/stock-levels"],

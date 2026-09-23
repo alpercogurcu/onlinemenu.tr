@@ -46,3 +46,16 @@ type Modifier struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
+
+// ProductOptions is one product's option tree as an order-taking client needs
+// it: the product's groups in assignment order, each with its ACTIVE options.
+type ProductOptions struct {
+	ProductID uuid.UUID
+	Groups    []GroupOptions
+}
+
+// GroupOptions is a modifier group together with its active modifiers.
+type GroupOptions struct {
+	Group     ModifierGroup
+	Modifiers []Modifier
+}

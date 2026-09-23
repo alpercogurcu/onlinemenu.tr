@@ -1,7 +1,8 @@
 "use client"
 
-import { LayoutGrid, Pencil, Plus, QrCode, Users } from "lucide-react"
+import { LayoutGrid, Pencil, Plus, QrCode, ShoppingBasket, Users } from "lucide-react"
 import { useTranslations } from "next-intl"
+import Link from "next/link"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
@@ -51,6 +52,8 @@ export default function TablesPage() {
   const canViewQR = useCan("storefront.qr.read")
   const canManage = useCan("pos.table.manage")
   const canClean = useCan("pos.table.clean")
+  //   pos.order.place     — tapping a table opens the web order screen
+  const canOrder = useCan("pos.order.place")
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches } = useBranches(tenantId)
   // Non-null for a branch-scoped operator — they always work their own
@@ -225,82 +228,111 @@ export default function TablesPage() {
                   <p className="text-sm text-muted-foreground">{t("zoneEmpty")}</p>
                 ) : (
                   <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-                    {zoneTables.map((table) => (
-                      <Card key={table.id} className="py-0">
-                        <CardHeader className="px-4 pt-4 pb-2">
-                          <CardTitle className="text-sm font-semibold">{table.name}</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-2 px-4 pb-4">
-                          <div className="flex flex-wrap gap-1.5">
-                            <Badge variant={tableStatusVariant(table.status)}>
-                              {t(`status.${table.status}`)}
-                            </Badge>
-                            {/* `occupied` is set by manual status changes too, so it
-                                is not the same claim as "there is a check to collect
-                                money on" — the open check is surfaced separately. */}
-                            {table.active_check_id && (
-                              <Badge
-                                variant="outline"
-                                className="border-status-warning-border bg-status-warning-bg text-status-warning-fg"
-                              >
-                                {t("hasOpenCheck")}
+                    {zoneTables.map((table) => {
+                      const summary = (
+                        <>
+                          <CardHeader className="px-4 pt-4 pb-2">
+                            <CardTitle className="text-sm font-semibold">{table.name}</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-2 px-4 pb-2">
+                            <div className="flex flex-wrap gap-1.5">
+                              <Badge variant={tableStatusVariant(table.status)}>
+                                {t(`status.${table.status}`)}
                               </Badge>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <Users className="size-3.5" />
-                            {t("capacity", { count: table.capacity })}
-                          </div>
-
-                          {transitionsFor(table.status).length > 0 && (
-                            <Select
-                              aria-label={t("statusChangeAria", { table: table.name })}
-                              className="h-8 text-xs"
-                              value=""
-                              disabled={setStatus.isPending}
-                              onValueChange={(next) => {
-                                if (next === "") return
-                                void handleStatusChange(table, next as ManualTableStatus)
-                              }}
-                            >
-                              <SelectItem value="">{t("statusChange")}</SelectItem>
-                              {transitionsFor(table.status).map((next) => (
-                                <SelectItem key={next} value={next}>
-                                  {t(`status.${next}`)}
-                                </SelectItem>
-                              ))}
-                            </Select>
-                          )}
-
-                          {(canViewQR || canManage) && (
-                            <div className="flex gap-2">
-                              {canViewQR && (
-                                <Button
+                              {/* `occupied` is set by manual status changes too, so it
+                                  is not the same claim as "there is a check to collect
+                                  money on" — the open check is surfaced separately. */}
+                              {table.active_check_id && (
+                                <Badge
                                   variant="outline"
-                                  size="sm"
-                                  className="flex-1"
-                                  onClick={() => setQrTable({ id: table.id, label: table.name })}
+                                  className="border-status-warning-border bg-status-warning-bg text-status-warning-fg"
                                 >
-                                  <QrCode className="size-3.5" />
-                                  {t("qrAction")}
-                                </Button>
-                              )}
-                              {canManage && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => setTableDialog({ table })}
-                                  aria-label={t("editTableAria", { table: table.name })}
-                                >
-                                  <Pencil className="size-3.5" />
-                                </Button>
+                                  {t("hasOpenCheck")}
+                                </Badge>
                               )}
                             </div>
+
+                            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <Users className="size-3.5" />
+                              {t("capacity", { count: table.capacity })}
+                            </div>
+                          </CardContent>
+                        </>
+                      )
+                      return (
+                        <Card key={table.id} className="gap-0 overflow-hidden py-0">
+                          {/* Whoever may take an order (garson/kasiyer/yönetici)
+                              taps the table itself to order; the management
+                              controls below stay outside the tap target so a
+                              status change can never be mistaken for it. */}
+                          {canOrder ? (
+                            <Link
+                              href={`/pos/order?${new URLSearchParams({ branch: branchId, table: table.id }).toString()}`}
+                              aria-label={t("orderAria", { table: table.name })}
+                              className="hover:bg-accent/60 focus-visible:ring-ring/50 block outline-none focus-visible:ring-[3px] focus-visible:ring-inset"
+                            >
+                              {summary}
+                              <span className="text-primary flex items-center gap-1 px-4 pb-3 text-sm font-semibold">
+                                <ShoppingBasket className="size-4" aria-hidden="true" />
+                                {t("orderAction")}
+                              </span>
+                            </Link>
+                          ) : (
+                            summary
                           )}
-                        </CardContent>
-                      </Card>
-                    ))}
+
+                          {(transitionsFor(table.status).length > 0 || canViewQR || canManage) && (
+                            <CardContent className="space-y-2 px-4 pt-2 pb-4">
+                              {transitionsFor(table.status).length > 0 && (
+                                <Select
+                                  aria-label={t("statusChangeAria", { table: table.name })}
+                                  className="h-8 text-xs"
+                                  value=""
+                                  disabled={setStatus.isPending}
+                                  onValueChange={(next) => {
+                                    if (next === "") return
+                                    void handleStatusChange(table, next as ManualTableStatus)
+                                  }}
+                                >
+                                  <SelectItem value="">{t("statusChange")}</SelectItem>
+                                  {transitionsFor(table.status).map((next) => (
+                                    <SelectItem key={next} value={next}>
+                                      {t(`status.${next}`)}
+                                    </SelectItem>
+                                  ))}
+                                </Select>
+                              )}
+
+                              {(canViewQR || canManage) && (
+                                <div className="flex gap-2">
+                                  {canViewQR && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="flex-1"
+                                      onClick={() => setQrTable({ id: table.id, label: table.name })}
+                                    >
+                                      <QrCode className="size-3.5" />
+                                      {t("qrAction")}
+                                    </Button>
+                                  )}
+                                  {canManage && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setTableDialog({ table })}
+                                      aria-label={t("editTableAria", { table: table.name })}
+                                    >
+                                      <Pencil className="size-3.5" />
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
+                            </CardContent>
+                          )}
+                        </Card>
+                      )
+                    })}
                   </div>
                 )}
               </section>

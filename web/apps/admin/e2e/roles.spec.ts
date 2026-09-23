@@ -13,7 +13,8 @@ const NO_REPORT = "Bu rapor için Shift Müdürü yetkisi gerekir."
 const MENU: Record<string, string[]> = {
   [USERS.shift]: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen", "/payment/payments"],
   [USERS.cashier]: ["/pos/tables", "/pos/checks", "/pos/kitchen"],
-  [USERS.waiter]: ["/pos/tables", "/pos/checks"],
+  // One floor plan: the waiter's "Masalar" opens the order screen's plan.
+  [USERS.waiter]: ["/pos/order", "/pos/checks"],
   [USERS.kitchen]: ["/pos/tables", "/pos/kitchen"],
 }
 
@@ -48,8 +49,11 @@ async function apiErrorsDuring(page: Page, run: () => Promise<void>): Promise<st
   page.on("response", listener)
   try {
     await run()
-    // Let any late query settle before judging.
-    await page.waitForLoadState("networkidle").catch(() => {})
+    // Let the screen's queries settle before judging: every data-backed page
+    // renders <Skeleton> while loading, so "no skeleton left" is the settled
+    // state. Not "networkidle" — the kitchen display keeps its live stream
+    // open, so the network never goes idle and that wait never returned.
+    await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0)
   } finally {
     page.off("response", listener)
   }
@@ -99,6 +103,8 @@ test.describe("rol bazlı görünürlük", () => {
 
   test("garson masalarda yönetim/QR kontrolü görmez", async ({ page }) => {
     await loginAs(page, USERS.waiter)
+    // No longer in the waiter's menu, but still reachable by URL.
+    await gotoSpa(page, "/pos/tables")
     await expect(page.getByText("Masa 1", { exact: true })).toBeVisible()
     await expect(page.getByRole("button", { name: /QR/i })).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Bölge ekle" })).toHaveCount(0)

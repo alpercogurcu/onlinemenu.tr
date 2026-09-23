@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
+    "@onlinemenu/pos-core": "workspace:*",
     "@radix-ui/react-alert-dialog": "^1.1.23",
     "@radix-ui/react-avatar": "^1.1.10",
     "@radix-ui/react-collapsible": "^1.1.11",

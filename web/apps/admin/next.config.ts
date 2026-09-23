@@ -5,6 +5,8 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts")
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // pos-core ships raw TypeScript (main: ./src/index.ts), no build step.
+  transpilePackages: ["@onlinemenu/pos-core"],
 
   async rewrites() {
     const apiProxyEnabled = process.env.NEXT_PUBLIC_API_PROXY_ENABLED === "true"

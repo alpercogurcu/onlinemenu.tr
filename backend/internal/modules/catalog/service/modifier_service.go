@@ -264,3 +264,58 @@ func validateModifierGroup(g domain.ModifierGroup) error {
 	}
 	return nil
 }
+
+// ListProductOptions returns every sellable product's option tree in one read
+// (see repo.ListOptionTree). A product without any group is absent, so "not
+// in the result" means "no options — add it with one tap".
+func (s *ModifierService) ListProductOptions(ctx context.Context, tenantID, branchID uuid.UUID) ([]domain.ProductOptions, error) {
+	var rows []repo.ProductOptionRow
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		rows, err = s.pmgRepo.ListOptionTree(ctx, tx, branchID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("catalog/service/modifier: list product options: %w", err)
+	}
+	return foldOptionTree(tenantID, rows), nil
+}
+
+// foldOptionTree turns the ordered (product, group, modifier) rows into the
+// nested shape. It relies on the repo's ORDER BY: a product's rows, and a
+// group's rows within it, are contiguous.
+func foldOptionTree(tenantID uuid.UUID, rows []repo.ProductOptionRow) []domain.ProductOptions {
+	var out []domain.ProductOptions
+	for _, row := range rows {
+		if len(out) == 0 || out[len(out)-1].ProductID != row.ProductID {
+			out = append(out, domain.ProductOptions{ProductID: row.ProductID})
+		}
+		product := &out[len(out)-1]
+		if len(product.Groups) == 0 || product.Groups[len(product.Groups)-1].Group.ID != row.GroupID {
+			product.Groups = append(product.Groups, domain.GroupOptions{Group: domain.ModifierGroup{
+				ID:            row.GroupID,
+				TenantID:      tenantID,
+				Name:          row.GroupName,
+				SelectionType: domain.SelectionType(row.SelectionType),
+				MinSelections: row.MinSelections,
+				MaxSelections: row.MaxSelections,
+				IsRequired:    row.IsRequired,
+				SortOrder:     row.GroupSort,
+			}})
+		}
+		if row.ModifierID == nil {
+			continue
+		}
+		group := &product.Groups[len(product.Groups)-1]
+		group.Modifiers = append(group.Modifiers, domain.Modifier{
+			ID:         *row.ModifierID,
+			TenantID:   tenantID,
+			GroupID:    row.GroupID,
+			Name:       *row.ModifierName,
+			PriceDelta: *row.PriceDelta,
+			IsActive:   true,
+			SortOrder:  *row.ModifierSort,
+		})
+	}
+	return out
+}

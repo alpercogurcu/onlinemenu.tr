@@ -329,3 +329,67 @@ func (r *ProductModifierGroupRepo) ListProductIDsByGroup(ctx context.Context, tx
 	}
 	return out, rows.Err()
 }
+
+// ProductOptionRow is one (product, group, modifier) triple of the option
+// tree. Rows arrive ordered by product, then the product's group order, then
+// option order, so a caller folds them without sorting. ModifierID is nil for
+// a group that has no active option left (one row, no modifier).
+type ProductOptionRow struct {
+	ProductID     uuid.UUID
+	GroupID       uuid.UUID
+	GroupName     string
+	SelectionType string
+	MinSelections int16
+	MaxSelections *int16
+	IsRequired    bool
+	GroupSort     int16
+	ModifierID    *uuid.UUID
+	ModifierName  *string
+	PriceDelta    *int64
+	ModifierSort  *int16
+}
+
+// ListOptionTree loads the option tree of every sellable product in ONE query,
+// replacing the per-product "which groups" + per-group "which options" round
+// trips an order screen would otherwise make.
+//
+// Only active products and active modifiers are returned. A group whose
+// options are all inactive is still returned, empty: whether that makes the
+// product unsellable-with-options (a required group nobody can answer) or is
+// simply skipped (an optional one) is the client's call, and the server does
+// not enforce required groups at order time. A non-nil branchID also drops products that branch has switched off
+// (ADR-DATA-009 is_available=false), mirroring the branch product listing.
+func (r *ProductModifierGroupRepo) ListOptionTree(ctx context.Context, tx pgx.Tx, branchID uuid.UUID) ([]ProductOptionRow, error) {
+	const q = `
+		SELECT pmg.product_id,
+		       g.id, g.name, g.selection_type, g.min_selections, g.max_selections, g.is_required, g.sort_order,
+		       mo.id, mo.name, mo.price_delta, mo.sort_order
+		FROM product_modifier_groups pmg
+		JOIN products        p  ON p.id = pmg.product_id AND p.is_active
+		JOIN modifier_groups g  ON g.id = pmg.group_id
+		LEFT JOIN modifiers  mo ON mo.group_id = g.id AND mo.is_active
+		LEFT JOIN branch_product_overrides bpo
+		       ON bpo.product_id = p.id AND bpo.branch_id = $1
+		WHERE bpo.is_available IS DISTINCT FROM FALSE
+		ORDER BY pmg.product_id, pmg.sort_order, g.sort_order, g.id, mo.sort_order NULLS FIRST, mo.name, mo.id`
+
+	rows, err := tx.Query(ctx, q, branchID)
+	if err != nil {
+		return nil, fmt.Errorf("catalog/repo/product_modifier_group: list option tree: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ProductOptionRow
+	for rows.Next() {
+		var row ProductOptionRow
+		if err := rows.Scan(
+			&row.ProductID,
+			&row.GroupID, &row.GroupName, &row.SelectionType, &row.MinSelections, &row.MaxSelections, &row.IsRequired, &row.GroupSort,
+			&row.ModifierID, &row.ModifierName, &row.PriceDelta, &row.ModifierSort,
+		); err != nil {
+			return nil, fmt.Errorf("catalog/repo/product_modifier_group: list option tree scan: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

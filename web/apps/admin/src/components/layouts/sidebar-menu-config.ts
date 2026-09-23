@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 
 import type { MenuItem } from "@/lib/menu-utils"
+import type { FloorPlanRoute } from "@/lib/route-permissions"
 import type { ModuleKey } from "@/lib/modules"
 
 // One labelled sidebar group. `module` names the backend module the group's
@@ -45,11 +46,14 @@ export function getOverviewMenuConfig(t: (key: string) => string): MenuItem[] {
   ]
 }
 
-export function getPOSMenuConfig(t: (key: string) => string): MenuItem[] {
+export function getPOSMenuConfig(
+  t: (key: string) => string,
+  floorPlanUrl: FloorPlanRoute = "/pos/tables",
+): MenuItem[] {
   return [
     {
       title: t("navigation.tables"),
-      url: "/pos/tables",
+      url: floorPlanUrl,
       icon: Table2,
     },
     {
@@ -224,13 +228,17 @@ export function getSettingsMenuConfig(
 // same registry the layout's RouteGuard enforces, so the menu can never
 // advertise a screen the guard (or the API) refuses. Sections left empty are
 // dropped.
+// `floorPlanUrl` is where "Masalar" leads for this principal
+// (route-permissions floorPlanRouteFor): the management board or the order
+// screen's plan — never both, so a waiter has one floor plan.
 export function getSidebarSections(
   t: (key: string) => string,
   canOpen: (url: string) => boolean = () => true,
+  floorPlanUrl: FloorPlanRoute = "/pos/tables",
 ): SidebarSection[] {
   const sections: SidebarSection[] = [
     { label: t("navigation.general"), items: getOverviewMenuConfig(t) },
-    { label: t("navigation.pos"), module: "pos", items: getPOSMenuConfig(t) },
+    { label: t("navigation.pos"), module: "pos", items: getPOSMenuConfig(t, floorPlanUrl) },
     { label: t("navigation.catalog"), module: "catalog", items: getCatalogMenuConfig(t) },
     { label: t("navigation.inventory"), module: "inventory", items: getInventoryMenuConfig(t) },
     { label: t("navigation.parties"), module: "party", items: getPartyMenuConfig(t) },

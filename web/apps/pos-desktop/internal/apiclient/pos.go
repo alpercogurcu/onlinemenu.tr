@@ -119,35 +119,42 @@ type Modifier struct {
 	SortOrder  int16  `json:"sort_order"`
 }
 
-// ListModifierGroups calls GET /api/v1/catalog/modifier-groups — every group
-// of the tenant. The per-product endpoint returns group IDs only, so the POS
-// resolves those IDs against this one list instead of one GET per group.
-func (c *Client) ListModifierGroups(ctx context.Context) ([]ModifierGroup, error) {
-	var out []ModifierGroup
-	if err := c.do(ctx, http.MethodGet, "/api/v1/catalog/modifier-groups", nil, &out); err != nil {
-		return nil, fmt.Errorf("apiclient: list modifier groups: %w", err)
-	}
-	return out, nil
+// ProductOptions mirrors catalog/http productOptionsResponse: one product's
+// option groups in assignment order, each with its ACTIVE options. A group
+// whose options are all inactive arrives with an empty Modifiers list.
+type ProductOptions struct {
+	ProductID string               `json:"product_id"`
+	Groups    []ProductOptionGroup `json:"groups"`
 }
 
-// ListProductModifierGroupIDs calls GET /api/v1/catalog/products/{id}/modifier-groups,
-// which returns the IDs of the groups assigned to the product (not the groups).
-func (c *Client) ListProductModifierGroupIDs(ctx context.Context, productID string) ([]string, error) {
-	var out []string
-	path := fmt.Sprintf("/api/v1/catalog/products/%s/modifier-groups", url.PathEscape(productID))
-	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return nil, fmt.Errorf("apiclient: list product modifier groups: %w", err)
-	}
-	return out, nil
+// ProductOptionGroup is a ModifierGroup plus its active options.
+type ProductOptionGroup struct {
+	ModifierGroup
+	Modifiers []Modifier `json:"modifiers"`
 }
 
-// ListModifiers calls GET /api/v1/catalog/modifier-groups/{id}/modifiers. The
-// endpoint returns inactive modifiers too; callers filter on IsActive.
-func (c *Client) ListModifiers(ctx context.Context, groupID string) ([]Modifier, error) {
-	var out []Modifier
-	path := fmt.Sprintf("/api/v1/catalog/modifier-groups/%s/modifiers", url.PathEscape(groupID))
+// ListProductOptions calls GET /api/v1/catalog/products/modifier-groups: the
+// option tree of every sellable product in ONE request. It replaced the
+// per-product group-id lookup plus per-group modifier lookup, which fanned a
+// 30-tile grid out into dozens of requests against the production per-IP
+// rate limit. branchID drops products that branch has switched off; "" asks
+// for the principal's default branch.
+func (c *Client) ListProductOptions(ctx context.Context, branchID string) ([]ProductOptions, error) {
+	path := "/api/v1/catalog/products/modifier-groups"
+	if branchID != "" {
+		path += "?branch_id=" + url.QueryEscape(branchID)
+	}
+	var out []ProductOptions
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return nil, fmt.Errorf("apiclient: list modifiers: %w", err)
+		return nil, fmt.Errorf("apiclient: list product options: %w", err)
+	}
+	// The endpoint only serves active options and omits the flag.
+	for i := range out {
+		for j := range out[i].Groups {
+			for k := range out[i].Groups[j].Modifiers {
+				out[i].Groups[j].Modifiers[k].IsActive = true
+			}
+		}
 	}
 	return out, nil
 }

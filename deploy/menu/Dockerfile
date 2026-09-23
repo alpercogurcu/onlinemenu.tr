@@ -21,7 +21,9 @@ FROM node:22-alpine AS base
 # corepack pins pnpm to the 9.x line CI installs (pnpm/action-setup version: 9).
 # Building with a different pnpm major than CI resolves the lockfile with is how
 # an image ends up with dependencies no CI job ever tested.
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+# Must be the pnpm that wrote web/pnpm-lock.yaml (web/package.json
+# "packageManager"); an older pnpm under --frozen-lockfile can refuse it.
+RUN corepack enable && corepack prepare pnpm@10.26.1 --activate
 WORKDIR /repo
 
 # --- deps -------------------------------------------------------------------

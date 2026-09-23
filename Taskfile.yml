@@ -193,6 +193,16 @@ tasks:
     cmds:
       - wails generate module
 
+  deploy:build:admin:local:
+    desc: "Admin imajını yerelde derle (deploy/admin/Dockerfile, bağlam web/) — sunucuya göndermeden önce doğrulama"
+    cmds:
+      - docker build -f deploy/admin/Dockerfile -t onlinemenu-admin:local web
+
+  deploy:build:menu:local:
+    desc: "Misafir menü imajını yerelde derle (deploy/menu/Dockerfile, bağlam web/)"
+    cmds:
+      - docker build -f deploy/menu/Dockerfile -t onlinemenu-menu:local web
+
   deploy:sync:
     desc: "Repo'yu prod sunucusuna rsync ile gönder (deploy/scripts/sync.sh, DEPLOY_HOST/DEPLOY_DIR)"
     cmds:

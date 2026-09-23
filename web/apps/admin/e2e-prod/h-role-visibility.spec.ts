@@ -27,8 +27,10 @@ const CASES: RoleCase[] = [
   {
     name: "garson (Serdivan)",
     account: ACCOUNTS.waiterSerdivan,
-    home: "/pos/tables",
-    menu: ["/pos/tables", "/pos/checks"],
+    // One floor plan: the waiter lands on, and "Masalar" opens, the order
+    // screen's plan (/pos/order).
+    home: "/pos/order",
+    menu: ["/pos/order", "/pos/checks"],
     forbidden: [
       "/",
       "/catalog/products",

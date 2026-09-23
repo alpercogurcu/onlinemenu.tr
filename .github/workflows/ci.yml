@@ -209,10 +209,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # No explicit version: action-setup reads web/package.json's
+      # "packageManager" (pnpm@10.26.1), the pnpm that writes the lockfile.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          package_json_file: web/package.json
 
       - name: Setup Node
         uses: actions/setup-node@v4

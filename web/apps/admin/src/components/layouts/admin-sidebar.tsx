@@ -12,7 +12,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { useEnabledModules } from "@/lib/modules"
-import { canAccessRoute } from "@/lib/route-permissions"
+import { canAccessRoute, currentFloorPlanRoute } from "@/lib/route-permissions"
 import { useAuthStore } from "@/store/auth-store"
 
 import { MenuGenerator } from "./menu-generator"
@@ -30,7 +30,7 @@ export default function AdminSidebar({
 
   const tFn = (key: string) => t(key as Parameters<typeof t>[0])
 
-  const sections = getSidebarSections(tFn, canAccessRoute).filter(
+  const sections = getSidebarSections(tFn, canAccessRoute, currentFloorPlanRoute()).filter(
     (section) => !section.module || enabledModules.includes(section.module),
   )
 

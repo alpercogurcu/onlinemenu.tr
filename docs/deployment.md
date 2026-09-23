@@ -134,9 +134,24 @@ Uygulanan tasarım:
    ACME doğrulaması, b2b'nin `:80` bloğu eşleşmeyen host'lar için varsayılan sunucu olduğu ve
    `/.well-known/acme-challenge/` webroot'unu servis ettiği için nginx değişikliği **öncesinde**
    yapılabildi.
-4. **Rate limit:** `api.` vhost'u b2b'nin `zone=api` (10 r/s per IP, burst 40) bölgesini paylaşır.
-   Tek restoran pilotu için yeterli; POS filosu tek NAT arkasında büyürse b2b `http{}` bloğuna
-   ayrı bir `limit_req_zone` eklenmeli (b2b config'ine dokunmak gerektiği için karar bekliyor).
+4. **Rate limit (B4 çözüldü, 2026-09-23):** Online Menu vhost'ları b2b'nin `zone=api`
+   (10 r/s) bölgesini **artık kullanmaz**. Bölgeler `diverserver.conf` başında (http bağlamı;
+   dosya `http{}` içinde include edildiği için b2b config'ine dokunmak gerekmedi) `om_*` adıyla
+   tanımlıdır; `limit_req_status 429` yalnız bizim server bloklarındadır (b2b 503 davranışı
+   aynen sürer). Anahtar `$binary_remote_addr`; bir şubenin cihazları tek NAT IP'sidir.
+
+   | Vhost / yol | Bölge | Oran | Burst | Durum |
+   |---|---|---|---|---|
+   | `api.` `/` | `om_api` | 50 r/s | 100 nodelay | 429 |
+   | `api.` `/api/v1/pos/ws/` (KDS/POS WS) | — | limitsiz | — | — |
+   | `pos.` (admin), `menu.` (QR menü) `/` | `om_web` | 100 r/s | 200 nodelay | 429 |
+   | `auth.` `/realms/*/login-actions/` (form girişi) | `om_auth_login` | 10 r/s | 20 nodelay | 429 |
+   | `auth.` diğer yollar (token ucu dahil) | `om_auth` | 50 r/s | 100 nodelay | 429 |
+   | `grafana.` | — | limitsiz (değişmedi) | — | — |
+
+   Önceki durum: `api.` tek başına b2b `zone=api` 10 r/s + burst 40, aşımda 503; admin/menu/auth
+   limitsizdi. Gerekçe: nodelay burst ilk saniyede ~150 isteği geçirir, sürekli 50 r/s kabul edilir;
+   brute-force yüzeyi (parola formu) 10 r/s'de kalır; token ucu çok cihazlı yenilemeler için om_auth'ta; ayrıca Keycloak realm brute-force koruması ayrı katmandır.
 5. **Reload kuralı:** vhost dosyası değişince `docker exec b2b_nginx nginx -t && docker exec
    b2b_nginx nginx -s reload`; yalnız mount/ağ tanımı değişince nginx yeniden yaratılır
    (`up -d nginx`, ~2 sn b2b kesintisi — bugün iki kez yapıldı).
@@ -567,7 +582,7 @@ grubu kalmadı (DB ile doğrulandı).
 İlk turda (2026-09-20 öğlen) hiçbiri düzeltilmedi, yalnız raporlandı. **B1/B2/B3
 aynı gün giderildi** (api `5fa45c7`), **B7 de aynı gün kapandı** (api `6d0d27e`);
 her ikisi de prod'da doğrulandı — maddelerin sonundaki "Durum" satırlarına bakın.
-**B4, B5 ve B6 hâlâ açık** ve karar bekliyor.
+**B4 çözüldü (2026-09-23, bkz. §4 madde 4); B5 ve B6 hâlâ açık** ve karar bekliyor.
 
 **B1 — Misafir QR menüsü prod'da boş; `docs/b2b-import-plan.md` §5 hatalı.**
 Storefront menü read model'i `menu_items`'tan beslenir:
@@ -630,6 +645,11 @@ zincir geneli yönetici 47000. Kabul paketinde kalıcı test:
 KENDİ şube fiyatını görür (B3)".
 
 **B4 — Ters proxy hız sınırı tek IP başına 10 r/s ve 429 değil 503 dönüyor.**
+**Çözüldü (2026-09-23):** Online Menu vhost'ları ayrı `om_*` bölgelerine taşındı (api 50 r/s +
+burst 100, web 100 r/s + burst 200, Keycloak login 10 r/s + burst 20, WS limitsiz), durum kodu
+429. b2b zone'una/vhost'larına dokunulmadı; doğrulama: 60 r/s × 5 sn → 282/282 200, 300 r/s
+patlaması → 429; b2b 10 r/s + burst 20 davranışı değişmedi. Aşağıdaki metin tarihçe olarak durur.
+
 Direktif repoda: `deploy/nginx/diverserver.conf:152`
 `limit_req zone=api burst=40 nodelay;`. **Hızı belirleyen zone tanımı ise
 onlinemenu yığınında değil** — pilotun genel giriş kapısı kardeş b2b
@@ -658,12 +678,14 @@ prod kataloğunda **hiç maliyet verisi yok**. Yani test "projeksiyon maliyeti
 süzüyor"u değil "ortada maliyet yok"u doğruluyor. Maliyet alanı bir gün
 kataloğa girerse bu testin yeniden koşulması gerekir.
 
-**B6 — Adisyon kapanışından sonra masa `cleaning`'e geçişi asenkron.**
-Kapanış/iptal yanıtı 200 döndükten hemen sonra masayı `empty` yapmak, durumu
-`cleaning`'e çeken olay yolunu yarıştırıp masayı kirli bırakabiliyor
-(2026-09-20 koşusunda İzmit "Masa 4" böyle kaldı). Kabul paketi teardown'da
-plan gerçekten `empty` okuyana kadar tekrar deniyor; ürün tarafında POS
-arayüzünün de aynı yarışa açık olup olmadığı incelenmeli.
+**B6 — Adisyon kapanışından sonra masa `cleaning`'e geçişi (İNCELENDİ — asenkron değil).**
+`CheckService.Close/Cancel` masayı `occupied → cleaning`'e **aynı transaction'da**
+çevirir (`releaseTableToCleaning`); olay/outbox yolu masa durumuna dokunmaz.
+Yanıt 200 döndüğünde durum tutarlıdır (`TestCheckService_Close/Cancel_ReleasesTableToCleaning`
+bunu ayrı bir okuma tx'iyle doğrular). 2026-09-20'de gözlenen kirli masa,
+adisyon hâlâ açıkken yapılan teardown `empty` yazımından (yanıtı denetlenmeyen)
+veya o yazımın başarısızlığından kaynaklanmış olmalı; backend yarışı değil.
+E2E `releaseTable` yeniden denemesi koruma olarak duruyor.
 
 **B7 — Garson (waiter) rolü katalog okuyamıyor; menü/ürün ekranları ona kapalı.**
 Serdivan garsonuyla ölçüldü (2026-09-20, api `5fa45c7`):

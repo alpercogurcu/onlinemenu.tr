@@ -245,6 +245,28 @@ describe("ProductEditor", () => {
     )
   })
 
+  // Backend 8dad7a0: a new product joins the tenant's only active menu by
+  // itself (menu_membership "auto"); otherwise ("manual") nobody sees it on
+  // the QR menu until someone places it — the toast says which happened.
+  it.each([
+    ["auto", /menüye eklendi/],
+    ["manual", /henüz hiçbir menüde değil/],
+  ] as const)("tells where a new product landed (menu_membership=%s)", async (membership, text) => {
+    post.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url === "/api/v1/catalog/products" ? { ...PRODUCT, id: "prod-new-1", menu_membership: membership } : undefined,
+      }),
+    )
+    renderEditor({ productId: undefined })
+    fireEvent.change(await screen.findByLabelText("Ad *"), { target: { value: "Yeni Ürün" } })
+    fireEvent.change(screen.getByLabelText("Fiyat (KDV dahil) *"), { target: { value: "150" } })
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    const [, options] = toastSuccess.mock.calls[0] as [string, { description?: string } | undefined]
+    expect(options?.description).toMatch(text)
+  })
+
   it("does not prompt the unsaved-changes dialog for Vazgeç right after a successful save", async () => {
     renderEditor()
 

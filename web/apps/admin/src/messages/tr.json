@@ -333,7 +333,9 @@
         "deleted": "Ürün silindi",
         "deactivated": "Ürün satıştan kaldırıldı",
         "activated": "Ürün satışa alındı",
-        "error": "İşlem tamamlanamadı"
+        "error": "İşlem tamamlanamadı",
+        "menuAuto": "Aktif menüye eklendi; misafir QR menüsünde görünür.",
+        "menuManual": "Ürün henüz hiçbir menüde değil. Misafirlerin görmesi için “Menüler” kartından bir menüye ekleyin."
       }
     },
     "product": {

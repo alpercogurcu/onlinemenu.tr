@@ -31,6 +31,8 @@ export interface Product {
   source_stock_item_id?: string | null
   created_at: string
   updated_at: string
+  // Only on the create response (backend ProductService.addToSoleActiveMenu).
+  menu_membership?: "auto" | "manual"
 }
 // One row of GET /catalog/branches/{branchID}/product-overrides (ADR-DATA-009).
 // A product without a row sells at the tenant price on every branch.

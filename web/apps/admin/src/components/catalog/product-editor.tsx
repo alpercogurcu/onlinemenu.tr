@@ -258,7 +258,17 @@ export function ProductEditor({ productId }: ProductEditorProps) {
     try {
       if (isNew) {
         const created = await createProduct.mutateAsync({ ...body, currency: "TRY" })
-        toast.success(tProducts("toast.created"))
+        // menu_membership (create only): "auto" = placed on the tenant's only
+        // active menu, "manual" = on no menu yet, so invisible to QR guests.
+        const membership = created.data.menu_membership
+        toast.success(tProducts("toast.created"), {
+          description:
+            membership === "auto"
+              ? tProducts("toast.menuAuto")
+              : membership === "manual"
+                ? tProducts("toast.menuManual")
+                : undefined,
+        })
         router.replace(`/catalog/products/${created.data.id}`)
       } else {
         await updateProduct.mutateAsync({ id: productId as string, ...body })

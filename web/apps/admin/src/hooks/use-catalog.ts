@@ -30,6 +30,9 @@ export function useCreateProduct() {
     mutationFn: (body: Partial<Product>) => api.post<Product>("/api/v1/catalog/products", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["products"] })
+      // The backend may have placed the product on the only active menu
+      // (menu_membership "auto"); cached menu item lists are now stale.
+      void qc.invalidateQueries({ queryKey: ["menus"] })
     },
   })
 }

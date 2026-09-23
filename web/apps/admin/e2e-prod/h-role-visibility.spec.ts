@@ -120,7 +120,10 @@ test.describe("(h) rol bazlı görünürlük", () => {
           await expect(page.getByTestId("access-denied")).toBeVisible()
         }
 
-        await page.waitForLoadState("networkidle").catch(() => {})
+        // Settled = no <Skeleton> left. Not "networkidle": the kitchen board
+        // and table plans poll/stream, so the network never idles and that
+        // wait only ended at the 45 s navigation timeout.
+        await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0)
         expect(errors, `${c.name}: API 4xx`).toEqual([])
       } finally {
         await page.context().close()

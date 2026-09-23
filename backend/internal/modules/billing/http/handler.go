@@ -232,6 +232,8 @@ func (h *Handler) retry(w http.ResponseWriter, r *http.Request) {
 }
 
 // itemRequest is the JSON representation of an invoice line item in the request body.
+// unit_price_amount is in kuruş and VAT-inclusive (same as POS/catalog prices);
+// net and tax are derived server-side from tax_rate_bps.
 type itemRequest struct {
 	ProductID       *uuid.UUID `json:"product_id"`
 	ProductName     string     `json:"product_name"`

@@ -240,7 +240,7 @@ func (s *Service) CreateBranch(ctx context.Context, b pub.Branch) (pub.Branch, e
 		return err
 	})
 	if err != nil {
-		return pub.Branch{}, fmt.Errorf("service: create branch: %w", err)
+		return pub.Branch{}, wrapNotFound(err, "service: create branch: %w")
 	}
 
 	if err := events.PublishBranchCreated(ctx, s.publisher, created); err != nil {
@@ -528,7 +528,7 @@ func (s *Service) DeleteIntegrator(ctx context.Context, tenantID, integratorID u
 // wrapNotFound returns sentinel errors (ErrNotFound, ErrInvalid) unwrapped so callers
 // can use errors.Is. All other errors are wrapped with the supplied format string.
 func wrapNotFound(err error, format string) error {
-	if errors.Is(err, pub.ErrNotFound) || errors.Is(err, pub.ErrInvalid) {
+	if errors.Is(err, pub.ErrNotFound) || errors.Is(err, pub.ErrInvalid) || errors.Is(err, pub.ErrSlugTaken) {
 		return err
 	}
 	return fmt.Errorf(format, err)

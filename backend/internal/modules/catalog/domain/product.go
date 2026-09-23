@@ -32,7 +32,18 @@ type Product struct {
 	SourceStockItemID *uuid.UUID
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// MenuMembership is set only on the result of ProductService.Create; it is
+	// not persisted.
+	MenuMembership string
 }
+
+// Values of Product.MenuMembership.
+const (
+	// MenuMembershipAuto: the product was added to the tenant's only active menu.
+	MenuMembershipAuto = "auto"
+	// MenuMembershipManual: no unambiguous menu; the operator must add it.
+	MenuMembershipManual = "manual"
+)
 
 // ChannelAvailability controls product visibility per order channel.
 type ChannelAvailability struct {

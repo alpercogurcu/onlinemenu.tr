@@ -277,11 +277,22 @@ type invoiceTotals struct {
 	amountTotal        int64
 }
 
+// splitTaxInclusive separates a VAT-inclusive gross amount into net and tax.
+// Tax is rounded half-up (same formula as the POS report) and net is the
+// remainder, so net+tax always equals gross to the kuruş.
+func splitTaxInclusive(gross int64, bps int32) (net, tax int64) {
+	divisor := 10000 + int64(bps)
+	tax = (gross*int64(bps) + divisor/2) / divisor
+	return gross - tax, tax
+}
+
+// buildItems treats UnitPriceAmount as VAT-inclusive (same convention as POS
+// and catalog prices).
 func buildItems(reqs []InvoiceItemRequest) []domain.InvoiceItem {
 	items := make([]domain.InvoiceItem, len(reqs))
 	for i, r := range reqs {
-		lineTotal := int64(r.Quantity) * r.UnitPriceAmount
-		taxAmount := lineTotal * int64(r.TaxRateBPS) / 10000
+		gross := int64(r.Quantity) * r.UnitPriceAmount
+		lineTotal, taxAmount := splitTaxInclusive(gross, r.TaxRateBPS)
 		items[i] = domain.InvoiceItem{
 			ProductID:       r.ProductID,
 			ProductName:     r.ProductName,

@@ -363,6 +363,13 @@ type tenantNotFoundError struct{}
 
 func (tenantNotFoundError) Error() string { return "tenant: not found" }
 
+// ErrSlugTaken is returned when a branch slug is already used within the tenant.
+var ErrSlugTaken = tenantSlugTakenError{}
+
+type tenantSlugTakenError struct{}
+
+func (tenantSlugTakenError) Error() string { return "tenant: branch slug taken" }
+
 // ErrInvalid is returned when input fails domain validation.
 var ErrInvalid = tenantInvalidError{}
 

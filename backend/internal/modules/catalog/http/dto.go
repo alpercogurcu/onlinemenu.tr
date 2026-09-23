@@ -57,6 +57,10 @@ type productResponse struct {
 	SourceStockItemID *uuid.UUID `json:"source_stock_item_id,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// MenuMembership is only present on create: "auto" when the product was
+	// added to the tenant's only active menu, "manual" when the operator must
+	// place it on a menu.
+	MenuMembership string `json:"menu_membership,omitempty"`
 	// BranchPriceOverridden says PriceAmount is this branch's own price, not
 	// the tenant's (ADR-DATA-009). Always false unless the request named a
 	// branch_id; the field is always present so a client never has to tell
@@ -82,6 +86,7 @@ func toProductResponse(p domain.Product) productResponse {
 		SourceStockItemID: p.SourceStockItemID,
 		CreatedAt:         p.CreatedAt,
 		UpdatedAt:         p.UpdatedAt,
+		MenuMembership:    p.MenuMembership,
 	}
 }
 

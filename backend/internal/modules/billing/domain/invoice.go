@@ -80,9 +80,9 @@ type InvoiceItem struct {
 	ProductID       *uuid.UUID // nil for manual/ad-hoc lines
 	ProductName     string
 	Quantity        int32
-	UnitPriceAmount int64 // KDV Hariç
+	UnitPriceAmount int64 // KDV Dahil birim fiyat (POS/katalog ile aynı)
 	TaxRateBPS      int32
-	LineTotal       int64 // KDV Hariç satır toplamı = Quantity * UnitPriceAmount
-	TaxAmount       int64 // satır KDV = LineTotal * TaxRateBPS / 10000
+	LineTotal       int64 // KDV Hariç satır toplamı; LineTotal + TaxAmount = Quantity * UnitPriceAmount
+	TaxAmount       int64 // satır KDV = brüt - net
 	CreatedAt       time.Time
 }

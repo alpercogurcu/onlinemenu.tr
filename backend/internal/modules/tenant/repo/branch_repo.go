@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	pub "onlinemenu.tr/internal/modules/tenant/public"
 )
@@ -99,7 +100,7 @@ func (r *BranchRepo) CreateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 
 	created, err := scanBranch(row)
 	if err != nil {
-		return pub.Branch{}, fmt.Errorf("tenant/repo: create branch: %w", err)
+		return pub.Branch{}, fmt.Errorf("tenant/repo: create branch: %w", mapSlugConflict(err))
 	}
 	return created, nil
 }
@@ -134,7 +135,7 @@ func (r *BranchRepo) UpdateBranch(ctx context.Context, tx pgx.Tx, b pub.Branch) 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return pub.Branch{}, pub.ErrNotFound
 		}
-		return pub.Branch{}, fmt.Errorf("tenant/repo: update branch: %w", err)
+		return pub.Branch{}, fmt.Errorf("tenant/repo: update branch: %w", mapSlugConflict(err))
 	}
 	return updated, nil
 }
@@ -181,4 +182,14 @@ func scanBranch(row rowScanner) (pub.Branch, error) {
 	}
 
 	return b, nil
+}
+
+const branchSlugIndex = "branches_tenant_slug_idx"
+
+func mapSlugConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == branchSlugIndex {
+		return pub.ErrSlugTaken
+	}
+	return err
 }

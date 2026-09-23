@@ -415,10 +415,10 @@ export async function cleanupCheck(counter: Api, kitchen: Api, checkId: string):
 /**
  * Hands a table back as empty and confirms it on the floor plan.
  *
- * Closing or cancelling a check moves the table to `cleaning` through the POS
- * event path, which can land a moment AFTER the teardown write — a single
- * status POST then loses the race and leaves the plan dirty (observed on the
- * 2026-09-20 run). Retry until the plan actually reads empty.
+ * Closing or cancelling a check moves the table to `cleaning` synchronously,
+ * in the same transaction as the close (CheckService.releaseTableToCleaning) —
+ * there is no event path. The retry stays as a guard against a teardown write
+ * that ran while the check was still open; it does not paper over a backend race.
  */
 export async function releaseTable(manager: Api, branchId: string, tableId: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt++) {

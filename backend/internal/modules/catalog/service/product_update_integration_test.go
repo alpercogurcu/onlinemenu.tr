@@ -17,9 +17,11 @@ import (
 
 func newProductService() *service.ProductService {
 	return service.NewProductService(service.ProductParams{
-		DB:          sharedPool,
-		ProductRepo: repo.NewProductRepo(),
-		Logger:      zap.NewNop(),
+		DB:           sharedPool,
+		ProductRepo:  repo.NewProductRepo(),
+		MenuRepo:     repo.NewMenuRepo(),
+		MenuItemRepo: repo.NewMenuItemRepo(),
+		Logger:       zap.NewNop(),
 	})
 }
 

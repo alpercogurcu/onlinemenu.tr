@@ -109,7 +109,7 @@ func TestBranchRepo_DuplicateSlugPerTenantRejected(t *testing.T) {
 		_, err := r.CreateBranch(ctx, tx, dup)
 		return err
 	})
-	require.Error(t, err, "duplicate (tenant_id, slug) must be rejected by branches_tenant_slug_idx")
+	require.ErrorIs(t, err, pub.ErrSlugTaken, "duplicate (tenant_id, slug) must map to ErrSlugTaken")
 }
 
 // TestBranchRepo_SameSlugAcrossDifferentTenants_Allowed proves the slug

@@ -19,6 +19,8 @@ import (
 type ProductService struct {
 	db          *db.Pool
 	productRepo *repo.ProductRepo
+	menuRepo    *repo.MenuRepo
+	menuItems   *repo.MenuItemRepo
 	logger      *zap.Logger
 }
 
@@ -26,9 +28,11 @@ type ProductService struct {
 type ProductParams struct {
 	fx.In
 
-	DB          *db.Pool
-	ProductRepo *repo.ProductRepo
-	Logger      *zap.Logger
+	DB           *db.Pool
+	ProductRepo  *repo.ProductRepo
+	MenuRepo     *repo.MenuRepo
+	MenuItemRepo *repo.MenuItemRepo
+	Logger       *zap.Logger
 }
 
 // NewProductService constructs a ProductService for fx injection.
@@ -36,6 +40,8 @@ func NewProductService(p ProductParams) *ProductService {
 	return &ProductService{
 		db:          p.DB,
 		productRepo: p.ProductRepo,
+		menuRepo:    p.MenuRepo,
+		menuItems:   p.MenuItemRepo,
 		logger:      p.Logger,
 	}
 }
@@ -95,12 +101,46 @@ func (s *ProductService) Create(ctx context.Context, tenantID uuid.UUID, p domai
 	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		created, err = s.productRepo.Create(ctx, tx, p)
+		if err != nil {
+			return err
+		}
+		created.MenuMembership, err = s.addToSoleActiveMenu(ctx, tx, created)
 		return err
 	})
 	if err != nil {
 		return domain.Product{}, fmt.Errorf("catalog/service/product: create: %w", err)
 	}
 	return created, nil
+}
+
+// addToSoleActiveMenu makes a new product visible to guests when the tenant
+// has exactly one active menu. With zero or several active menus the choice is
+// the operator's, so nothing is added.
+func (s *ProductService) addToSoleActiveMenu(ctx context.Context, tx pgx.Tx, p domain.Product) (string, error) {
+	menus, err := s.menuRepo.List(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	var active []domain.Menu
+	for _, m := range menus {
+		if m.IsActive {
+			active = append(active, m)
+		}
+	}
+	if len(active) != 1 {
+		return domain.MenuMembershipManual, nil
+	}
+	err = s.menuItems.AddItem(ctx, tx, domain.MenuItem{
+		MenuID:    active[0].ID,
+		ProductID: p.ID,
+		TenantID:  p.TenantID,
+		IsActive:  true,
+		SortOrder: p.SortOrder,
+	})
+	if err != nil {
+		return "", err
+	}
+	return domain.MenuMembershipAuto, nil
 }
 
 // Update modifies an existing product.

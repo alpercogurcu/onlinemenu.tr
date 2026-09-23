@@ -42,9 +42,9 @@ async function tables(manager: ReturnType<typeof api>): Promise<PosTable[]> {
   return plan.flatMap((zone) => zone.tables)
 }
 
-// Closing/cancelling a check moves the table to `cleaning` through the POS
-// event path, which can land after our status write — retry until the plan
-// actually reads empty (same reasoning as e2e-prod releaseTable).
+// Closing/cancelling a check moves the table to `cleaning` synchronously in the
+// same transaction; the retry only guards a write made while the check was
+// still open (same reasoning as e2e-prod releaseTable).
 async function releaseTable(manager: ReturnType<typeof api>, tableId: string) {
   for (let attempt = 0; attempt < 6; attempt++) {
     await manager.post(`/api/v1/pos/tables/${tableId}/status`, { status: "empty" })

@@ -666,6 +666,8 @@ func (h *Handler) handleServiceErr(w http.ResponseWriter, r *http.Request, err e
 			notFoundMsg = "not found"
 		}
 		h.writeError(w, r, http.StatusNotFound, notFoundMsg)
+	case errors.Is(err, pub.ErrSlugTaken):
+		h.writeError(w, r, http.StatusConflict, "branch_slug_taken")
 	case errors.Is(err, pub.ErrInvalid):
 		h.writeError(w, r, http.StatusUnprocessableEntity, "invalid input")
 	default:

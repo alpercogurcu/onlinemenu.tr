@@ -128,7 +128,7 @@ Türkiye pazarı için modüler, çok-kiracılı (multi-tenant) bir POS & işlet
 
 | Katman | Teknoloji |
 |---|---|
-| Backend | Go 1.26+, chi v5, sqlc 1.30, golang-migrate, asynq 0.26+ |
+| Backend | Go 1.25+, chi v5, sqlc 1.30, golang-migrate, asynq 0.26+ |
 | Veritabanı | PostgreSQL 18 (RLS), Redis 8 |
 | Messaging | NATS JetStream 2.12+ (monolith), Kafka (Faz 2+ CDC) |
 | Workflow | Temporal.io 1.30+ (Faz 3) |

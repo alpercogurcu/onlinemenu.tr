@@ -90,6 +90,16 @@ tasks:
     cmds:
       - pnpm run e2e
 
+  web:e2e-prod:webkit:
+    desc: "Safari (webkit) misafir spec'lerini CANLI prod'a karşı Docker'da koşar — macOS 14'te Playwright 1.63 webkit'i çalışmaz (mac14_special build protokol uyumsuz, newPage sonsuza dek takılır); imaj sürümü @playwright/test ile birebir aynı olmalı"
+    dir: web/apps/admin
+    cmds:
+      - docker run --rm --ipc=host
+        -v {{.ROOT_DIR}}:/work -w /work/web/apps/admin
+        mcr.microsoft.com/playwright:v1.63.0-noble
+        bash -c 'set -a; . /work/deploy/.env.diverserver.local; set +a;
+        E2E_PROD=1 npx playwright test -c e2e-prod/playwright.config.ts m-guest-iphone n-guest-ipad'
+
   menu:dev:
     desc: "Misafir QR menü uygulaması dev server (Next.js, :3001)"
     dir: web/apps/menu

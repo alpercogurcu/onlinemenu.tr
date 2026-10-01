@@ -1,10 +1,15 @@
 package receipt
 
 import (
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
 
 	"onlinemenu.tr/pos-desktop/internal/hardware/escpos"
 )
@@ -35,6 +40,31 @@ const (
 // the kitchen ticket.
 func ShortOrderID(id string) string {
 	return escpos.Truncate(id, shortIDLen)
+}
+
+// itemCollator orders product names by the Turkish alphabet (C < Ç, I < İ),
+// case-insensitively — a plain string sort would banish Çorba and İskender to
+// the end of the ticket. A collate.Collator is not safe for concurrent use and
+// building one is not free, so a mutex-guarded singleton serves every print.
+var itemCollator = struct {
+	sync.Mutex
+	*collate.Collator
+}{Collator: collate.New(language.Turkish, collate.IgnoreCase)}
+
+// sortedItems returns items A->Z by product name. It sorts a copy: the caller's
+// slice order may still be meaningful elsewhere (it is the order the guest or
+// waiter entered the lines in), and a reprint must not depend on a prior print
+// having rearranged it. The sort is stable so duplicate names keep their
+// relative order.
+func sortedItems(items []KitchenItem) []KitchenItem {
+	out := make([]KitchenItem, len(items))
+	copy(out, items)
+	itemCollator.Lock()
+	defer itemCollator.Unlock()
+	sort.SliceStable(out, func(i, j int) bool {
+		return itemCollator.CompareString(out[i].ProductName, out[j].ProductName) < 0
+	})
+	return out
 }
 
 // BuildKitchenTicket assembles the ESC/POS byte stream for the paper that
@@ -75,7 +105,7 @@ func BuildKitchenTicket(cfg Config, tableLabel string, orderShortID string, plac
 	b.Line(escpos.Columns(cols, placedAt.Local().Format("15:04"), orderRef(orderShortID)))
 	b.Divider()
 
-	for _, it := range items {
+	for _, it := range sortedItems(items) {
 		b.SetMode(true, false)
 		for _, line := range wrap(itemPrefix(it.Quantity), sanitize(it.ProductName), cols) {
 			b.Line(line)
@@ -242,7 +272,7 @@ func BuildKitchenNotice(cfg Config, kind NoticeKind, from, to string, at time.Ti
 	b.Divider()
 
 	if len(items) > 0 {
-		for _, it := range items {
+		for _, it := range sortedItems(items) {
 			b.SetMode(true, false)
 			for _, line := range wrap(itemPrefix(it.Quantity), sanitize(it.ProductName), cols) {
 				b.Line(line)

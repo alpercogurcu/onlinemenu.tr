@@ -138,7 +138,9 @@ func TestBuildKitchenTicket_Content(t *testing.T) {
 				{ProductName: "Lahmacun", Quantity: 3, Note: "acısız"},
 				{ProductName: "Ayran", Quantity: 1},
 			},
-			wantLines: []string{"3x  Lahmacun", "    > acısız", "1x  Ayran"},
+			// Kalemler artık ürün adına göre A->Z basılır; not kendi
+			// kaleminin altında kalır.
+			wantLines: []string{"1x  Ayran", "3x  Lahmacun", "    > acısız"},
 		},
 		{
 			name:      "multi-digit quantity keeps the same layout",
@@ -564,5 +566,81 @@ func TestBuildKitchenNotice_EmptyLabelsFallBackToAdisyon(t *testing.T) {
 	texts := strings.Join(lineTexts(lines), "\n")
 	if !strings.Contains(texts, "Adisyon") || !strings.Contains(texts, "-> Adisyon") {
 		t.Fatalf("blank labels must still read as a notice:\n%s", texts)
+	}
+}
+
+// Türk alfabesinde C < Ç ve I < İ gelir; naif byte sıralaması Ç ile İ'yi
+// listenin sonuna atardı. Adlar bu iki tuzağı da içerir ki test, gerçek
+// Türkçe harmanlama yerine kaçak bir bytes/ASCII sıralamasını yakalasın.
+func TestBuildKitchenTicket_SortsItemsTurkishAlphabetical(t *testing.T) {
+	placedAt := mustTime(t, "2026-09-19T14:32:00Z")
+	items := []KitchenItem{
+		{ProductName: "İskender", Quantity: 1},
+		{ProductName: "Çorba", Quantity: 2, Note: "acısız"},
+		{ProductName: "ayran", Quantity: 3},
+		{ProductName: "Izgara Köfte", Quantity: 1},
+		{ProductName: "Cacık", Quantity: 1},
+	}
+
+	got := BuildKitchenTicket(Config{Width: escpos.Width48}, "Masa 7", "a1b2c3d4", placedAt, items)
+
+	want := escpos.NewBuilder(escpos.Width48).Init().
+		Align(escpos.AlignCenter).SetMode(true, true).Line("MUTFAK").
+		Align(escpos.AlignLeft).
+		Line("Masa 7").
+		SetMode(false, false).
+		Line(escpos.Columns(48, placedAt.Local().Format("15:04"), "#a1b2c3d4")).
+		Divider().
+		SetMode(true, false).Line("3x  ayran").SetMode(false, false).
+		SetMode(true, false).Line("1x  Cacık").SetMode(false, false).
+		SetMode(true, false).Line("2x  Çorba").SetMode(false, false).
+		Line("    > acısız").
+		SetMode(true, false).Line("1x  Izgara Köfte").SetMode(false, false).
+		SetMode(true, false).Line("1x  İskender").SetMode(false, false).
+		Divider().
+		Feed(1).
+		Cut(escpos.CutFull, 3).
+		Bytes()
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ticket not sorted Turkish A->Z:\ngot:\n% x\nwant:\n% x", got, want)
+	}
+}
+
+// Sıralama çağıranın dilimini DEĞİŞTİRMEMELİ: dispatcher aynı siparişi
+// yeniden basabilir ve API'den gelen sıra başka yerde anlamlı olabilir.
+func TestBuildKitchenTicket_DoesNotMutateInput(t *testing.T) {
+	items := []KitchenItem{
+		{ProductName: "Çorba", Quantity: 1},
+		{ProductName: "Ayran", Quantity: 1},
+	}
+	BuildKitchenTicket(Config{Width: escpos.Width48}, "Masa 1", "a1b2c3d4", time.Now(), items)
+	if items[0].ProductName != "Çorba" || items[1].ProductName != "Ayran" {
+		t.Fatalf("input slice mutated: %+v", items)
+	}
+}
+
+func TestBuildKitchenNotice_SortsItemsTurkishAlphabetical(t *testing.T) {
+	at := mustTime(t, "2026-09-19T14:32:00Z")
+	items := []KitchenItem{
+		{ProductName: "Çay", Quantity: 1},
+		{ProductName: "Cacık", Quantity: 2},
+	}
+
+	got := BuildKitchenNotice(Config{Width: escpos.Width48}, NoticeMoveItems, "Masa 3", "Masa 7", at, items)
+	lines, _ := decodeJob(t, got)
+	texts := lineTexts(lines)
+
+	cacikAt, cayAt := -1, -1
+	for i, text := range texts {
+		if strings.HasPrefix(text, "2x  ") {
+			cacikAt = i
+		}
+		if strings.HasPrefix(text, "1x  ") {
+			cayAt = i
+		}
+	}
+	if cacikAt == -1 || cayAt == -1 || cacikAt > cayAt {
+		t.Fatalf("notice items not sorted (Cacık at %d, Çay at %d):\n%s", cacikAt, cayAt, strings.Join(texts, "\n"))
 	}
 }

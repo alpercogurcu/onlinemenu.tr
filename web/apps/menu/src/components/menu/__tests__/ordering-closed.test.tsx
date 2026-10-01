@@ -85,6 +85,8 @@ describe("sipariş kapalıyken ProductSheet", () => {
     expect(screen.getByText(PRODUCT.name)).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /Sepete ekle/ })).not.toBeInTheDocument()
     expect(screen.getByText(messages.product.orderingClosed)).toBeInTheDocument()
+    // Eklenemeyecek ürüne not yazmak çıkmaz sokak: giriş alanı da gizlenir.
+    expect(screen.queryByLabelText(messages.product.note)).not.toBeInTheDocument()
   })
 
   it("açıkken 'Sepete ekle' durur, kapalı notu basılmaz", () => {

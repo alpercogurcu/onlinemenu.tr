@@ -130,21 +130,26 @@ function ProductSheetBody({
           />
         ))}
 
-        <div className="mt-6">
-          <label htmlFor="line-note" className="text-sm font-medium">
-            {t("note")}
-          </label>
-          <input
-            id="line-note"
-            type="text"
-            inputMode="text"
-            maxLength={MAX_NOTE_LENGTH}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder={t("notePlaceholder")}
-            className="border-input bg-background focus-visible:ring-ring/50 mt-2 h-11 w-full rounded-lg border px-3 text-base outline-none focus-visible:ring-[3px]"
-          />
-        </div>
+        {/* Sipariş kapalıyken not girişi çıkmaz sokaktır: yazılan not hiçbir
+            yere eklenemez. Seçenek listesi bilgi değeri taşıdığı için kalır,
+            giriş alanı kalkar. */}
+        {orderingEnabled ? (
+          <div className="mt-6">
+            <label htmlFor="line-note" className="text-sm font-medium">
+              {t("note")}
+            </label>
+            <input
+              id="line-note"
+              type="text"
+              inputMode="text"
+              maxLength={MAX_NOTE_LENGTH}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder={t("notePlaceholder")}
+              className="border-input bg-background focus-visible:ring-ring/50 mt-2 h-11 w-full rounded-lg border px-3 text-base outline-none focus-visible:ring-[3px]"
+            />
+          </div>
+        ) : null}
 
         {showValidation && missingGroups.length > 0 ? (
           <p className="text-destructive mt-4 text-sm" role="alert">

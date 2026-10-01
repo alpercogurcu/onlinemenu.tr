@@ -47,6 +47,12 @@ var ErrPriceMismatch = errors.New("pos/service/order: line price does not match 
 // "your total is stale".
 var ErrInvalidOrderLine = errors.New("pos/service/order: invalid order line")
 
+// ErrInvalidSeatNo is returned when a staff order line's seat_no falls
+// outside 0..domain.MaxSeatNo. Validated here, before any database work, so
+// the client gets a 422 naming the field instead of the opaque 500 the
+// order_items_seat_no_chk constraint (pos/000011) would otherwise produce.
+var ErrInvalidSeatNo = errors.New("pos/service/order: seat_no out of range")
+
 // OrderService manages order lifecycle within a check or as standalone (delivery/takeaway).
 type OrderService struct {
 	db        *db.Pool
@@ -109,6 +115,11 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 	if !o.OrderChannel.Valid() {
 		return domain.Order{}, fmt.Errorf("pos/service/order: invalid channel %q", o.OrderChannel)
 	}
+	for i, it := range o.Items {
+		if !domain.ValidSeatNo(it.SeatNo) {
+			return domain.Order{}, fmt.Errorf("pos/service/order: item %d seat_no %d: %w", i, it.SeatNo, ErrInvalidSeatNo)
+		}
+	}
 	if err := s.repriceItems(ctx, tenantID, o.BranchID, o.Items); err != nil {
 		return domain.Order{}, err
 	}
@@ -117,12 +128,15 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 
 	var created domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		if err := s.lockWritableCheck(ctx, tx, o.CheckID, o.BranchID); err != nil {
+		check, err := s.lockWritableCheck(ctx, tx, o.CheckID, o.BranchID)
+		if err != nil {
 			return err
 		}
-		var err error
 		created, err = s.orderRepo.Create(ctx, tx, o)
 		if err != nil {
+			return err
+		}
+		if err := s.derivePax(ctx, tx, check, created.Items); err != nil {
 			return err
 		}
 		return repo.InsertOutbox(ctx, tx, tenantID, "order", created.ID.String(), "order.placed", map[string]any{
@@ -206,20 +220,45 @@ func (s *OrderService) repriceItems(ctx context.Context, tenantID, branchID uuid
 	return nil
 }
 
-// lockWritableCheck locks the order's check and rejects the placement when it
-// can no longer receive one. A nil checkID is a no-op (see Place).
-func (s *OrderService) lockWritableCheck(ctx context.Context, tx pgx.Tx, checkID *uuid.UUID, branchID uuid.UUID) error {
+// lockWritableCheck locks the order's check, rejects the placement when it
+// can no longer receive one, and returns the locked row so the caller can
+// read it (Place derives pax from it) without a second query. A nil checkID
+// is a no-op returning a nil check (see Place).
+func (s *OrderService) lockWritableCheck(ctx context.Context, tx pgx.Tx, checkID *uuid.UUID, branchID uuid.UUID) (*domain.Check, error) {
 	if checkID == nil || *checkID == uuid.Nil {
-		return nil
+		return nil, nil
 	}
 	if s.checkRepo == nil {
-		return errors.New("check repo not wired")
+		return nil, errors.New("check repo not wired")
 	}
 	current, err := s.checkRepo.GetForUpdate(ctx, tx, *checkID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return assertCheckWritable(current, branchID)
+	if err := assertCheckWritable(current, branchID); err != nil {
+		return nil, err
+	}
+	return &current, nil
+}
+
+// derivePax raises the check's pax to the order's highest seat number: a
+// waiter writing a line onto seat 4 has said at least 4 people sit at the
+// table, so there is no separate "how many guests?" prompt. Only a dine-in
+// check is touched — pax on a takeaway/delivery check is meaningless, and a
+// counter sale (nil check) has nothing to raise. Never lowers: an order
+// addressing only seat 1 after one that reached seat 4 leaves pax at 4
+// (CheckRepo.RaisePax's GREATEST), and the comparison here just skips the
+// UPDATE when it would be a no-op. Runs under the row lock
+// lockWritableCheck already took, so concurrent placements serialize.
+func (s *OrderService) derivePax(ctx context.Context, tx pgx.Tx, check *domain.Check, items []domain.OrderItem) error {
+	if check == nil || check.ServiceType != domain.ServiceTypeDineIn {
+		return nil
+	}
+	maxSeat := domain.MaxItemSeatNo(items)
+	if maxSeat == 0 || maxSeat <= check.Pax {
+		return nil
+	}
+	return s.checkRepo.RaisePax(ctx, tx, check.ID, maxSeat)
 }
 
 // PlaceGuest places an anonymous QR order (ADR-ARCH-006 §8).
@@ -695,7 +734,7 @@ func (s *OrderService) lockOrderForTransition(ctx context.Context, tx pgx.Tx, pr
 	if err := requireBranch(ctx, principal, peek.BranchID); err != nil {
 		return domain.Order{}, err
 	}
-	if err := s.lockWritableCheck(ctx, tx, peek.CheckID, peek.BranchID); err != nil {
+	if _, err := s.lockWritableCheck(ctx, tx, peek.CheckID, peek.BranchID); err != nil {
 		return domain.Order{}, err
 	}
 	return s.orderRepo.GetForUpdate(ctx, tx, orderID)

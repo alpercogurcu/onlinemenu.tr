@@ -524,6 +524,7 @@ func (h *Handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 			UnitPriceAmount:    it.UnitPriceAmount,
 			Note:               it.Note,
 			ModifierIDs:        it.ModifierIDs,
+			SeatNo:             it.SeatNo,
 		}
 		if items[i].ProductCurrency == "" {
 			items[i].ProductCurrency = "TRY"
@@ -1024,6 +1025,10 @@ func toCheckResponse(c domain.Check) checkResponse {
 // (docs/pos-ux-spec.md §3a). It is always present, as [] when there are none,
 // so a client never has to distinguish "no options" from "field missing".
 // Note carries the same selection as readable text for the kitchen receipt.
+//
+// SeatNo is always present too: 0 means "no seat assigned" (every guest/QR
+// line, and every staff line placed before the client sent seats), so the
+// kasada kişi bazlı split UI can group lines unconditionally.
 type orderItemResponse struct {
 	ID              uuid.UUID   `json:"id"`
 	ProductID       uuid.UUID   `json:"product_id"`
@@ -1032,6 +1037,7 @@ type orderItemResponse struct {
 	UnitPriceAmount int64       `json:"unit_price_amount"`
 	Note            string      `json:"note"`
 	ModifierIDs     []uuid.UUID `json:"modifier_ids"`
+	SeatNo          int         `json:"seat_no"`
 }
 
 type orderResponse struct {
@@ -1063,6 +1069,7 @@ func toOrderResponse(o domain.Order) orderResponse {
 			UnitPriceAmount: it.UnitPriceAmount,
 			Note:            it.Note,
 			ModifierIDs:     modifierIDs,
+			SeatNo:          it.SeatNo,
 		}
 	}
 	return orderResponse{
@@ -1179,6 +1186,11 @@ func toZonePlanResponse(entries []service.TablePlanEntry) []zonePlanResponse {
 // it, because the chosen options belong in `note` as readable text, which the
 // kitchen receipt already prints. Omitting it means "no options", which is
 // what every client sent before this field existed.
+//
+// seat_no is which guest at the table the line is for (kuver, 1-based);
+// omitting it means 0, "no seat assigned" — what every client sent before
+// this field existed. Out-of-range values (negative or > domain.MaxSeatNo)
+// are rejected with 422 invalid_seat_no by OrderService.Place.
 type orderItemInput struct {
 	ProductID          uuid.UUID   `json:"product_id"`
 	ProductName        string      `json:"product_name"`
@@ -1189,6 +1201,7 @@ type orderItemInput struct {
 	UnitPriceAmount    int64       `json:"unit_price_amount"`
 	Note               string      `json:"note"`
 	ModifierIDs        []uuid.UUID `json:"modifier_ids"`
+	SeatNo             int         `json:"seat_no"`
 }
 
 func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
@@ -1228,6 +1241,11 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 	if errors.Is(err, service.ErrInvalidOrderLine) {
 		respondError(w, http.StatusUnprocessableEntity, codeInvalidOrderLine,
 			"order line names a product or option that is not sellable")
+		return
+	}
+	if errors.Is(err, service.ErrInvalidSeatNo) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidSeatNo,
+			"seat_no must be between 0 and 99")
 		return
 	}
 	if errors.Is(err, service.ErrInvalidServiceType) {
@@ -1334,6 +1352,7 @@ const (
 	codeTableNotFound         = "table_not_found"
 	codePriceMismatch         = "price_mismatch"
 	codeInvalidOrderLine      = "invalid_order_line"
+	codeInvalidSeatNo         = "invalid_seat_no"
 	codeInvalidStatus         = "invalid_status"
 	codeUseDedicatedEndpoint  = "use_dedicated_endpoint"
 	codeInvalidServiceType    = "invalid_service_type"

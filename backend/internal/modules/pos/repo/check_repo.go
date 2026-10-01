@@ -334,6 +334,22 @@ func (r *CheckRepo) UpdateStatus(ctx context.Context, tx pgx.Tx, id uuid.UUID, s
 	return c, nil
 }
 
+// RaisePax lifts a check's pax to at least pax, never lowering it — the
+// GREATEST keeps a later order addressing fewer seats from shrinking a count
+// an earlier order already established. Callers must hold the check's row
+// lock (GetForUpdate) in the same transaction: OrderService.Place derives pax
+// from the order's seat numbers after locking the check, so two concurrent
+// placements serialize on the lock rather than racing the read-modify-write.
+func (r *CheckRepo) RaisePax(ctx context.Context, tx pgx.Tx, id uuid.UUID, pax int) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE checks SET pax = GREATEST(pax, $2), updated_at = NOW()
+		WHERE id = $1
+	`, id, pax); err != nil {
+		return fmt.Errorf("pos/repo/check: raise pax: %w", err)
+	}
+	return nil
+}
+
 // scanCheck reads one check row from any RowScanner (QueryRow or rows).
 func scanCheck(s interface {
 	Scan(...any) error

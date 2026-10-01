@@ -104,6 +104,35 @@ func TestToCheckResponse_ServiceTypeAndCustomerFields(t *testing.T) {
 	assert.Equal(t, "", decodedDineIn["customer_name"])
 }
 
+// TestToOrderResponse_SeatNoAlwaysPresent pins the pos/000011 wire contract:
+// every order item carries seat_no, serialized even when 0 ("no seat
+// assigned" — every guest line and every pre-seat staff line), so the
+// per-person split UI can group lines without probing for the key.
+func TestToOrderResponse_SeatNoAlwaysPresent(t *testing.T) {
+	resp := toOrderResponse(domain.Order{
+		ID: uuid.New(),
+		Items: []domain.OrderItem{
+			{ID: uuid.New(), ProductName: "Çay", Quantity: 1, SeatNo: 3},
+			{ID: uuid.New(), ProductName: "Su", Quantity: 1},
+		},
+	})
+	require.Len(t, resp.Items, 2)
+	assert.Equal(t, 3, resp.Items[0].SeatNo)
+	assert.Equal(t, 0, resp.Items[1].SeatNo)
+
+	body, err := json.Marshal(resp)
+	require.NoError(t, err)
+	var decoded struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(body, &decoded))
+	require.Len(t, decoded.Items, 2)
+	assert.Equal(t, float64(3), decoded.Items[0]["seat_no"])
+	seat, ok := decoded.Items[1]["seat_no"]
+	require.True(t, ok, "a zero seat_no must still be present in the JSON body, never omitted")
+	assert.Equal(t, float64(0), seat)
+}
+
 // TestToOrderResponse_CarriesRejectionReason: the counter shows why the
 // kitchen/cashier rejected a ticket; the field existed on domain.Order but was
 // never serialized.

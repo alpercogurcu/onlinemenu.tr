@@ -114,6 +114,32 @@ var KitchenActiveOrderStatuses = []OrderStatus{
 	OrderStatusPending, OrderStatusAccepted, OrderStatusPreparing, OrderStatusReady,
 }
 
+// MaxSeatNo is the highest seat number an order line may carry. 99 matches
+// the order_items_seat_no_chk DB constraint (pos/000011) — the two bounds
+// must move together.
+const MaxSeatNo = 99
+
+// ValidSeatNo reports whether n is a persistable seat number: 0 (no seat
+// assigned) through MaxSeatNo.
+func ValidSeatNo(n int) bool {
+	return n >= 0 && n <= MaxSeatNo
+}
+
+// MaxItemSeatNo returns the highest SeatNo across items, 0 when no line has a
+// seat assigned. It is the single source of the pax derivation
+// OrderService.Place applies: a waiter writing a line onto seat 4 has told us
+// at least 4 people sit at the table, so check.pax is raised to this value
+// (never lowered) without a separate "how many guests?" question.
+func MaxItemSeatNo(items []OrderItem) int {
+	maxSeat := 0
+	for _, it := range items {
+		if it.SeatNo > maxSeat {
+			maxSeat = it.SeatNo
+		}
+	}
+	return maxSeat
+}
+
 // OrderItem is a single line on an order with product data snapshotted at order time.
 type OrderItem struct {
 	ID                 uuid.UUID
@@ -139,6 +165,13 @@ type OrderItem struct {
 	// ids are the machine-readable form the KDS and a receipt reprint can
 	// actually act on.
 	ModifierIDs []uuid.UUID
+	// SeatNo is which guest at the table this line was ordered for (kuver),
+	// 1-based; 0 means "no seat assigned" and is what every guest (QR) order
+	// and every staff client that never sends the field produces. Range is
+	// 0..MaxSeatNo, enforced by OrderService.Place and backstopped by the
+	// order_items_seat_no_chk constraint (pos/000011). It feeds the pax
+	// derivation (MaxItemSeatNo) and, later, the per-person payment split.
+	SeatNo int
 }
 
 // Order is a kitchen ticket for one fulfillment event (one channel, one round).

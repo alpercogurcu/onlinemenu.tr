@@ -78,7 +78,7 @@ func sampleOrder(checkID *string) apiclient.Order {
 		Status:    "sent",
 		CreatedAt: time.Date(2026, 9, 19, 14, 32, 0, 0, time.UTC),
 		Items: []apiclient.OrderItem{
-			{ID: "i1", ProductName: "Adana Kebap", Quantity: 2, UnitPriceAmount: 25000, Note: "acısız"},
+			{ID: "i1", ProductName: "Adana Kebap", Quantity: 2, UnitPriceAmount: 25000, Note: "acısız", SeatNo: 1},
 			{ID: "i2", ProductName: "Ayran", Quantity: 1, UnitPriceAmount: 3000},
 		},
 	}
@@ -99,7 +99,7 @@ func TestPrintKitchenTicket_BuildsAndPrintsOnKitchenPrinter(t *testing.T) {
 	}
 
 	want := receipt.BuildKitchenTicket(a.receiptConfig, "Masa 7", "a1b2c3d4", order.CreatedAt, []receipt.KitchenItem{
-		{ProductName: "Adana Kebap", Quantity: 2, Note: "acısız"},
+		{ProductName: "Adana Kebap", Quantity: 2, Note: "acısız", SeatNo: 1},
 		{ProductName: "Ayran", Quantity: 1},
 	})
 	got := kitchen.LastJob()

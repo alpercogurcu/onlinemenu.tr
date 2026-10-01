@@ -110,6 +110,7 @@ type OrderItemDTO struct {
 	Quantity        int    `json:"quantity"`
 	UnitPriceAmount int64  `json:"unit_price_amount"`
 	Note            string `json:"note"`
+	SeatNo          int    `json:"seat_no"`
 }
 
 // OrderDTO mirrors apiclient.Order.
@@ -614,7 +615,7 @@ func (a *App) printKitchenTicket(ctx context.Context, orderID string) error {
 
 	items := make([]receipt.KitchenItem, len(order.Items))
 	for i, it := range order.Items {
-		items[i] = receipt.KitchenItem{ProductName: it.ProductName, Quantity: it.Quantity, Note: it.Note}
+		items[i] = receipt.KitchenItem{ProductName: it.ProductName, Quantity: it.Quantity, Note: it.Note, SeatNo: it.SeatNo}
 	}
 
 	job := receipt.BuildKitchenTicket(a.receiptConfig, tableLabel, receipt.ShortOrderID(order.ID), order.CreatedAt, items)
@@ -687,6 +688,7 @@ func toOrderDTO(o apiclient.Order) OrderDTO {
 			Quantity:        it.Quantity,
 			UnitPriceAmount: it.UnitPriceAmount,
 			Note:            it.Note,
+			SeatNo:          it.SeatNo,
 		}
 	}
 	dto := OrderDTO{

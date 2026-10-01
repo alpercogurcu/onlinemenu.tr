@@ -609,7 +609,7 @@ func TestClient_GetOrder_DecodesOrderWithItemNotes(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(Order{
 			ID:      "order-1",
 			CheckID: &checkID,
-			Items:   []OrderItem{{ID: "i1", ProductName: "Adana Kebap", Quantity: 2, Note: "acısız"}},
+			Items:   []OrderItem{{ID: "i1", ProductName: "Adana Kebap", Quantity: 2, Note: "acısız", SeatNo: 3}},
 		})
 	}))
 	defer srv.Close()
@@ -622,7 +622,7 @@ func TestClient_GetOrder_DecodesOrderWithItemNotes(t *testing.T) {
 	if order.ID != "order-1" || order.CheckID == nil || *order.CheckID != checkID {
 		t.Fatalf("unexpected order: %+v", order)
 	}
-	if len(order.Items) != 1 || order.Items[0].Note != "acısız" || order.Items[0].Quantity != 2 {
+	if len(order.Items) != 1 || order.Items[0].Note != "acısız" || order.Items[0].Quantity != 2 || order.Items[0].SeatNo != 3 {
 		t.Fatalf("unexpected items: %+v", order.Items)
 	}
 }

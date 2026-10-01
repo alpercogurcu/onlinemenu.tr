@@ -272,6 +272,7 @@ func TestBuildKitchenTicket_FitsPaperWidth(t *testing.T) {
 		items []KitchenItem
 	}{
 		{"long product and note", "Masa 7", []KitchenItem{{ProductName: longName, Quantity: 2, Note: longNote}}},
+		{"long product with seat tag", "Masa 7", []KitchenItem{{ProductName: longName, Quantity: 2, Note: longNote, SeatNo: 12}}},
 		{"long table label", longTable, []KitchenItem{{ProductName: "Su", Quantity: 1}}},
 		{"unbreakable word", "Masa 1", []KitchenItem{{ProductName: unbroken, Quantity: 1, Note: unbroken}}},
 		{"large quantity", "Masa 1", []KitchenItem{{ProductName: longName, Quantity: 1234}}},
@@ -507,12 +508,12 @@ func TestBuildKitchenNotice_ShowsBothTablesInDoubleSizeAndTheTime(t *testing.T) 
 
 func TestBuildKitchenNotice_ListsMovedItemsWithNotesAndNoPrices(t *testing.T) {
 	lines, _ := noticeLines(t, NoticeMoveItems, "Masa 3", "Masa 7", []KitchenItem{
-		{ProductName: "Lahmacun", Quantity: 2, Note: "Acılı | Lavaş(+5)"},
+		{ProductName: "Lahmacun", Quantity: 2, Note: "Acılı | Lavaş(+5)", SeatNo: 2},
 		{ProductName: "Ayran", Quantity: 1},
 	}, escpos.Width48)
 	texts := strings.Join(lineTexts(lines), "\n")
 
-	for _, want := range []string{"2x  Lahmacun", "1x  Ayran", "> Acılı | Lavaş(+5)"} {
+	for _, want := range []string{"2x  Lahmacun · K2", "1x  Ayran", "> Acılı | Lavaş(+5)"} {
 		if !strings.Contains(texts, string(escpos.EncodeCP857(want))) {
 			t.Errorf("missing %q in\n%s", want, texts)
 		}
@@ -604,6 +605,56 @@ func TestBuildKitchenTicket_SortsItemsTurkishAlphabetical(t *testing.T) {
 
 	if !bytes.Equal(got, want) {
 		t.Fatalf("ticket not sorted Turkish A->Z:\ngot:\n% x\nwant:\n% x", got, want)
+	}
+}
+
+// Kuver desteği: seat_no>0 kalem "2x  Çorba · K1" biçiminde etiketlenir ve
+// kalemler önce kişiye (0 = atanmamış en önde), kişi içinde Türkçe A->Z
+// sıralanır. Golden-byte karşılaştırması hem gruplamayı hem de " · K<n>"
+// ekinin CP857 kodlamasından (orta nokta 0xFA) sağ çıktığını kanıtlar.
+func TestBuildKitchenTicket_GroupsBySeatAndTagsLines(t *testing.T) {
+	placedAt := mustTime(t, "2026-09-19T14:32:00Z")
+	items := []KitchenItem{
+		{ProductName: "Çorba", Quantity: 1, SeatNo: 2},
+		{ProductName: "Ayran", Quantity: 2},
+		{ProductName: "İskender", Quantity: 1, SeatNo: 1, Note: "acısız"},
+		{ProductName: "Cacık", Quantity: 1, SeatNo: 2},
+		{ProductName: "Çay", Quantity: 1, SeatNo: 1},
+	}
+
+	got := BuildKitchenTicket(Config{Width: escpos.Width48}, "Masa 7", "a1b2c3d4", placedAt, items)
+
+	want := escpos.NewBuilder(escpos.Width48).Init().
+		Align(escpos.AlignCenter).SetMode(true, true).Line("MUTFAK").
+		Align(escpos.AlignLeft).
+		Line("Masa 7").
+		SetMode(false, false).
+		Line(escpos.Columns(48, placedAt.Local().Format("15:04"), "#a1b2c3d4")).
+		Divider().
+		SetMode(true, false).Line("2x  Ayran").SetMode(false, false).
+		SetMode(true, false).Line("1x  Çay · K1").SetMode(false, false).
+		SetMode(true, false).Line("1x  İskender · K1").SetMode(false, false).
+		Line("    > acısız").
+		SetMode(true, false).Line("1x  Cacık · K2").SetMode(false, false).
+		SetMode(true, false).Line("1x  Çorba · K2").SetMode(false, false).
+		Divider().
+		Feed(1).
+		Cut(escpos.CutFull, 3).
+		Bytes()
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ticket not grouped/tagged by seat:\ngot:\n% x\nwant:\n% x", got, want)
+	}
+}
+
+// seat_no=0 hiçbir etiket basmamalı — kuversiz dükkanın fişi bayt bayt
+// bugünkü çıktının aynısı kalır (golden testler zaten SeatNo:0 ile koşuyor,
+// bu test niyeti açıkça sabitler).
+func TestBuildKitchenTicket_SeatZeroPrintsNoTag(t *testing.T) {
+	job := BuildKitchenTicket(Config{Width: escpos.Width48}, "Masa 1", "abcdef12", time.Now(),
+		[]KitchenItem{{ProductName: "Su", Quantity: 1, SeatNo: 0}})
+	if bytes.Contains(job, []byte("K0")) || bytes.Contains(job, escpos.EncodeCP857(" · ")) {
+		t.Fatal("an unassigned item must not carry a seat tag")
 	}
 }
 

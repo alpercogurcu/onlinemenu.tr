@@ -3,6 +3,7 @@ import type { main } from '../../wailsjs/go/models'
 import { formatMoney, type PendingLine } from '@onlinemenu/pos-core'
 import type { RemoteCompletedRow, RemotePendingFiscal, TrackedPayment } from '../lib/fiscalStatus'
 import { shortOrderId } from '../lib/kitchenPrint'
+import { seatBadge } from '../lib/seatTotals'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
 import { HoldButton } from './HoldButton'
@@ -153,11 +154,22 @@ export function Receipt({
         {confirmedOrders.map((order) => (
           <div key={order.id}>
             {order.items.map((item) => {
+              const seat = seatBadge(item.seat_no)
               const line = (
                 <>
-                  <div className="flex justify-between gap-2">
+                  <div className="flex items-baseline justify-between gap-2">
                     <span className="qty text-ink-dim">{item.quantity}×</span>
-                    <span className="flex-1 truncate">{item.product_name}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {item.product_name}
+                      {seat && (
+                        <span
+                          className="ml-1.5 inline-block rounded-full bg-amber/15 px-1.5 font-sans text-[10px] font-bold leading-4 text-amber align-middle"
+                          title={`Kişi ${item.seat_no}`}
+                        >
+                          {seat}
+                        </span>
+                      )}
+                    </span>
                     <span className="money tabular-nums">
                       {formatMoney(item.quantity * item.unit_price_amount)}
                     </span>

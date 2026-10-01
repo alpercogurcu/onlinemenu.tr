@@ -61,6 +61,7 @@ import {
   type TrackedPayment,
 } from './lib/fiscalStatus'
 import { cashSessionBannerKind } from './lib/cashSession'
+import { seatGroups } from './lib/seatTotals'
 import {
   addNoticeFailure,
   describeNoticeFailure,
@@ -426,6 +427,7 @@ function App() {
   const confirmedTotal = confirmedOrdersTotal(confirmedOrders)
   const checkItems = useMemo(() => payableItems(confirmedOrders), [confirmedOrders])
   const paidItemIds = useMemo(() => itemsPaidBy(trackedForSelected), [trackedForSelected])
+  const paymentSeatGroups = useMemo(() => seatGroups(confirmedOrders, paidItemIds), [confirmedOrders, paidItemIds])
   const settledPaidTotal = settledTotal(serverCompleted, trackedForSelected, remoteSettledForSelected)
   const remaining = collectableRemaining(
     confirmedTotal,
@@ -1336,6 +1338,7 @@ function App() {
                 settledPaidTotal={settledPaidTotal}
                 remaining={remaining}
                 initial={paymentSession.initial}
+                seatGroups={paymentSeatGroups}
                 onRegister={handleRegisterPayment}
                 onClose={closePaymentScreen}
                 errorMessage={receiptError}

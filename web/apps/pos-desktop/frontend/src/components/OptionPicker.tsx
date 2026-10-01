@@ -82,7 +82,9 @@ export function OptionPicker({ product, onConfirm, onCancel }: OptionPickerProps
       groupRefs.current.get(unmet[0])?.scrollIntoView?.({ block: 'nearest' })
       return
     }
-    onConfirm({ modifiers: chosen, note: composeFreeNote(noteChips, customNote), quantity })
+    // The counter flow does not split by guest — seat stays unassigned here;
+    // kuver assignment is the waiter UI's job (apps/admin order screen).
+    onConfirm({ modifiers: chosen, note: composeFreeNote(noteChips, customNote), quantity, seat: 0 })
   }
 
   return (

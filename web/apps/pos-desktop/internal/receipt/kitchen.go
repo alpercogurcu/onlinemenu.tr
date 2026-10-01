@@ -22,6 +22,10 @@ type KitchenItem struct {
 	Quantity    int
 	// Note is the free-text line note ("acısız"); blank means none.
 	Note string
+	// SeatNo is the guest (kuver) the line belongs to; 0 means unassigned.
+	// A positive seat prints as a " · K<n>" tag after the product name so the
+	// kitchen can plate per guest.
+	SeatNo int
 }
 
 const (
@@ -51,20 +55,42 @@ var itemCollator = struct {
 	*collate.Collator
 }{Collator: collate.New(language.Turkish, collate.IgnoreCase)}
 
-// sortedItems returns items A->Z by product name. It sorts a copy: the caller's
-// slice order may still be meaningful elsewhere (it is the order the guest or
-// waiter entered the lines in), and a reprint must not depend on a prior print
-// having rearranged it. The sort is stable so duplicate names keep their
-// relative order.
+// sortedItems returns items grouped by seat (0 = unassigned first, then K1,
+// K2, …) and A->Z by product name within a seat, so one guest's dishes sit
+// together on the ticket. It sorts a copy: the caller's slice order may still
+// be meaningful elsewhere (it is the order the guest or waiter entered the
+// lines in), and a reprint must not depend on a prior print having rearranged
+// it. The sort is stable so duplicate names keep their relative order.
 func sortedItems(items []KitchenItem) []KitchenItem {
 	out := make([]KitchenItem, len(items))
 	copy(out, items)
 	itemCollator.Lock()
 	defer itemCollator.Unlock()
 	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SeatNo != out[j].SeatNo {
+			return out[i].SeatNo < out[j].SeatNo
+		}
 		return itemCollator.CompareString(out[i].ProductName, out[j].ProductName) < 0
 	})
 	return out
+}
+
+// seatTag is what a seat assignment adds after the product name: " · K2".
+// The middle dot exists in CP857 (0xFA) and "K" needs no encoding, so the tag
+// survives the printer's code page; both also pass sanitize untouched. A
+// non-positive seat means unassigned and adds nothing.
+func seatTag(seatNo int) string {
+	if seatNo <= 0 {
+		return ""
+	}
+	return " · K" + strconv.Itoa(seatNo)
+}
+
+// itemLineText is the wrapped body of an item line: the sanitized product name
+// plus the seat tag. The tag is appended after sanitize on purpose — it is
+// builder-generated, not free text, and sanitize would be a no-op on it anyway.
+func itemLineText(it KitchenItem) string {
+	return sanitize(it.ProductName) + seatTag(it.SeatNo)
 }
 
 // BuildKitchenTicket assembles the ESC/POS byte stream for the paper that
@@ -107,7 +133,7 @@ func BuildKitchenTicket(cfg Config, tableLabel string, orderShortID string, plac
 
 	for _, it := range sortedItems(items) {
 		b.SetMode(true, false)
-		for _, line := range wrap(itemPrefix(it.Quantity), sanitize(it.ProductName), cols) {
+		for _, line := range wrap(itemPrefix(it.Quantity), itemLineText(it), cols) {
 			b.Line(line)
 		}
 		b.SetMode(false, false)
@@ -274,7 +300,7 @@ func BuildKitchenNotice(cfg Config, kind NoticeKind, from, to string, at time.Ti
 	if len(items) > 0 {
 		for _, it := range sortedItems(items) {
 			b.SetMode(true, false)
-			for _, line := range wrap(itemPrefix(it.Quantity), sanitize(it.ProductName), cols) {
+			for _, line := range wrap(itemPrefix(it.Quantity), itemLineText(it), cols) {
 				b.Line(line)
 			}
 			b.SetMode(false, false)

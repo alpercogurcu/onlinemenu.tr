@@ -402,6 +402,9 @@ type OrderItem struct {
 	Quantity        int    `json:"quantity"`
 	UnitPriceAmount int64  `json:"unit_price_amount"`
 	Note            string `json:"note"`
+	// SeatNo is the guest (kuver) the waiter assigned the line to; 0 means
+	// unassigned. Absent in an older backend's response, which decodes as 0.
+	SeatNo int `json:"seat_no"`
 }
 
 // Order mirrors pos/http orderResponse.

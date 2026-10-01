@@ -16,6 +16,7 @@ import {
   type PayableItem,
   type PaymentLine,
 } from '@onlinemenu/pos-core'
+import { seatLabel, type SeatGroup } from '../lib/seatTotals'
 import { ErrorBanner } from './ErrorBanner'
 import { CheckIcon } from './icons'
 import { Numpad } from './Numpad'
@@ -54,6 +55,9 @@ type PaymentScreenProps = {
   remaining: number
   /** Set when the screen opens to retry a failed payment: starts on that amount. */
   initial: PaymentInitial | null
+  /** Per-guest (kuver) subtotals of the check; empty when no item carries a
+   * seat, which hides the "Kişiler" shortcut section entirely. */
+  seatGroups: readonly SeatGroup[]
   onRegister: (request: PaymentRequest) => Promise<void>
   /** Back to the product grid. */
   onClose: () => void
@@ -91,6 +95,7 @@ export function PaymentScreen({
   settledPaidTotal,
   remaining,
   initial,
+  seatGroups,
   onRegister,
   onClose,
   errorMessage,
@@ -156,6 +161,20 @@ export function PaymentScreen({
   function chooseMethod(next: PayMethod) {
     setMethod(next)
     setReceivedInput('')
+  }
+
+  // Alman usulü shortcut: one tap puts a guest's outstanding share into the
+  // amount field as an ordinary custom partial payment — the cashier can still
+  // round it, change the method, or back out. Nothing seat-specific is sent to
+  // the backend.
+  function applySeatAmount(group: SeatGroup) {
+    if (group.remaining <= 0) return
+    setMode('custom')
+    setSelected(new Set())
+    setCustomDueInput(kurusToMoneyInput(group.remaining))
+    setReceivedInput('')
+    setTarget('due')
+    setPendingReplace(true)
   }
 
   function applyReceivedPreset(kurus: number) {
@@ -264,6 +283,49 @@ export function PaymentScreen({
               ✎ Başka tutar
             </button>
           </div>
+
+          {seatGroups.length > 0 && (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-ink-dim">Kişiler</p>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {seatGroups.map((group) => {
+                  const settled = group.remaining <= 0
+                  return (
+                    <button
+                      key={group.seat}
+                      type="button"
+                      disabled={settled}
+                      onClick={() => applySeatAmount(group)}
+                      aria-label={
+                        settled
+                          ? `${seatLabel(group.seat)} ödendi`
+                          : `${seatLabel(group.seat)} — kalan ${formatMoney(group.remaining)} tutarını öde`
+                      }
+                      className="flex min-h-12 items-center gap-2 rounded-md border border-line bg-surface px-3 disabled:opacity-40"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber/15 font-display text-sm font-bold text-amber"
+                      >
+                        {group.seat > 0 ? group.seat : '＊'}
+                      </span>
+                      {group.seat === 0 && <span className="text-sm text-ink-dim">Ortak</span>}
+                      {settled ? (
+                        <span className="flex items-center gap-1 text-sm text-teal">
+                          <CheckIcon size={14} />
+                          Ödendi
+                        </span>
+                      ) : (
+                        <span className="money text-sm font-semibold tabular-nums text-ink">
+                          {formatMoney(group.remaining)}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {mode === 'items' ? (
             <ItemPicker

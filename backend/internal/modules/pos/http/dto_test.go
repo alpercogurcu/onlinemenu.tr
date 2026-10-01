@@ -67,6 +67,43 @@ func TestToCheckResponse_TotalSet_SerializesEvenWhenZero(t *testing.T) {
 	assert.Equal(t, float64(0), total)
 }
 
+// TestToCheckResponse_ServiceTypeAndCustomerFields pins the pos/000010
+// contract on the wire: service_type and the three customer fields are
+// always present (empty strings on a dine-in check, never omitted), so the
+// POS client can switch on service_type without probing for the key.
+func TestToCheckResponse_ServiceTypeAndCustomerFields(t *testing.T) {
+	resp := toCheckResponse(domain.Check{
+		ID:              uuid.New(),
+		ServiceType:     domain.ServiceTypeDelivery,
+		CustomerName:    "Alper Vural",
+		CustomerPhone:   "05321112233",
+		CustomerAddress: "Çark Cad. No:12",
+		TableLabel:      "Alper Vural",
+		Status:          domain.CheckStatusOpen,
+	})
+
+	body, err := json.Marshal(resp)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(body, &decoded))
+	assert.Equal(t, "delivery", decoded["service_type"])
+	assert.Equal(t, "Alper Vural", decoded["customer_name"])
+	assert.Equal(t, "05321112233", decoded["customer_phone"])
+	assert.Equal(t, "Çark Cad. No:12", decoded["customer_address"])
+
+	dineIn, err := json.Marshal(toCheckResponse(domain.Check{
+		ID:          uuid.New(),
+		ServiceType: domain.ServiceTypeDineIn,
+		Status:      domain.CheckStatusOpen,
+	}))
+	require.NoError(t, err)
+	var decodedDineIn map[string]any
+	require.NoError(t, json.Unmarshal(dineIn, &decodedDineIn))
+	assert.Equal(t, "dine_in", decodedDineIn["service_type"])
+	assert.Contains(t, decodedDineIn, "customer_name", "customer fields must be present (as \"\") on dine-in checks, not omitted")
+	assert.Equal(t, "", decodedDineIn["customer_name"])
+}
+
 // TestToOrderResponse_CarriesRejectionReason: the counter shows why the
 // kitchen/cashier rejected a ticket; the field existed on domain.Order but was
 // never serialized.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,6 +44,25 @@ var ErrFiscalPending = errors.New("pos/service/check: fiscal registration pendin
 // Cancelling would leave a registered sale attached to a check that reports
 // nothing was sold; the payment must be voided first.
 var ErrCheckHasPayments = errors.New("pos/service/check: check has payments")
+
+// ErrInvalidServiceType is returned by Open when the supplied service_type is
+// not one of dine_in/takeaway/delivery. The HTTP layer maps it to 422.
+var ErrInvalidServiceType = errors.New("pos/service/check: invalid service_type")
+
+// ErrTableNotAllowed is returned by Open when a takeaway/delivery check names
+// a table_id: those checks never sit on the floor plan, and silently dropping
+// the table would leave the client believing a table was claimed.
+var ErrTableNotAllowed = errors.New("pos/service/check: table_id not allowed for takeaway/delivery")
+
+// ErrCustomerNameRequired is returned by Open when a takeaway/delivery check
+// carries no customer_name — the name is what the kitchen receipt and the
+// counter call out instead of a table label.
+var ErrCustomerNameRequired = errors.New("pos/service/check: customer_name required for takeaway/delivery")
+
+// ErrCustomerPhoneRequired is returned by Open when a delivery check carries
+// no customer_phone: a courier with an address but no phone cannot resolve
+// "kapı açılmıyor", so the phone is as mandatory as the name.
+var ErrCustomerPhoneRequired = errors.New("pos/service/check: customer_phone required for delivery")
 
 // CheckService manages dine-in check (adisyon) lifecycle.
 type CheckService struct {
@@ -93,6 +113,14 @@ func NewCheckService(p CheckParams) *CheckService {
 // rendering a consistent label. c.TableID is left nil for masasız satış
 // (takeaway/delivery) checks, which never touch a table row.
 //
+// c.ServiceType defaults to dine_in (full backward compatibility: a request
+// that never mentions service_type behaves exactly as before). A
+// takeaway/delivery check must not name a table_id and must carry a
+// customer_name (delivery additionally a customer_phone); its empty
+// TableLabel is filled from CustomerName so KDS, kitchen receipts and every
+// other table_label consumer renders the customer's name with no change on
+// their side — see normalizeServiceType.
+//
 // c.Pax (guest count) defaults to 1 when the caller supplies 0 or a
 // negative value. This is the single choke point every Open caller (HTTP
 // handler, e2e spine, service integration tests) goes through, so the
@@ -106,6 +134,9 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 	}
 	if c.Pax < 1 {
 		c.Pax = 1
+	}
+	if err := normalizeServiceType(&c); err != nil {
+		return domain.Check{}, err
 	}
 	c.TenantID = tenantID
 	c.Status = domain.CheckStatusOpen
@@ -132,6 +163,43 @@ func (s *CheckService) Open(ctx context.Context, tenantID uuid.UUID, principal a
 		return domain.Check{}, fmt.Errorf("pos/service/check: open: %w", err)
 	}
 	return created, nil
+}
+
+// normalizeServiceType applies Open's service-type contract in one place:
+// empty defaults to dine_in (so every pre-existing caller keeps its exact
+// behaviour), takeaway/delivery reject a table_id and require customer
+// contact fields, and a blank TableLabel is filled from CustomerName so the
+// adisyon renders as "Alper Vural" wherever a table name would have appeared.
+// Requiredness is checked on the trimmed value — a name of spaces labels
+// nothing — but the stored fields keep the caller's original strings.
+//
+// It lives on the staff Open path only: the guest QR flow builds its check in
+// OrderService.PlaceGuest with no ServiceType at all, and CheckRepo.Create's
+// ”→dine_in normalization (the same treatment Source gets) is what keeps
+// that path untouched.
+func normalizeServiceType(c *domain.Check) error {
+	if c.ServiceType == "" {
+		c.ServiceType = domain.ServiceTypeDineIn
+	}
+	if !c.ServiceType.Valid() {
+		return ErrInvalidServiceType
+	}
+	if c.ServiceType == domain.ServiceTypeDineIn {
+		return nil
+	}
+	if c.TableID != nil {
+		return ErrTableNotAllowed
+	}
+	if strings.TrimSpace(c.CustomerName) == "" {
+		return ErrCustomerNameRequired
+	}
+	if c.ServiceType == domain.ServiceTypeDelivery && strings.TrimSpace(c.CustomerPhone) == "" {
+		return ErrCustomerPhoneRequired
+	}
+	if strings.TrimSpace(c.TableLabel) == "" {
+		c.TableLabel = c.CustomerName
+	}
+	return nil
 }
 
 // tableStatusGuard decides whether a table in its current state may receive a
@@ -293,8 +361,9 @@ func (s *CheckService) GetByIDWithTotal(ctx context.Context, tenantID, checkID u
 // value, is BranchID a well-formed uuid) is the HTTP layer's job — see
 // Handler.listChecks — this type only carries already-validated values.
 type CheckListFilter struct {
-	Status   *domain.CheckStatus
-	BranchID *uuid.UUID
+	Status      *domain.CheckStatus
+	BranchID    *uuid.UUID
+	ServiceType *domain.ServiceType
 }
 
 // List returns the tenant's checks, optionally narrowed by filter (status
@@ -318,8 +387,9 @@ func (s *CheckService) List(ctx context.Context, tenantID uuid.UUID, filter Chec
 	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		checks, err = s.checkRepo.List(ctx, tx, repo.ListFilter{
-			Status:   filter.Status,
-			BranchID: filter.BranchID,
+			Status:      filter.Status,
+			BranchID:    filter.BranchID,
+			ServiceType: filter.ServiceType,
 		})
 		if err != nil {
 			return err

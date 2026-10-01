@@ -163,7 +163,8 @@ func (h *Handler) visibleBranch(w http.ResponseWriter, r *http.Request, p auth.P
 // Check handlers
 // ---------------------------------------------------------------------------
 
-// listChecks supports two optional query filters, status and branch_id.
+// listChecks supports three optional query filters: status, branch_id and
+// service_type.
 // Absent means "no filter on that column", so an empty query string must not
 // be treated as an invalid value — only a *present but malformed* value is a
 // 422.
@@ -188,6 +189,14 @@ func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.Status = &status
+	}
+	if raw := r.URL.Query().Get("service_type"); raw != "" {
+		serviceType := domain.ServiceType(raw)
+		if !serviceType.Valid() {
+			http.Error(w, "invalid service_type", http.StatusUnprocessableEntity)
+			return
+		}
+		filter.ServiceType = &serviceType
 	}
 	if raw := r.URL.Query().Get("branch_id"); raw != "" {
 		branchID, err := uuid.Parse(raw)
@@ -225,12 +234,23 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 	// Pax (guest count) is optional: an omitted or zero/negative value falls
 	// back to CheckService.Open's default of 1 — existing pos-desktop/admin
 	// clients that don't yet send pax keep working unchanged.
+	//
+	// ServiceType and the customer fields are equally optional: an omitted
+	// service_type defaults to dine_in in the service layer, so pre-existing
+	// clients keep producing exactly the checks they produced before. The
+	// takeaway/delivery rules (no table_id, customer_name required, phone
+	// required for delivery) are enforced by CheckService.Open and surface
+	// here as 422s via h.error.
 	var req struct {
-		BranchID   uuid.UUID  `json:"branch_id"`
-		TableID    *uuid.UUID `json:"table_id"`
-		TableLabel string     `json:"table_label"`
-		Pax        int        `json:"pax"`
-		Note       string     `json:"note"`
+		BranchID        uuid.UUID  `json:"branch_id"`
+		TableID         *uuid.UUID `json:"table_id"`
+		TableLabel      string     `json:"table_label"`
+		Pax             int        `json:"pax"`
+		Note            string     `json:"note"`
+		ServiceType     string     `json:"service_type"`
+		CustomerName    string     `json:"customer_name"`
+		CustomerPhone   string     `json:"customer_phone"`
+		CustomerAddress string     `json:"customer_address"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -242,14 +262,18 @@ func (h *Handler) openCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c, err := h.checks.Open(r.Context(), p.TenantID, p, domain.Check{
-		BranchID:     req.BranchID,
-		TableID:      req.TableID,
-		TableLabel:   req.TableLabel,
-		Pax:          req.Pax,
-		Note:         req.Note,
-		OpenedBy:     &p.PersonID,
-		OpenedByKind: domain.OpenedByKindStaff,
-		Source:       domain.SourcePOS,
+		BranchID:        req.BranchID,
+		TableID:         req.TableID,
+		TableLabel:      req.TableLabel,
+		Pax:             req.Pax,
+		Note:            req.Note,
+		ServiceType:     domain.ServiceType(req.ServiceType),
+		CustomerName:    req.CustomerName,
+		CustomerPhone:   req.CustomerPhone,
+		CustomerAddress: req.CustomerAddress,
+		OpenedBy:        &p.PersonID,
+		OpenedByKind:    domain.OpenedByKindStaff,
+		Source:          domain.SourcePOS,
 	})
 	if err != nil {
 		h.error(w, r, err)
@@ -957,9 +981,17 @@ type checkResponse struct {
 	Pax        int        `json:"pax"`
 	Status     string     `json:"status"`
 	Note       string     `json:"note"`
-	OpenedAt   time.Time  `json:"opened_at"`
-	ClosedAt   *time.Time `json:"closed_at"`
-	Total      *int64     `json:"total,omitempty"`
+	// ServiceType is always present ("dine_in" for every pre-existing
+	// check); the customer fields are plain strings, empty on dine-in
+	// checks, so a client never distinguishes "no customer" from "field
+	// missing".
+	ServiceType     string     `json:"service_type"`
+	CustomerName    string     `json:"customer_name"`
+	CustomerPhone   string     `json:"customer_phone"`
+	CustomerAddress string     `json:"customer_address"`
+	OpenedAt        time.Time  `json:"opened_at"`
+	ClosedAt        *time.Time `json:"closed_at"`
+	Total           *int64     `json:"total,omitempty"`
 	// MergedIntoCheckID is present only on a check whose status is "merged"
 	// (docs/pos-ux-spec.md §3c): it names the adisyon that absorbed this
 	// one's orders, so the admin table can say where the money went instead
@@ -969,16 +1001,20 @@ type checkResponse struct {
 
 func toCheckResponse(c domain.Check) checkResponse {
 	return checkResponse{
-		ID:         c.ID,
-		TenantID:   c.TenantID,
-		BranchID:   c.BranchID,
-		TableID:    c.TableID,
-		TableLabel: c.TableLabel,
-		Pax:        c.Pax,
-		Status:     string(c.Status),
-		Note:       c.Note,
-		OpenedAt:   c.OpenedAt,
-		ClosedAt:   c.ClosedAt,
+		ID:              c.ID,
+		TenantID:        c.TenantID,
+		BranchID:        c.BranchID,
+		TableID:         c.TableID,
+		TableLabel:      c.TableLabel,
+		Pax:             c.Pax,
+		Status:          string(c.Status),
+		Note:            c.Note,
+		ServiceType:     string(c.ServiceType),
+		CustomerName:    c.CustomerName,
+		CustomerPhone:   c.CustomerPhone,
+		CustomerAddress: c.CustomerAddress,
+		OpenedAt:        c.OpenedAt,
+		ClosedAt:        c.ClosedAt,
 
 		MergedIntoCheckID: c.MergedIntoCheckID,
 	}
@@ -1194,6 +1230,25 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 			"order line names a product or option that is not sellable")
 		return
 	}
+	if errors.Is(err, service.ErrInvalidServiceType) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidServiceType, "invalid service_type")
+		return
+	}
+	if errors.Is(err, service.ErrTableNotAllowed) {
+		respondError(w, http.StatusUnprocessableEntity, codeTableNotAllowed,
+			"table_id must not be set for a takeaway/delivery check")
+		return
+	}
+	if errors.Is(err, service.ErrCustomerNameRequired) {
+		respondError(w, http.StatusUnprocessableEntity, codeCustomerNameRequired,
+			"customer_name is required for a takeaway/delivery check")
+		return
+	}
+	if errors.Is(err, service.ErrCustomerPhoneRequired) {
+		respondError(w, http.StatusUnprocessableEntity, codeCustomerPhoneRequired,
+			"customer_phone is required for a delivery check")
+		return
+	}
 	if errors.Is(err, service.ErrInvalidOrderStatus) {
 		respondError(w, http.StatusUnprocessableEntity, codeInvalidStatus, "invalid order status")
 		return
@@ -1265,27 +1320,31 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 // body unconditionally: 409 alone is ambiguous here (a check can conflict
 // because it is already closed, underpaid, or awaiting a fiscal result).
 const (
-	codeFiscalPending        = "fiscal_pending"
-	codeInsufficientPayment  = "insufficient_payment"
-	codeInvalidTransition    = "invalid_transition"
-	codeTableOccupied        = "table_occupied"
-	codeCheckNotOpen         = "check_not_open"
-	codeCheckBranchMismatch  = "check_branch_mismatch"
-	codeCheckHasPayments     = "check_has_payments"
-	codePaymentsPresent      = "payments_present"
-	codeItemAlreadyPaid      = "item_already_paid"
-	codeSameCheck            = "same_check"
-	codeOrderItemNotFound    = "order_item_not_found"
-	codeTableNotFound        = "table_not_found"
-	codePriceMismatch        = "price_mismatch"
-	codeInvalidOrderLine     = "invalid_order_line"
-	codeInvalidStatus        = "invalid_status"
-	codeUseDedicatedEndpoint = "use_dedicated_endpoint"
-	codeInvalidBranchID      = "invalid_branch_id"
-	codeInvalidRange         = "invalid_range"
-	codeRangeTooLong         = "range_too_long"
-	codeInvalidTimezone      = "invalid_tz"
-	codeInvalidDateParams    = "invalid_date_params"
+	codeFiscalPending         = "fiscal_pending"
+	codeInsufficientPayment   = "insufficient_payment"
+	codeInvalidTransition     = "invalid_transition"
+	codeTableOccupied         = "table_occupied"
+	codeCheckNotOpen          = "check_not_open"
+	codeCheckBranchMismatch   = "check_branch_mismatch"
+	codeCheckHasPayments      = "check_has_payments"
+	codePaymentsPresent       = "payments_present"
+	codeItemAlreadyPaid       = "item_already_paid"
+	codeSameCheck             = "same_check"
+	codeOrderItemNotFound     = "order_item_not_found"
+	codeTableNotFound         = "table_not_found"
+	codePriceMismatch         = "price_mismatch"
+	codeInvalidOrderLine      = "invalid_order_line"
+	codeInvalidStatus         = "invalid_status"
+	codeUseDedicatedEndpoint  = "use_dedicated_endpoint"
+	codeInvalidServiceType    = "invalid_service_type"
+	codeTableNotAllowed       = "table_not_allowed"
+	codeCustomerNameRequired  = "customer_name_required"
+	codeCustomerPhoneRequired = "customer_phone_required"
+	codeInvalidBranchID       = "invalid_branch_id"
+	codeInvalidRange          = "invalid_range"
+	codeRangeTooLong          = "range_too_long"
+	codeInvalidTimezone       = "invalid_tz"
+	codeInvalidDateParams     = "invalid_date_params"
 )
 
 type errorResponse struct {

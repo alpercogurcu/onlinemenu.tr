@@ -22,6 +22,7 @@ func NewCheckRepo() *CheckRepo { return &CheckRepo{} }
 // with the scan targets compiles fine and only fails at runtime.
 const checkColumns = `id, tenant_id, branch_id, table_id, table_label, pax, status,
 	          opened_by, opened_by_kind, source, closed_by, merged_into_check_id, note,
+	          service_type, customer_name, customer_phone, customer_address,
 	          opened_at, closed_at, created_at, updated_at`
 
 // Create inserts a new open check and returns it with server-assigned fields.
@@ -41,8 +42,9 @@ const checkColumns = `id, tenant_id, branch_id, table_id, table_label, pax, stat
 func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (domain.Check, error) {
 	const q = `
 		INSERT INTO checks (tenant_id, branch_id, table_id, table_label, pax, status,
-		                    opened_by, opened_by_kind, source, note)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                    opened_by, opened_by_kind, source, note,
+		                    service_type, customer_name, customer_phone, customer_address)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING ` + checkColumns
 
 	kind := c.OpenedByKind
@@ -56,10 +58,15 @@ func (r *CheckRepo) Create(ctx context.Context, tx pgx.Tx, c domain.Check) (doma
 	if source == "" {
 		source = domain.SourcePOS
 	}
+	serviceType := c.ServiceType
+	if serviceType == "" {
+		serviceType = domain.ServiceTypeDineIn
+	}
 
 	row := tx.QueryRow(ctx, q,
 		c.TenantID, c.BranchID, c.TableID, c.TableLabel, c.Pax, string(c.Status),
 		c.OpenedBy, string(kind), string(source), c.Note,
+		string(serviceType), c.CustomerName, c.CustomerPhone, c.CustomerAddress,
 	)
 	created, err := scanCheck(row)
 	if err != nil {
@@ -174,8 +181,9 @@ func (r *CheckRepo) GetOpenByTableForUpdate(ctx context.Context, tx pgx.Tx, tabl
 // db.WithTenantReadTx) already restricts every row to the current tenant
 // before either of these predicates is applied.
 type ListFilter struct {
-	Status   *domain.CheckStatus
-	BranchID *uuid.UUID
+	Status      *domain.CheckStatus
+	BranchID    *uuid.UUID
+	ServiceType *domain.ServiceType
 }
 
 // List returns checks visible to the current tenant (open first, then by
@@ -188,6 +196,7 @@ func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx, filter ListFilter) ([]d
 		FROM checks
 		WHERE ($1::text IS NULL OR status = $1::text)
 		  AND ($2::uuid IS NULL OR branch_id = $2::uuid)
+		  AND ($3::text IS NULL OR service_type = $3::text)
 		ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, opened_at DESC`
 
 	var status *string
@@ -195,8 +204,13 @@ func (r *CheckRepo) List(ctx context.Context, tx pgx.Tx, filter ListFilter) ([]d
 		s := string(*filter.Status)
 		status = &s
 	}
+	var serviceType *string
+	if filter.ServiceType != nil {
+		s := string(*filter.ServiceType)
+		serviceType = &s
+	}
 
-	rows, err := tx.Query(ctx, q, status, filter.BranchID)
+	rows, err := tx.Query(ctx, q, status, filter.BranchID, serviceType)
 	if err != nil {
 		return nil, fmt.Errorf("pos/repo/check: list: %w", err)
 	}
@@ -325,10 +339,11 @@ func scanCheck(s interface {
 	Scan(...any) error
 }) (domain.Check, error) {
 	var c domain.Check
-	var status, openedByKind, source string
+	var status, openedByKind, source, serviceType string
 	if err := s.Scan(
 		&c.ID, &c.TenantID, &c.BranchID, &c.TableID, &c.TableLabel, &c.Pax, &status,
 		&c.OpenedBy, &openedByKind, &source, &c.ClosedBy, &c.MergedIntoCheckID, &c.Note,
+		&serviceType, &c.CustomerName, &c.CustomerPhone, &c.CustomerAddress,
 		&c.OpenedAt, &c.ClosedAt, &c.CreatedAt, &c.UpdatedAt,
 	); err != nil {
 		return domain.Check{}, err
@@ -336,6 +351,7 @@ func scanCheck(s interface {
 	c.Status = domain.CheckStatus(status)
 	c.OpenedByKind = domain.OpenedByKind(openedByKind)
 	c.Source = domain.Source(source)
+	c.ServiceType = domain.ServiceType(serviceType)
 	return c, nil
 }
 

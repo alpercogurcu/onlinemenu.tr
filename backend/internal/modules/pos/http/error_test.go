@@ -105,6 +105,30 @@ func TestHandler_Error_MapsSentinels(t *testing.T) {
 			wantBodyCode: codeCheckHasPayments,
 		},
 		{
+			name:         "invalid service type",
+			err:          fmt.Errorf("pos/service/check: open: %w", service.ErrInvalidServiceType),
+			wantCode:     http.StatusUnprocessableEntity,
+			wantBodyCode: codeInvalidServiceType,
+		},
+		{
+			name:         "table not allowed for takeaway/delivery",
+			err:          fmt.Errorf("pos/service/check: open: %w", service.ErrTableNotAllowed),
+			wantCode:     http.StatusUnprocessableEntity,
+			wantBodyCode: codeTableNotAllowed,
+		},
+		{
+			name:         "customer name required",
+			err:          fmt.Errorf("pos/service/check: open: %w", service.ErrCustomerNameRequired),
+			wantCode:     http.StatusUnprocessableEntity,
+			wantBodyCode: codeCustomerNameRequired,
+		},
+		{
+			name:         "customer phone required for delivery",
+			err:          fmt.Errorf("pos/service/check: open: %w", service.ErrCustomerPhoneRequired),
+			wantCode:     http.StatusUnprocessableEntity,
+			wantBodyCode: codeCustomerPhoneRequired,
+		},
+		{
 			name:     "unmapped error",
 			err:      fmt.Errorf("pos/service/check: some unexpected failure"),
 			wantCode: http.StatusInternalServerError,

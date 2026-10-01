@@ -105,6 +105,27 @@ func (s Source) Valid() bool {
 	return false
 }
 
+// ServiceType discriminates how a check's sale is fulfilled: at a table
+// (dine_in), picked up by the customer (takeaway / "gel al") or delivered to
+// them (delivery / "paket"). It is a property of the CHECK, not of its
+// orders — OrderChannel describes one order's fulfillment and predates this
+// type; the check-level value is what the counter opens the adisyon as.
+type ServiceType string
+
+const (
+	ServiceTypeDineIn   ServiceType = "dine_in"
+	ServiceTypeTakeaway ServiceType = "takeaway"
+	ServiceTypeDelivery ServiceType = "delivery"
+)
+
+func (s ServiceType) Valid() bool {
+	switch s {
+	case ServiceTypeDineIn, ServiceTypeTakeaway, ServiceTypeDelivery:
+		return true
+	}
+	return false
+}
+
 // Check represents a dine-in table session (adisyon) that accumulates orders.
 type Check struct {
 	ID uuid.UUID
@@ -122,6 +143,19 @@ type Check struct {
 	// domain.Check{} directly, bypassing that default).
 	Pax    int
 	Status CheckStatus
+	// ServiceType defaults to ServiceTypeDineIn when left empty — see
+	// CheckRepo.Create, which normalizes it the same way it does Source, so
+	// a zero-value Go string never hits the column's CHECK constraint. The
+	// takeaway/delivery business rules (no table_id, customer_name required,
+	// customer_phone required for delivery, table_label filled from
+	// customer_name) live in CheckService.Open.
+	ServiceType ServiceType
+	// CustomerName/Phone/Address are empty for dine-in checks; requiredness
+	// for takeaway/delivery is enforced in CheckService.Open, not here or in
+	// the DB (see pos/000010 for why no CHECK constraint).
+	CustomerName    string
+	CustomerPhone   string
+	CustomerAddress string
 	// OpenedBy is nil exactly when OpenedByKind is OpenedByKindGuestQR; the
 	// checks_opened_by_kind_chk constraint enforces that pairing in the DB.
 	OpenedBy     *uuid.UUID

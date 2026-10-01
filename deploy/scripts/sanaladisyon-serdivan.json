@@ -1,0 +1,67 @@
+{
+  "source": "sanaladisyon.com/panel — Diver Street Food (Merkez) = Serdivan, 2026-10-01",
+  "kdv_percent": 10,
+  "categories": [
+    { "legacy": "ATIȘTIRMALIK", "name": "Atıştırmalıklar", "products": [
+      { "legacy": "SOĞAN HALKASI10 adet", "name": "Soğan Halkası (10 adet)", "price": 160 },
+      { "legacy": "HOT CHİCKS", "name": "Hot Chicks", "price": 250 },
+      { "legacy": "TENDERS TACO", "name": "Tenders Taco", "price": 250 },
+      { "legacy": "DEEP DIVER BOX", "name": "Deep Diver Box", "price": 385 },
+      { "legacy": "EXTRA TRUFFLE", "name": "Extra Truffle", "price": 50 },
+      { "legacy": "BBQ WINGS", "name": "BBQ Wings", "price": 300 },
+      { "legacy": "TRÜFLÜ PATATES KIZARTMASI", "name": "Trüflü Patates Kızartması", "price": 225 },
+      { "legacy": "FRIES FRIES BABY", "name": "Fries Fries Baby", "price": 250 },
+      { "legacy": "CHICKEN TENDERS", "name": "Chicken Tenders", "price": 300 },
+      { "legacy": "PATATES KIZARTMASI", "name": "Patates Kızartması", "price": 160 }
+    ]},
+    { "legacy": "BURGERLER", "name": "Burgerler", "products": [
+      { "legacy": "DOUBLE LA SMASH", "name": "Double LA Smash", "price": 570 },
+      { "legacy": "DOUBLE UMAMİ BURGER", "name": "Double Umami Burger", "price": 570 },
+      { "legacy": "UMAMİ BURGER", "name": "UMAMİ BURGER", "existing": true, "price": 450 },
+      { "legacy": "VEGETERIAN BURGER", "name": "Vejeteryan Burger", "existing": true, "price": 335 },
+      { "legacy": "HONEY MUSTARD TAVUK BURGER", "name": "Honey Mustard Tavuk Burger", "existing": true, "price": 400 },
+      { "legacy": "KIDS TAVUK", "name": "Kıds Tavuk Burger", "existing": true, "price": 335 },
+      { "legacy": "DOUBLE KOREAN", "name": "Double Korean", "price": 550 },
+      { "legacy": "DOUBLE AMERİCAN SMASH", "name": "Double American Smash", "price": 570 },
+      { "legacy": "DOUBLE BBQ", "name": "Double BBQ", "price": 570 },
+      { "legacy": "KOREAN CHEESE BURGER", "name": "Korean Cheese Burger", "existing": true, "price": 450 },
+      { "legacy": "AMERICAN SMASH BURGER", "name": "American Smash Burger", "existing": true, "price": 470 },
+      { "legacy": "TEXAS CHIPOTLE T. BURGER", "name": "Chipotle Tavuk Burger", "existing": true, "price": 400 },
+      { "legacy": "HAMBURGER", "name": "Klasik hamburger", "existing": true, "price": 430 },
+      { "legacy": "LA SMASH BURGERJDIJ", "name": "LA Smash", "existing": true, "price": 470, "note": "legacy adında veri girişi hatası (JDIJ)" },
+      { "legacy": "KIDS BURGER", "name": "Kıds Burger", "existing": true, "price": 335 },
+      { "legacy": "DOUBLE CHEESE BURGER", "name": "Double Cheese Burger", "existing": true, "price": 560 },
+      { "legacy": "NASHVILLE T. BURGER", "name": "Nashville Tavuk Burger", "existing": true, "price": 400 },
+      { "legacy": "KOREAN T. BURGER", "name": "Korean Tavuk Burger", "existing": true, "price": 400 },
+      { "legacy": "BBQ CHEESE BURGER", "name": "BBQ Cheese Burger", "existing": true, "price": 450 },
+      { "legacy": "CHEESE BURGER", "name": "Cheese Burger", "existing": true, "price": 440 },
+      { "legacy": "DOUBLE MUSHROOM BURGER", "name": "Double Mushroom Burger", "existing": true, "price": 570 },
+      { "legacy": "MUSHROOM BURGER", "name": "Mushroom Burger", "existing": true, "price": 450 },
+      { "legacy": "DEEP HONEY T. BURGER", "name": "Deep Honey Tavuk Burger", "existing": true, "price": 400 }
+    ]},
+    { "legacy": "İÇECEKLER", "name": "İçecekler", "products": [
+      { "legacy": "BÜYÜK AYRAN", "name": "Büyük Ayran", "price": 90 },
+      { "legacy": "SARIYER", "name": "Sarıyer", "price": 90 },
+      { "legacy": "FANTA", "name": "Fanta", "price": 90 },
+      { "legacy": "SODA", "name": "Soda", "price": 50 },
+      { "legacy": "ICE TEA", "name": "Ice Tea", "price": 90 },
+      { "legacy": "SPRITE", "name": "Sprite", "price": 90 },
+      { "legacy": "PEPSI MAX", "name": "Pepsi Max", "price": 90 },
+      { "legacy": "SU", "name": "Su", "price": 35 },
+      { "legacy": "ÖZERHISAR", "name": "Özerhisar", "price": 90 },
+      { "legacy": "AYRAN", "name": "Ayran", "price": 50 },
+      { "legacy": "PEPSI", "name": "Pepsi", "price": 90 }
+    ]},
+    { "legacy": "SOSLAR", "name": "Soslar & Ekstralar", "products": [
+      { "legacy": "ÇORBA +Su", "name": "Çorba (+su)", "price": 85 },
+      { "legacy": "Paket", "name": "Paket", "price": 10, "guest_menu": false, "note": "paket ücreti — QR menüde gösterilmez" },
+      { "legacy": "İLAVE SOS", "name": "İlave Sos", "price": 40 }
+    ]}
+  ],
+  "zones": [
+    { "name": "İç Mekan", "tables": ["1","2","3","4","5","6","7","8","9","10"], "qr": true },
+    { "name": "Yan Taraf", "tables": ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","11Y","12Y","13Y","14Y","15Y","16Y","17Y","18Y","19Y","20Y"], "qr": true, "note": "legacy'de mükerrer iki YAN TARAF bölgesi vardı, teke indirildi; '14 Y' gibi boşluklu adlar normalize edildi" },
+    { "name": "Paket", "tables": ["Paket 1","Paket 2","Paket 3","Paket 4"], "qr": false },
+    { "name": "Gel Al", "tables": ["Gel Al 1","Gel Al 2","Gel Al 3","Gel Al 4","Gel Al 5","Gel Al 6","Gel Al 7","Gel Al 8"], "qr": false }
+  ]
+}

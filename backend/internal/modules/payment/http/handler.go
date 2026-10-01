@@ -393,10 +393,11 @@ func (h *Handler) registerSaleError(w http.ResponseWriter, err error) {
 	case errors.Is(err, pub.ErrNoCashSessionOpen):
 		// 409, not 500: the branch's drawer state is a caller-actionable
 		// conflict, not a server fault (follows the same rationale as
-		// ErrCashSessionAlreadyOpen elsewhere). The message is written for the
-		// cashier, not a developer: they need to know to open the drawer
-		// before they can take cash.
-		http.Error(w, "bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı", http.StatusConflict)
+		// ErrCashSessionAlreadyOpen elsewhere). JSON with a code, not a plain
+		// http.Error: a code-less 409 falls into POS clients' generic
+		// "başka bir işlemle çakışıyor" bucket, which told the cashier to
+		// refresh instead of to open the drawer (seen live, 2026-10-01).
+		respondError(w, http.StatusConflict, codeNoCashSessionOpen, "bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı")
 	case errors.Is(err, pub.ErrInvalidInput):
 		// 422, not 500. Until now this endpoint had no sentinel mapping at
 		// all, so an unknown payment method or a non-positive amount was
@@ -417,6 +418,7 @@ const (
 	codeCheckNotOpen        = "check_not_open"
 	codeCheckBranchMismatch = "check_branch_mismatch"
 	codeCheckNotFound       = "check_not_found"
+	codeNoCashSessionOpen   = "no_cash_session_open"
 )
 
 type errorResponse struct {

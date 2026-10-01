@@ -44,6 +44,7 @@ export type ApiErrorCode =
   | 'table_not_found'
   | 'price_mismatch'
   | 'invalid_order_line'
+  | 'no_cash_session_open'
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'fiscal_pending',
@@ -60,6 +61,7 @@ const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'table_not_found',
   'price_mismatch',
   'invalid_order_line',
+  'no_cash_session_open',
 ])
 
 /**
@@ -115,6 +117,11 @@ export function describeError(err: unknown): string {
       return 'Sipariş satırlarından biri geçersiz — satırları kontrol edin.'
     case 'invalid_transition':
       return 'Bu adisyon/sipariş başka bir işlemle çakışıyor — sayfayı yenileyin.'
+    case 'no_cash_session_open':
+      // Nakit kasa çekmecesine girer, kart girmez: kart tahsilatı oturum
+      // istemezken nakitin reddedilmesi kasiyeri şaşırtır — mesaj çözümü
+      // (kasa açılışı) doğrudan söylemeli, "yenileyin" dememeli.
+      return 'Bu şubede açık kasa oturumu yok — nakit almak için önce kasayı açın (açılış sayımı).'
     case 'session_scoped_principal':
       // ADR-DATA-008 PIN akışı: this principal was itself issued via a
       // PIN-switch, not a fresh Keycloak login — a different situation from

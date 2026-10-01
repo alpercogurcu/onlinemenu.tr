@@ -59,6 +59,8 @@ function conflict(status: number, code: string): string {
 describe('describeError — check moves', () => {
   it.each([
     { code: 'check_not_open', status: 409, want: 'Bu adisyon artık açık değil — liste yenilendi, işlemi yeniden başlatın.' },
+    // Kart oturum istemez, nakit ister: kasiyer çözümü (kasa açılışı) mesajdan okumalı.
+    { code: 'no_cash_session_open', status: 409, want: 'Bu şubede açık kasa oturumu yok — nakit almak için önce kasayı açın (açılış sayımı).' },
     { code: 'check_branch_mismatch', status: 409, want: 'Bu adisyon başka bir şubeye ait — bu istasyondan işlem yapılamaz.' },
     { code: 'payments_present', status: 409, want: 'Ödemesi alınmış adisyon birleştirilemez — önce ödemesi olan adisyonu kapatın.' },
     { code: 'item_already_paid', status: 409, want: 'Seçilen kalemler için ödeme alınmış — ödenmiş kalemler taşınamaz.' },

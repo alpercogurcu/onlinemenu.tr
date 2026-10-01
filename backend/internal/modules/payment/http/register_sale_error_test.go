@@ -47,9 +47,10 @@ func TestRegisterSaleError_MapsSentinels(t *testing.T) {
 			wantBodyCode: codeCheckNotFound,
 		},
 		{
-			name:       "no cash session open",
-			err:        fmt.Errorf("payment/service: register sale: %w", pub.ErrNoCashSessionOpen),
-			wantStatus: http.StatusConflict,
+			name:         "no cash session open",
+			err:          fmt.Errorf("payment/service: register sale: %w", pub.ErrNoCashSessionOpen),
+			wantStatus:   http.StatusConflict,
+			wantBodyCode: codeNoCashSessionOpen,
 		},
 		{
 			name:       "invalid input",

@@ -27,6 +27,18 @@ vi.mock("@/lib/api", () => ({
   },
 }))
 
+// OrderScreen reads window.matchMedia through useIsMobile (side-layout
+// fallback); jsdom has no implementation. innerWidth defaults to 1024, so
+// these tests run as "tablet".
+vi.stubGlobal(
+  "matchMedia",
+  vi.fn().mockImplementation(() => ({
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })),
+)
+
 const BRANCH = "b1"
 const TABLE = { id: "t1", branch_id: BRANCH, zone_id: "z1", name: "Masa 4", capacity: 4, status: "empty", layout_position: null, is_active: true, active_check_id: null }
 const stamp = { tenant_id: "tn", created_at: "", updated_at: "" }
@@ -43,6 +55,8 @@ const SERVICE_CHECK = {
 function routeGet(url: string) {
   const map: Record<string, unknown> = {
     "/api/v1/pos/tables": [{ zone_id: "z1", zone_name: "Salon", floor: 0, tables: [TABLE] }],
+    // No layout row yet -> the screen must treat it as "top".
+    "/api/v1/pos/branch-settings": {},
     "/api/v1/pos/checks/svc1": SERVICE_CHECK,
     "/api/v1/pos/checks/svc1/orders": [],
     "/api/v1/catalog/categories": [{ ...stamp, id: "cat", name: "Ana Yemekler", description: "", sort_order: 1, is_active: true }],
@@ -119,6 +133,7 @@ describe("OrderScreen", { timeout: 20_000 }, () => {
       "/api/v1/catalog/categories",
       "/api/v1/catalog/products",
       "/api/v1/catalog/products/modifier-groups",
+      "/api/v1/pos/branch-settings",
       "/api/v1/pos/tables",
     ])
   })

@@ -22,7 +22,7 @@ interface CategoryChipsProps {
 export function CategoryChips({ categories, activeId, onSelect }: CategoryChipsProps) {
   const t = useTranslations("posOrder")
   return (
-    <div className="bg-background sticky top-0 z-10 -mx-4 border-b px-4 py-2">
+    <div data-testid="category-chips" className="bg-background sticky top-0 z-10 -mx-4 border-b px-4 py-2">
       <div className="relative">
         <div
           role="tablist"
@@ -53,6 +53,47 @@ export function CategoryChips({ categories, activeId, onSelect }: CategoryChipsP
           className="from-background pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l to-transparent"
         />
       </div>
+    </div>
+  )
+}
+
+/**
+ * Side-layout variant of the category strip (waiter_category_layout = 'side',
+ * the Sanal Adisyon habit): a fixed ~200px vertical rail that shows a crowded
+ * menu's categories in one glance instead of a horizontal scroll. Every item
+ * keeps the 48px touch target, and the active category gets the same solid
+ * fill as the active chip so the two layouts read the same. The rail is
+ * sticky with its own vertical scroll, so long category lists never push the
+ * product grid off screen.
+ */
+export function CategoryRail({ categories, activeId, onSelect }: CategoryChipsProps) {
+  const t = useTranslations("posOrder")
+  return (
+    <div
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label={t("categoriesAria")}
+      data-testid="category-rail"
+      className="bg-card sticky top-4 flex max-h-[calc(100dvh-7rem)] w-[200px] shrink-0 flex-col gap-1.5 self-start overflow-y-auto rounded-2xl border-2 p-2"
+    >
+      {categories.map((category) => {
+        const active = category.id === activeId
+        return (
+          <button
+            key={category.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onSelect(category.id)}
+            className={cn(
+              "flex min-h-12 shrink-0 items-center rounded-xl px-3 text-left text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              active ? "bg-foreground text-background" : "text-foreground hover:bg-muted",
+            )}
+          >
+            <span className="min-w-0 break-words">{category.name}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -21,12 +21,13 @@ import {
 import { CartBar, SendButton, SendError } from "@/components/pos/order/cart-bar"
 import { CartLines } from "@/components/pos/order/cart-lines"
 import { OptionPanel } from "@/components/pos/order/option-panel"
-import { CategoryChips, ProductGrid } from "@/components/pos/order/product-grid"
+import { CategoryChips, CategoryRail, ProductGrid } from "@/components/pos/order/product-grid"
 import { MAX_SEATS, SeatPicker } from "@/components/pos/order/seat-picker"
 import { SentItems } from "@/components/pos/order/sent-items"
 import { TouchConfirm, TouchSheet } from "@/components/pos/order/touch-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { useCheck, useCheckOrders, useTables } from "@/hooks/use-pos"
 import {
   useBranchProducts,
@@ -36,6 +37,7 @@ import {
   usePlaceTableOrder,
   useProductOptions,
   useRefreshOrderCatalog,
+  useWaiterCategoryLayout,
 } from "@/hooks/use-pos-order"
 import {
   describeOrderError,
@@ -93,6 +95,13 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
   const serviceCheck = serviceMode ? serviceCheckQuery.data : undefined
   const categoriesQuery = useOrderCategories()
   const productsQuery = useBranchProducts(branchId)
+  const layoutPreference = useWaiterCategoryLayout(branchId)
+  const isMobile = useIsMobile()
+  // Design call: below md (768px — useIsMobile's own threshold) the ~200px
+  // rail would strangle the product grid down to a single usable column, so a
+  // 'side' preference silently falls back to the top chips on phones. The
+  // preference is about one-glance reach on tablets, not phones.
+  const sideLayout = layoutPreference === "side" && !isMobile
   const refreshCatalog = useRefreshOrderCatalog()
   const openCheck = useOpenTableCheck()
   const placeOrder = usePlaceTableOrder()
@@ -330,6 +339,25 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
   const catalogLoading = productsQuery.isLoading || categoriesQuery.isLoading
   const showCleaning = !serviceMode && table?.status === "cleaning" && !checkId
 
+  // Shared by both category layouts; only where the category picker sits and
+  // how the remaining space is divided differs between 'top' and 'side'.
+  const productArea =
+    visible.length === 0 ? (
+      <p className="py-8 text-center text-base text-muted-foreground">{t("noProducts")}</p>
+    ) : (
+      <ProductGrid
+        products={visible}
+        hasOptions={(id) => {
+          const lookup = optionsFor(id)
+          return lookup?.kind === "ready" ? lookup.groups.length > 0 : undefined
+        }}
+        quantityInCart={(id) => quantities.get(id) ?? 0}
+        resolvingId={resolvingId}
+        flashId={flashId}
+        onTap={(product) => void handleTap(product)}
+      />
+    )
+
   return (
     <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-6">
       {/* Phone/tablet: fill the viewport below the app header (4rem) and the
@@ -393,24 +421,18 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
               <Skeleton key={i} className="h-24 rounded-2xl" />
             ))}
           </div>
+        ) : sideLayout ? (
+          // waiter_category_layout = 'side' (+ wide enough screen): the rail
+          // sits left of the grid, which with the lg cart aside makes the
+          // three-pane tablet layout — categories | products | cart.
+          <div className="flex items-start gap-4">
+            <CategoryRail categories={categories} activeId={categoryId} onSelect={setActiveCategory} />
+            <div className="min-w-0 flex-1">{productArea}</div>
+          </div>
         ) : (
           <>
             <CategoryChips categories={categories} activeId={categoryId} onSelect={setActiveCategory} />
-            {visible.length === 0 ? (
-              <p className="py-8 text-center text-base text-muted-foreground">{t("noProducts")}</p>
-            ) : (
-              <ProductGrid
-                products={visible}
-                hasOptions={(id) => {
-                  const lookup = optionsFor(id)
-                  return lookup?.kind === "ready" ? lookup.groups.length > 0 : undefined
-                }}
-                quantityInCart={(id) => quantities.get(id) ?? 0}
-                resolvingId={resolvingId}
-                flashId={flashId}
-                onTap={(product) => void handleTap(product)}
-              />
-            )}
+            {productArea}
           </>
         )}
 

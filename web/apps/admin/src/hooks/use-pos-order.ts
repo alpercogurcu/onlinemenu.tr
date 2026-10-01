@@ -9,7 +9,7 @@ import {
   type PlaceOrderBody,
   type ProductOptionsWire,
 } from "@/lib/pos-order"
-import type { Category, Check, Order, OrderStatus, Product } from "@/types"
+import type { Category, Check, Order, OrderStatus, Product, WaiterCategoryLayout } from "@/types"
 
 // The web order screen (/pos/order) reads the catalog in the shape a waiter
 // needs, not the shape the catalog editor needs, so it has its own hooks:
@@ -22,6 +22,43 @@ import type { Category, Check, Order, OrderStatus, Product } from "@/types"
 //   must never wait on the network. The server re-prices every line at order
 //   time, so a stale cache costs a rejected order, never a wrong charge.
 const CATALOG_STALE_MS = 2 * 60_000
+
+interface PosBranchSettingsWire {
+  waiter_category_layout?: string
+}
+
+// Branch settings change rarely (an admin flips them once); longer than the
+// catalog's staleTime so navigating table -> order -> table never refetches.
+const BRANCH_SETTINGS_STALE_MS = 5 * 60_000
+
+/**
+ * The branch's category layout for the waiter order screen
+ * (GET /pos/branch-settings, permission pos.check.read — every waiter has it).
+ *
+ * Fail-open by design: the layout is cosmetic, so a missing endpoint (it ships
+ * separately from this screen), a network error, an absent row or an unknown
+ * value all fall back to the default top chips instead of surfacing an error.
+ * Read once when the screen opens; branchId in the key refetches on branch
+ * switch.
+ */
+export function useWaiterCategoryLayout(branchId: string): WaiterCategoryLayout {
+  const query = useQuery({
+    queryKey: ["pos-order", "branch-settings", branchId],
+    queryFn: async (): Promise<WaiterCategoryLayout> => {
+      try {
+        const { data } = await api.get<PosBranchSettingsWire>("/api/v1/pos/branch-settings", {
+          params: { branch_id: branchId },
+        })
+        return data?.waiter_category_layout === "side" ? "side" : "top"
+      } catch {
+        return "top"
+      }
+    },
+    enabled: branchId !== "",
+    staleTime: BRANCH_SETTINGS_STALE_MS,
+  })
+  return query.data ?? "top"
+}
 
 export function useOrderCategories() {
   return useQuery({

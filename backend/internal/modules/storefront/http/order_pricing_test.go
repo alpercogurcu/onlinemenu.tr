@@ -204,6 +204,38 @@ func TestPlaceOrder_ProductNotOrderableHere_Returns422(t *testing.T) {
 	assert.Contains(t, problem.Detail, "sipariş edilemiyor")
 }
 
+// TestPlaceOrder_OrderingDisabled_Returns409WithDistinctCode is the transport
+// half of the branch kill switch: when the admin turned QR ordering off, a
+// submitted cart answers 409 ordering_disabled — before any pricing or pos
+// call — and the diner is pointed at the staff, not told to retry.
+func TestPlaceOrder_OrderingDisabled_Returns409WithDistinctCode(t *testing.T) {
+	productID := uuid.New()
+	deps := &testDeps{
+		menuReader: &stubMenuReader{priced: []catalogpub.PricedLine{{
+			ProductID: productID, ProductName: "Çay", UnitPriceAmount: 1000, Quantity: 1,
+		}}},
+		gate: &stubOrderingGate{enabled: false},
+	}
+	router := newPublicRouter(t, deps)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/public/v1/orders",
+		strings.NewReader(`{"lines":[{"product_id":"`+productID.String()+`","quantity":1}]}`))
+	req.AddCookie(guestCookie(t, deps.signer))
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+
+	var problem struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &problem))
+	assert.Equal(t, "ordering_disabled", problem.Code)
+	assert.Empty(t, deps.orders.gotRequest.Lines, "no order may reach pos while ordering is off")
+	assert.Empty(t, deps.menuReader.gotLines, "the cart must be refused before it is priced")
+}
+
 func TestPlaceOrder_EmptyCart_Returns422(t *testing.T) {
 	deps := &testDeps{}
 	router := newPublicRouter(t, deps)

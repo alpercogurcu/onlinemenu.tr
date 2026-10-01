@@ -64,6 +64,7 @@ type PublicHandler struct {
 	sessions *service.SessionService
 	menu     *service.MenuService
 	orders   *service.OrderService
+	gate     service.OrderingGate
 	signer   *auth.GuestTokenSigner
 	cfg      Config
 	logger   *zap.Logger
@@ -76,6 +77,7 @@ type PublicParams struct {
 	Sessions *service.SessionService
 	Menu     *service.MenuService
 	Orders   *service.OrderService
+	Gate     service.OrderingGate
 	Signer   *auth.GuestTokenSigner
 	Cache    *redis.Client
 	Config   Config `optional:"true"`
@@ -102,6 +104,7 @@ func NewPublicHandler(p PublicParams) *PublicHandlerWithCache {
 			sessions: p.Sessions,
 			menu:     p.Menu,
 			orders:   p.Orders,
+			gate:     p.Gate,
 			signer:   p.Signer,
 			cfg:      cfg,
 			logger:   p.Logger,
@@ -212,8 +215,17 @@ func (h *PublicHandler) getMenu(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ordering_enabled rides on the menu response rather than a second
+	// endpoint: the menu app needs both on the same screen, and a separate
+	// call could observe the flag and the menu across an admin flip.
+	orderingEnabled, err := h.gate.OrderingEnabled(r.Context(), guest.TenantID, guest.BranchID)
+	if err != nil {
+		h.internal(w, "get menu ordering gate", err)
+		return
+	}
+
 	w.Header().Set("Cache-Control", "private, max-age=30")
-	writeJSON(w, http.StatusOK, toMenuResponse(categories))
+	writeJSON(w, http.StatusOK, toMenuResponse(categories, orderingEnabled))
 }
 
 // placeOrder re-prices the submitted cart and puts it on the table's check.
@@ -348,6 +360,9 @@ func (h *PublicHandler) placementError(w http.ResponseWriter, err error) {
 	case errors.Is(err, pospub.ErrTableBranchMismatch), errors.Is(err, pospub.ErrTableNotFound):
 		writeProblem(w, http.StatusConflict, codeTableMismatch,
 			"Bu QR kod artık bu masaya ait değil. Lütfen personele danışın.")
+	case errors.Is(err, pub.ErrOrderingDisabled):
+		writeProblem(w, http.StatusConflict, codeOrderingOff,
+			"Bu şubede QR ile sipariş şu anda kapalı. Lütfen siparişinizi personele iletin.")
 	default:
 		h.internal(w, "place order", err)
 	}

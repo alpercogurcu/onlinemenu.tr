@@ -70,6 +70,7 @@ func newOrderService(catalog *fakeCatalog, pos *fakePos) *service.OrderService {
 		Catalog: catalog,
 		Placer:  pos,
 		Orders:  pos,
+		Gate:    &fakeGate{enabled: true},
 		Logger:  zap.NewNop(),
 	})
 }

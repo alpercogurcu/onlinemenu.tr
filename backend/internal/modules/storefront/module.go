@@ -26,10 +26,16 @@ var Module = fx.Module("storefront",
 	fx.Provide(
 		repo.NewQRCodeRepo,
 		repo.NewGuestOrderRepo,
+		repo.NewBranchSettingsRepo,
 		service.NewQRService,
 		service.NewSessionService,
 		service.NewMenuService,
 		service.NewOrderService,
+		service.NewBranchSettingsService,
+		// The guest surface (order placement, public menu) depends on the
+		// narrow OrderingGate view of the settings service, not on the full
+		// admin type — the same narrowing catalog/public applies to the menu.
+		func(s *service.BranchSettingsService) service.OrderingGate { return s },
 		storefronthttp.NewPublicHandler,
 		storefronthttp.NewAdminHandler,
 	),

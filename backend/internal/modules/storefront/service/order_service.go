@@ -29,6 +29,7 @@ type OrderService struct {
 	placer      pospub.GuestOrderPlacer
 	orders      pospub.GuestOrderReader
 	guestOrders *repo.GuestOrderRepo
+	gate        OrderingGate
 	logger      *zap.Logger
 }
 
@@ -41,6 +42,7 @@ type OrderParams struct {
 	Placer      pospub.GuestOrderPlacer
 	Orders      pospub.GuestOrderReader
 	GuestOrders *repo.GuestOrderRepo
+	Gate        OrderingGate
 	Logger      *zap.Logger
 }
 
@@ -51,6 +53,7 @@ func NewOrderService(p OrderParams) *OrderService {
 		placer:      p.Placer,
 		orders:      p.Orders,
 		guestOrders: p.GuestOrders,
+		gate:        p.Gate,
 		logger:      p.Logger,
 	}
 }
@@ -99,6 +102,19 @@ type GuestOrderStatusItem struct {
 func (s *OrderService) Place(ctx context.Context, guest auth.GuestSession, cart domain.GuestCart) (PlacedOrder, error) {
 	if len(cart.Lines) == 0 {
 		return PlacedOrder{}, &pub.ValidationError{Msg: "sepet boş"}
+	}
+
+	// The gate is checked before any pricing work: a disabled branch must
+	// refuse the cart, not price it. A switch flipped between this read and
+	// the placement commit is an accepted race (the admin action is a coarse
+	// "stop taking orders", not a fence) — what matters is that the decision
+	// is read inside its own tenant transaction, never cached per process.
+	enabled, err := s.gate.OrderingEnabled(ctx, guest.TenantID, guest.BranchID)
+	if err != nil {
+		return PlacedOrder{}, fmt.Errorf("storefront/service/order: ordering gate: %w", err)
+	}
+	if !enabled {
+		return PlacedOrder{}, pub.ErrOrderingDisabled
 	}
 
 	lines := make([]catalogpub.CartLine, len(cart.Lines))

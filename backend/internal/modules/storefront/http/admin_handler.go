@@ -23,23 +23,25 @@ import (
 // session there) and sharing a receiver would make it easy to mount a staff
 // route on the public router by accident.
 type AdminHandler struct {
-	qr     *service.QRService
-	logger *zap.Logger
-	engine *auth.Engine
+	qr       *service.QRService
+	settings *service.BranchSettingsService
+	logger   *zap.Logger
+	engine   *auth.Engine
 }
 
 // AdminParams groups fx-injected dependencies.
 type AdminParams struct {
 	fx.In
 
-	QR     *service.QRService
-	Logger *zap.Logger
-	Engine *auth.Engine
+	QR       *service.QRService
+	Settings *service.BranchSettingsService
+	Logger   *zap.Logger
+	Engine   *auth.Engine
 }
 
 // NewAdminHandler builds the staff-facing QR handler.
 func NewAdminHandler(p AdminParams) *AdminHandler {
-	return &AdminHandler{qr: p.QR, logger: p.Logger, engine: p.Engine}
+	return &AdminHandler{qr: p.QR, settings: p.Settings, logger: p.Logger, engine: p.Engine}
 }
 
 // permit builds per-route OPA authorization middleware (ADR-AUTH-001, layer 2).
@@ -67,7 +69,66 @@ func (h *AdminHandler) RegisterRoutes(r *chi.Mux) {
 		r.With(h.permit("storefront.qr.read")).Get("/qr-codes/{id}", h.getQRCode)
 		r.With(h.permit("storefront.qr.manage")).Post("/qr-codes/{id}/revoke", h.revokeQRCode)
 		r.With(h.permit("storefront.qr.manage")).Post("/qr-codes/{id}/rotate", h.rotateQRCode)
+
+		// Branch settings reuse the QR permission pair rather than minting a
+		// third action: seeing whether ordering is on is the same counter-staff
+		// question as "which table has a code", and flipping it off retires the
+		// branch's whole QR ordering surface — a management act of exactly the
+		// weight revoke/rotate carry.
+		r.With(h.permit("storefront.qr.read")).Get("/settings", h.getSettings)
+		r.With(h.permit("storefront.qr.manage")).Put("/settings", h.putSettings)
 	})
+}
+
+func (h *AdminHandler) getSettings(w http.ResponseWriter, r *http.Request) {
+	p, ok := requireAdminPrincipal(w, r)
+	if !ok {
+		return
+	}
+	branchID, err := uuid.Parse(r.URL.Query().Get("branch_id"))
+	if err != nil {
+		http.Error(w, "branch_id query parameter is required", http.StatusUnprocessableEntity)
+		return
+	}
+
+	settings, err := h.settings.Get(r.Context(), p.TenantID, p, branchID)
+	if err != nil {
+		h.adminError(w, err)
+		return
+	}
+	respondAdminJSON(w, http.StatusOK, toBranchSettingsResponse(settings))
+}
+
+func (h *AdminHandler) putSettings(w http.ResponseWriter, r *http.Request) {
+	p, ok := requireAdminPrincipal(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		BranchID uuid.UUID `json:"branch_id"`
+		// A pointer so "field missing" is distinguishable from "false": a PUT
+		// that forgot the flag must not silently switch ordering off.
+		OrderingEnabled *bool `json:"ordering_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.BranchID == uuid.Nil || req.OrderingEnabled == nil {
+		http.Error(w, "branch_id and ordering_enabled are required", http.StatusUnprocessableEntity)
+		return
+	}
+
+	settings, err := h.settings.Set(r.Context(), p.TenantID, p, service.SetRequest{
+		BranchID:        req.BranchID,
+		OrderingEnabled: *req.OrderingEnabled,
+		UpdatedBy:       p.PersonID,
+	})
+	if err != nil {
+		h.adminError(w, err)
+		return
+	}
+	respondAdminJSON(w, http.StatusOK, toBranchSettingsResponse(settings))
 }
 
 func (h *AdminHandler) listQRCodes(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +303,18 @@ type issuedQRCodeResponse struct {
 
 func toIssuedQRCodeResponse(i service.IssuedQRCode) issuedQRCodeResponse {
 	return issuedQRCodeResponse{QRCode: toQRCodeResponse(i.Code), Token: i.RawToken}
+}
+
+// branchSettingsResponse is the wire shape of GET/PUT /settings. It carries
+// neither tenant_id nor audit fields: the caller already lives inside its
+// tenant, and the one thing the admin screen renders is the switch itself.
+type branchSettingsResponse struct {
+	BranchID        uuid.UUID `json:"branch_id"`
+	OrderingEnabled bool      `json:"ordering_enabled"`
+}
+
+func toBranchSettingsResponse(s domain.BranchSettings) branchSettingsResponse {
+	return branchSettingsResponse{BranchID: s.BranchID, OrderingEnabled: s.OrderingEnabled}
 }
 
 // ---------------------------------------------------------------------------

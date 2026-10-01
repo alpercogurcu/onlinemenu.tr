@@ -32,6 +32,7 @@ const (
 	codeTableNotReady  = "table_not_ready"
 	codeTableOccupied  = "table_occupied"
 	codeTableMismatch  = "table_branch_mismatch"
+	codeOrderingOff    = "ordering_disabled"
 	codeInternal       = "internal_error"
 )
 

@@ -115,7 +115,34 @@ func TestGetMenu_EmptyMenuSerializesAsEmptyArray(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"categories":[]}`, rec.Body.String())
+	assert.JSONEq(t, `{"categories":[],"ordering_enabled":true}`, rec.Body.String())
+}
+
+// TestGetMenu_OrderingDisabled_MenuStillServedWithFlagOff pins the "closed
+// but browsable" contract: a branch that switched QR ordering off still
+// serves the full menu (session and categories intact), and the only visible
+// difference is the top-level flag the menu app hides the cart behind.
+func TestGetMenu_OrderingDisabled_MenuStillServedWithFlagOff(t *testing.T) {
+	deps := &testDeps{
+		menuReader: &stubMenuReader{categories: sampleMenu()},
+		gate:       &stubOrderingGate{enabled: false},
+	}
+	router := newPublicRouter(t, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/public/v1/menu", nil)
+	req.AddCookie(guestCookie(t, deps.signer))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "a disabled branch must still serve its menu")
+
+	var resp struct {
+		Categories      []json.RawMessage `json:"categories"`
+		OrderingEnabled bool              `json:"ordering_enabled"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.OrderingEnabled)
+	assert.Len(t, resp.Categories, 1, "browsing stays intact while ordering is off")
 }
 
 func sampleMenu() []catalogpub.StorefrontCategory {

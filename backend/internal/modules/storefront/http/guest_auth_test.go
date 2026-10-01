@@ -72,9 +72,25 @@ func (s *stubOrderGateway) GetGuestOrder(_ context.Context, _, _ uuid.UUID) (pos
 	return s.view, nil
 }
 
+// stubOrderingGate stands in for the branch settings read. The default
+// (zero-value deps leave it nil, newPublicRouter fills in enabled=true)
+// mirrors production's default: no settings row means ordering is on.
+type stubOrderingGate struct {
+	enabled bool
+	err     error
+}
+
+func (s *stubOrderingGate) OrderingEnabled(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.enabled, nil
+}
+
 type testDeps struct {
 	menuReader *stubMenuReader
 	orders     *stubOrderGateway
+	gate       *stubOrderingGate
 	signer     *auth.GuestTokenSigner
 }
 
@@ -99,6 +115,9 @@ func newPublicRouter(t *testing.T, deps *testDeps) *chi.Mux {
 	if deps.orders == nil {
 		deps.orders = &stubOrderGateway{}
 	}
+	if deps.gate == nil {
+		deps.gate = &stubOrderingGate{enabled: true}
+	}
 	logger := zap.NewNop()
 
 	handler := storefronthttp.NewPublicHandler(storefronthttp.PublicParams{
@@ -110,8 +129,10 @@ func newPublicRouter(t *testing.T, deps *testDeps) *chi.Mux {
 			Catalog: deps.menuReader,
 			Placer:  deps.orders,
 			Orders:  deps.orders,
+			Gate:    deps.gate,
 			Logger:  logger,
 		}),
+		Gate:   deps.gate,
 		Signer: signer,
 		Cache:  cache,
 		Config: storefronthttp.Config{},

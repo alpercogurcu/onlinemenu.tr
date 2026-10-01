@@ -64,3 +64,38 @@ func TestIssuedQRCodeResponse_CarriesRawTokenOnly(t *testing.T) {
 	require.NotContains(t, body, issued.Code.TokenHash)
 	require.False(t, strings.Contains(body, "token_hash"), "issued response must not carry token_hash")
 }
+
+// TestBranchSettingsResponse_Shape pins the settings wire contract the admin
+// app is built against ({"branch_id":...,"ordering_enabled":...} and nothing
+// else): audit fields and tenant_id stay server-side, and a field added to
+// domain.BranchSettings must not leak here without a deliberate edit.
+func TestBranchSettingsResponse_Shape(t *testing.T) {
+	branchID := uuid.New()
+	settings := domain.BranchSettings{
+		TenantID:        uuid.New(),
+		BranchID:        branchID,
+		OrderingEnabled: false,
+		UpdatedBy:       uuid.New(),
+	}
+
+	raw, err := json.Marshal(toBranchSettingsResponse(settings))
+	require.NoError(t, err)
+
+	require.JSONEq(t,
+		`{"branch_id":"`+branchID.String()+`","ordering_enabled":false}`,
+		string(raw))
+	require.NotContains(t, string(raw), settings.TenantID.String())
+	require.NotContains(t, string(raw), settings.UpdatedBy.String())
+}
+
+// TestBranchSettingsResponse_DefaultIsEnabled keeps the "no row means on"
+// contract observable at the DTO level: the default the service falls back to
+// must serialize as ordering_enabled true.
+func TestBranchSettingsResponse_DefaultIsEnabled(t *testing.T) {
+	branchID := uuid.New()
+	raw, err := json.Marshal(toBranchSettingsResponse(domain.DefaultBranchSettings(uuid.New(), branchID)))
+	require.NoError(t, err)
+	require.JSONEq(t,
+		`{"branch_id":"`+branchID.String()+`","ordering_enabled":true}`,
+		string(raw))
+}

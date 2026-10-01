@@ -28,6 +28,12 @@ var ErrGuestForbidden = errors.New("storefront: forbidden for this guest session
 // a misconfiguration from the person able to fix it.
 var ErrBranchForbidden = errors.New("storefront: forbidden for this branch")
 
+// ErrOrderingDisabled is returned when a guest tries to place an order at a
+// branch whose admin switched QR ordering off. It maps to 409, not 403: the
+// session itself stays valid (the menu remains browsable by design), the
+// branch's current state just refuses this particular action.
+var ErrOrderingDisabled = errors.New("storefront: qr ordering disabled for this branch")
+
 // ErrNotFound is the generic not-visible sentinel for storefront resources.
 var ErrNotFound = errors.New("storefront: not found")
 

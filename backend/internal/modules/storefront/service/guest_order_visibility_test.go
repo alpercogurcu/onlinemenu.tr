@@ -112,6 +112,7 @@ func placeFor(t *testing.T, guest auth.GuestSession, reader *mapOrderReader, nam
 		Placer:      placer,
 		Orders:      reader,
 		GuestOrders: repo.NewGuestOrderRepo(),
+		Gate:        &fakeGate{enabled: true},
 		Logger:      zap.NewNop(),
 	})
 
@@ -137,6 +138,7 @@ func readerService(reader *mapOrderReader) *service.OrderService {
 		Placer:      &linkingPlacer{},
 		Orders:      reader,
 		GuestOrders: repo.NewGuestOrderRepo(),
+		Gate:        &fakeGate{enabled: true},
 		Logger:      zap.NewNop(),
 	})
 }

@@ -43,8 +43,13 @@ type sessionResponse struct {
 // Menu
 // ---------------------------------------------------------------------------
 
+// menuResponse's OrderingEnabled tells the menu app whether to render the
+// cart at all: when false the diner may still browse (the session and the
+// menu stay live by design), but POST /orders would answer 409
+// ordering_disabled, so the client hides the submission path up front.
 type menuResponse struct {
-	Categories []menuCategoryResponse `json:"categories"`
+	Categories      []menuCategoryResponse `json:"categories"`
+	OrderingEnabled bool                   `json:"ordering_enabled"`
 }
 
 // menuCategoryResponse's Name is empty for the synthetic "uncategorised"
@@ -89,8 +94,11 @@ type menuModifierResponse struct {
 	PriceDelta int64     `json:"price_delta"`
 }
 
-func toMenuResponse(categories []domain.GuestCategory) menuResponse {
-	out := menuResponse{Categories: make([]menuCategoryResponse, 0, len(categories))}
+func toMenuResponse(categories []domain.GuestCategory, orderingEnabled bool) menuResponse {
+	out := menuResponse{
+		Categories:      make([]menuCategoryResponse, 0, len(categories)),
+		OrderingEnabled: orderingEnabled,
+	}
 	for _, c := range categories {
 		category := menuCategoryResponse{
 			ID:        c.ID,

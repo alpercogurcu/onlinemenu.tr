@@ -7,6 +7,7 @@ import { useState } from "react"
 import { Badge, Skeleton, cn } from "@onlinemenu/ui-kit"
 
 import { CartBar } from "@/components/menu/cart-bar"
+import { CategoryNav, sectionDomId } from "@/components/menu/category-nav"
 import { ProductSheet } from "@/components/menu/product-sheet"
 import { ErrorState, RetryButton, useProblemMessage } from "@/components/error-state"
 import { useMenu } from "@/hooks/use-storefront"
@@ -44,13 +45,25 @@ export function MenuScreen() {
     )
   }
 
+  // Boş ad, API'nin belgelediği sentetik "kategorisiz" kovasıdır; etiketi
+  // sunucudan değil görünümden gelir. Aynı başlık hem bölümde hem çubukta
+  // kullanılır ki dokunulan çip ile varılan başlık birebir aynı olsun.
+  const titled = categories.map((category) => ({
+    category,
+    title: category.name === "" ? tCommon("otherCategory") : category.name,
+  }))
+
   return (
     <>
+      {titled.length > 1 ? (
+        <CategoryNav categories={titled.map(({ category, title }) => ({ id: category.id, title }))} />
+      ) : null}
       <div className="flex flex-col gap-8 py-4">
-        {categories.map((category) => (
+        {titled.map(({ category, title }) => (
           <CategorySection
             key={category.id}
             category={category}
+            title={title}
             onSelect={(product) => setSelected(product)}
           />
         ))}
@@ -64,19 +77,21 @@ export function MenuScreen() {
 
 function CategorySection({
   category,
+  title,
   onSelect,
 }: {
   category: MenuCategory
+  title: string
   onSelect: (product: MenuProduct) => void
 }) {
-  const t = useTranslations("common")
-  // An empty name is the synthetic "uncategorised" bucket the API documents:
-  // the label is a display decision and deliberately does not come from the
-  // server.
-  const title = category.name === "" ? t("otherCategory") : category.name
-
   return (
-    <section aria-labelledby={`category-${category.id}`}>
+    // scroll-mt: sticky header (56px) + kategori çubuğu (~48px) başlığı
+    // örtmesin diye; çipten atlayınca başlık tam ikisinin altına oturur.
+    <section
+      id={sectionDomId(category.id)}
+      aria-labelledby={`category-${category.id}`}
+      className="scroll-mt-28"
+    >
       <h2 id={`category-${category.id}`} className="mb-3 text-lg font-semibold">
         {title}
       </h2>

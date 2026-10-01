@@ -74,7 +74,9 @@ describe("can (matrix-backed, fail-closed)", () => {
     ["waiter", "payment.fiscal_status.read", false],
     ["waiter", "storefront.qr.read", false],
     ["cashier", "pos.check.close", true],
-    ["cashier", "pos.report.read", false],
+    // 2026-10-01: kasa kapanışındaki gün özeti kasiyerin mutabakat aracı —
+    // sale-details okuma kasiyere de açıldı (authz.rego pos_report_actions).
+    ["cashier", "pos.report.read", true],
     ["cashier", "storefront.qr.manage", false],
     ["shift_manager", "storefront.qr.manage", true],
     ["shift_manager", "pos.report.read", true],

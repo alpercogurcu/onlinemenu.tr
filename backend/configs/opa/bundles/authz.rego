@@ -321,9 +321,19 @@ allow if {
 # shift_manager). Manager passes via the wildcard above.
 pos_report_actions := {"pos.report.read"}
 
+# Cashier included alongside shift_manager (2026-10-01): the drawer close
+# screen shows a day summary (closed checks, gross, cash/card split) built
+# from sale-details, and the person reconciling the physical drawer is the
+# cashier — a 403 there would blind exactly the reconciliation this report
+# exists for. The read stays branch-scoped like every cashier action.
 allow if {
 	input.action in pos_report_actions
 	has_role("shift_manager")
+}
+
+allow if {
+	input.action in pos_report_actions
+	has_role("cashier")
 }
 
 # -- Storefront: table QR codes (ADR-ARCH-006 §4). Mirrors the pos.table.*

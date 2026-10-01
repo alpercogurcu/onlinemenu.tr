@@ -167,12 +167,14 @@ describe("AdminSidebar branch pricing item", () => {
     expect(screen.getByRole("link", { name: "Şube Fiyatları" })).toHaveAttribute("href", "/catalog/branch-pricing")
   })
 
-  it("hides it from any other role; a cashier sees only the POS section", () => {
+  it("hides it from any other role; a cashier sees Genel + POS only", () => {
     signIn(ROLE.cashier)
     render(<AdminSidebar />, { wrapper: Wrapper })
 
     expect(screen.queryByText("Şube Fiyatları")).not.toBeInTheDocument()
-    expect(groupLabels()).toEqual(["POS"])
+    // 2026-10-01: pos.report.read kasiyere açıldı → Genel Bakış grubu da
+    // görünür; Şube Fiyatları ve diğer yönetim grupları hâlâ kapalı.
+    expect(groupLabels()).toEqual(["Genel", "POS"])
   })
 
   it("renders no section at all when nobody is signed in (fail closed)", () => {

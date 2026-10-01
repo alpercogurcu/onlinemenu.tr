@@ -60,6 +60,7 @@ function ctxToken(roleIds: string[]): string {
 
 const SHIFT_MANAGER_ID = "00000001-0000-0000-0000-000000000002"
 const CASHIER_ID = "00000001-0000-0000-0000-000000000001"
+const WAITER_ID = "00000001-0000-0000-0000-000000000008"
 const TENANT_ID = "tenant-1"
 const BRANCH_ID = "branch-1"
 
@@ -159,11 +160,21 @@ describe("DashboardClient", () => {
     expect(screen.getByText("Nakit")).toBeInTheDocument()
   })
 
-  it("hides the report section for a cashier (no pos.report.read)", async () => {
+  // 2026-10-01: sale-details kasiyere de açıldı (kasa kapanışındaki gün
+  // özeti kasiyerin mutabakat aracı) — kasiyer raporu GÖRÜR; yetkisiz örnek
+  // artık garson.
+  it("shows the report to a cashier (pos.report.read)", async () => {
     loginAs([CASHIER_ID])
     render(<DashboardClient />, { wrapper: Wrapper })
 
-    expect(await screen.findByText("Bu rapor için Shift Müdürü yetkisi gerekir.")).toBeInTheDocument()
+    expect(await screen.findByText("₺280,00")).toBeInTheDocument()
+  })
+
+  it("hides the report section for a waiter (no pos.report.read)", async () => {
+    loginAs([WAITER_ID])
+    render(<DashboardClient />, { wrapper: Wrapper })
+
+    expect(await screen.findByText("Bu raporu görüntüleme yetkiniz yok.")).toBeInTheDocument()
     expect(screen.queryByText("₺280,00")).not.toBeInTheDocument()
   })
 
@@ -214,7 +225,7 @@ describe("DashboardClient", () => {
     loginAs([SHIFT_MANAGER_ID])
     render(<DashboardClient />, { wrapper: Wrapper })
 
-    expect(await screen.findByText("Bu rapor için Shift Müdürü yetkisi gerekir.")).toBeInTheDocument()
+    expect(await screen.findByText("Bu raporu görüntüleme yetkiniz yok.")).toBeInTheDocument()
     expect(screen.queryByText("Satış özeti yüklenemedi.")).not.toBeInTheDocument()
   })
 

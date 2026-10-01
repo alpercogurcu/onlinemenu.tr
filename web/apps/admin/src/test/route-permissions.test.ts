@@ -91,7 +91,9 @@ describe("matchRoute", () => {
 // it fails here as well as in the e2e role suite.
 const EXPECTED_MENU: Record<string, string[]> = {
   shift_manager: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen", "/payment/payments"],
-  cashier: ["/pos/tables", "/pos/checks", "/pos/kitchen"],
+  // 2026-10-01: pos.report.read kasiyere de açıldı (kasa kapanışı gün
+  // özeti) — Genel Bakış ("/") kasiyer menüsüne girdi.
+  cashier: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen"],
   // One floor plan: the waiter's "Masalar" is the order screen's plan.
   waiter: ["/pos/order", "/pos/checks"],
   kitchen: ["/pos/tables", "/pos/kitchen"],

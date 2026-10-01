@@ -587,7 +587,7 @@
     "branch": "Şube",
     "branchPlaceholder": "Şube seçin",
     "noBranch": "Önce bir şube seçin",
-    "noPermission": "Bu rapor için Shift Müdürü yetkisi gerekir.",
+    "noPermission": "Bu raporu görüntüleme yetkiniz yok.",
     "openChecks": "Açık Adisyon",
     "openChecksHint": "Şu anda açık",
     "totalProducts": "Toplam Ürün",

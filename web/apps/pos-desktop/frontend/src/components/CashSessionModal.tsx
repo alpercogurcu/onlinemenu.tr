@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
+import { useDaySummary } from '../hooks/useCashSession'
 import { computeDifference, emptyDenominationRows, type ClosingSnapshot, type DenominationRow } from '../lib/cashSession'
 import { formatMoney, parseMoneyInputToKurus } from '@onlinemenu/pos-core'
 import { AmountDisplay } from './AmountDisplay'
+import { DaySummarySection } from './DaySummarySection'
 import { DenominationCounter } from './DenominationCounter'
 import { ErrorBanner } from './ErrorBanner'
 import { HoldButton } from './HoldButton'
@@ -127,10 +129,29 @@ export function CashSessionModal({
   const [closeSubmitting, setCloseSubmitting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
+  // GÜN ÖZETİ — fetched only while the Kapanış view is actually on screen
+  // (see useDaySummary's doc comment for why it does not ride the 5s
+  // staleness poll). Called before the early return below: hooks must run on
+  // every render, including open=false ones.
+  const daySummary = useDaySummary(session, open && view === 'closing')
+
   if (!open) return null
 
   const openingAmount = parseMoneyInputToKurus(openingInput)
   const movementAmount = parseMoneyInputToKurus(movementInput)
+
+  // Fark kutusu tone (design: açık = red, fazla = amber, denk = neutral).
+  // Color never stands alone — the label text names the state too (style.css:
+  // "every colored state must also carry text").
+  const closingDifference = closingSnapshot
+    ? computeDifference(closingSnapshot.closingCountedAmount, closingSnapshot.expectedClose)
+    : 0
+  const differenceTone =
+    closingDifference < 0
+      ? { label: 'Fark (açık)', box: 'border-danger/60 bg-danger/10', text: 'text-danger' }
+      : closingDifference > 0
+        ? { label: 'Fark (fazla)', box: 'border-warn/60 bg-warn/10', text: 'text-warn' }
+        : { label: 'Fark', box: 'border-line bg-panel', text: 'text-ink' }
 
   async function handleOpenSubmit() {
     setOpeningSubmitting(true)
@@ -208,7 +229,7 @@ export function CashSessionModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div
         className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-line bg-panel ${
-          view === 'movement' ? 'max-w-3xl' : 'max-w-md'
+          view === 'movement' || view === 'closing' ? 'max-w-3xl' : 'max-w-md'
         }`}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
@@ -504,76 +525,120 @@ export function CashSessionModal({
               </div>
             </div>
           ) : view === 'closing' && session && closingSnapshot ? (
-            <div className="flex flex-col gap-4">
-              {/*
-                Only the FROZEN snapshot is ever rendered here — never
-                session.expected_close/difference directly. That live figure
-                exists solely to feed `stale` (see useCashSession.ts); showing
-                it would be exactly the silent-drift bug this screen exists to
-                prevent (task brief).
-              */}
-              <dl className="grid grid-cols-2 gap-y-2 text-sm">
-                <dt className="text-ink-dim">Sayılan</dt>
-                <dd className="text-right tabular-nums text-ink">{formatMoney(closingSnapshot.closingCountedAmount)}</dd>
-                <dt className="text-ink-dim">Beklenen kapanış</dt>
-                <dd className="text-right tabular-nums text-ink">{formatMoney(closingSnapshot.expectedClose)}</dd>
-                <dt className="font-semibold text-ink">Fark</dt>
-                <dd className="text-right font-semibold tabular-nums text-ink">
-                  {formatMoney(computeDifference(closingSnapshot.closingCountedAmount, closingSnapshot.expectedClose))}
-                </dd>
-              </dl>
-
-              {stale && (
-                <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm text-ink" role="alert">
-                  Bu sayım bayatladı — kasa bakiyesi sayımdan sonra değişti (ör. bekleyen bir mali işlem
-                  sonuçlandı). Yukarıdaki fark artık geçerli değil; kasayı yeniden sayın.
-                </div>
-              )}
-
-              {cannotCloseReasons && cannotCloseReasons.length > 0 && (
-                <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm text-ink" role="alert">
-                  <p className="font-semibold">Kasa kapatılamıyor:</p>
-                  <ul className="mt-1 list-disc pl-5">
-                    {cannotCloseReasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleRefresh}
-                      disabled={refreshing}
-                      className="min-h-12 rounded border border-line px-3 text-sm font-semibold text-ink"
-                    >
-                      {refreshing ? 'Yenileniyor…' : 'Durumu yenile'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onDismissCannotClose}
-                      className="min-h-12 rounded border border-line px-3 text-sm font-semibold text-ink"
-                    >
-                      Anladım
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setView('counting')}
-                className="min-h-14 w-full rounded-md border border-line font-semibold text-ink"
-              >
-                Yeniden Say
-              </button>
-
-              {!stale && !cannotCloseReasons && (
-                <HoldButton
-                  label="Basılı tutup kasayı kapat"
-                  holdingLabel="Kapatılıyor…"
-                  disabled={closeSubmitting}
-                  onConfirm={handleCloseSubmit}
+            // Gün Sonu layout (design-kasa/KasaKapat mockup): GÜN ÖZETİ +
+            // blocking warnings on the left, KAPANIŞ SAYIMI reconciliation on
+            // the right. On a <768px window the columns stack, summary first.
+            <div className="grid gap-5 md:grid-cols-2">
+              <div className="flex flex-col gap-3">
+                <DaySummarySection
+                  summary={daySummary.summary}
+                  loading={daySummary.loading}
+                  error={daySummary.error}
+                  onRetry={() => void daySummary.reload()}
                 />
-              )}
+
+                {/* Açık adisyon / bekleyen mali işlem uyarısı — the backend's
+                    cannotClose reasons VERBATIM (ADR-DATA-008), never derived
+                    client-side from sale-details (task brief madde 3). */}
+                {cannotCloseReasons && cannotCloseReasons.length > 0 && (
+                  <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm text-ink" role="alert">
+                    <p className="font-semibold">Kasa kapatılamıyor:</p>
+                    <ul className="mt-1 list-disc pl-5">
+                      {cannotCloseReasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleRefresh}
+                        disabled={refreshing}
+                        className="min-h-12 rounded border border-line px-3 text-sm font-semibold text-ink"
+                      >
+                        {refreshing ? 'Yenileniyor…' : 'Durumu yenile'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onDismissCannotClose}
+                        className="min-h-12 rounded border border-line px-3 text-sm font-semibold text-ink"
+                      >
+                        Anladım
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4">
+                <h3 className="text-xs font-bold tracking-wider text-ink-dim">KAPANIŞ SAYIMI</h3>
+                {/*
+                  Beklenen/Sayılan/Fark come ONLY from the FROZEN snapshot —
+                  never session.expected_close/difference directly. That live
+                  figure exists solely to feed `stale` (see useCashSession.ts);
+                  showing it would be exactly the silent-drift bug this screen
+                  exists to prevent. The Açılış/+Nakit/+Hareket context rows
+                  are session values (açılış is immutable; the other two
+                  drifting past the frozen Beklenen is precisely what the
+                  stale banner below surfaces).
+                */}
+                <dl className="flex flex-col gap-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <dt className="text-ink-dim">Açılış</dt>
+                    <dd className="font-semibold tabular-nums text-ink">{formatMoney(session.opening_counted_amount)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <dt className="text-ink-dim">+ Nakit tahsilat</dt>
+                    <dd className="font-semibold tabular-nums text-ink">{formatMoney(session.cash_payments_taken)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <dt className="text-ink-dim">+ Kasa hareketleri (net)</dt>
+                    <dd className="font-semibold tabular-nums text-ink">{formatMoney(session.movements_net)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-line pt-2">
+                    <dt className="font-semibold text-ink">Beklenen</dt>
+                    <dd className="font-semibold tabular-nums text-ink">{formatMoney(closingSnapshot.expectedClose)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <dt className="text-ink-dim">Sayılan</dt>
+                    <dd className="font-semibold tabular-nums text-ink">{formatMoney(closingSnapshot.closingCountedAmount)}</dd>
+                  </div>
+                </dl>
+
+                <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${differenceTone.box}`}>
+                  <span className={`font-semibold ${differenceTone.text}`}>{differenceTone.label}</span>
+                  <span className={`font-display text-lg font-bold tabular-nums ${differenceTone.text}`}>
+                    {formatMoney(closingDifference)}
+                  </span>
+                </div>
+
+                {stale && (
+                  <div className="rounded-md border border-warn bg-warn/10 px-3 py-2 text-sm text-ink" role="alert">
+                    Bu sayım bayatladı — kasa bakiyesi sayımdan sonra değişti (ör. bekleyen bir mali işlem
+                    sonuçlandı). Yukarıdaki fark artık geçerli değil; kasayı yeniden sayın.
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setView('counting')}
+                  className="min-h-14 w-full rounded-md border border-line font-semibold text-ink"
+                >
+                  Yeniden Say
+                </button>
+
+                {!stale && !cannotCloseReasons && (
+                  <HoldButton
+                    label="Basılı tutup kasayı kapat"
+                    holdingLabel="Kapatılıyor…"
+                    disabled={closeSubmitting}
+                    onConfirm={handleCloseSubmit}
+                  />
+                )}
+
+                <p className="text-center text-xs text-ink-dim">
+                  Kapanınca uygulama kilit ekranına döner; fark gün sonu raporuna işlenir.
+                </p>
+              </div>
             </div>
           ) : null}
 

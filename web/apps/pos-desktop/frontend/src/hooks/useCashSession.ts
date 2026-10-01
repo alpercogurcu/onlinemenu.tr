@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   CloseCashSession,
   GetActiveCashSession,
+  GetSaleDetails,
   ListCashMovements,
   OpenCashSession,
   RecordCashMovement,
@@ -9,6 +10,7 @@ import {
 } from '../../wailsjs/go/main/App'
 import type { main } from '../../wailsjs/go/models'
 import { describeError } from '@onlinemenu/pos-core'
+import { deriveDaySummary, type DaySummary } from '../components/DaySummarySection'
 import { isClosingCountStale, toClosingSnapshot, type ClosingSnapshot, type DenominationRow } from '../lib/cashSession'
 
 /** How often the Kapanış (closing_control) screen re-reads the branch's cash
@@ -291,4 +293,71 @@ export function useCashSession(branchId: string | undefined): UseCashSessionResu
     dismissCannotClose,
     reset,
   }
+}
+
+export type UseDaySummaryResult = {
+  summary: DaySummary | null
+  loading: boolean
+  /** Short Turkish failure text (describeError). Non-empty = the last load
+   * failed; the Kapanış screen shows it with a retry instead of hiding the
+   * section (task brief: sessizce gizlenmek YOK). */
+  error: string
+  reload: () => Promise<void>
+}
+
+/**
+ * GÜN ÖZETİ source for the Kapanış screen: GET sale-details over exactly this
+ * shift's window (session.opened_at → now), collapsed to the four cards'
+ * figures by deriveDaySummary (pure, vitest-covered — see
+ * components/DaySummarySection.tsx). Fetched only while `enabled` (the modal's
+ * closing view is actually on screen): the report query aggregates the whole
+ * shift server-side, so polling it alongside the 5s closing_control staleness
+ * poll would be pure waste — the cashier re-enters the view (or taps retry)
+ * for fresh figures, and a recount round-trip re-enables it anyway.
+ *
+ * Informational-only by design: a failure here never blocks the closing flow
+ * (cannot-close reasons and the frozen snapshot arithmetic are entirely
+ * separate), which is why its error is local to this hook and not merged into
+ * useCashSession's `error`.
+ */
+export function useDaySummary(session: main.CashSessionDTO | null, enabled: boolean): UseDaySummaryResult {
+  const [summary, setSummary] = useState<DaySummary | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const sessionId = session?.id
+  const branchId = session?.branch_id
+  const openedAt = session?.opened_at
+
+  // Render-time reset on session change — same pattern and rationale as
+  // useCashSession's branchId-keyed reset above: a new shift (or another
+  // branch's session) must never render the previous shift's totals, not even
+  // for one frame.
+  const [appliedSessionId, setAppliedSessionId] = useState(sessionId)
+  if (appliedSessionId !== sessionId) {
+    setAppliedSessionId(sessionId)
+    setSummary(null)
+    setError('')
+  }
+
+  const reload = useCallback(async (): Promise<void> => {
+    if (!branchId || !openedAt) return
+    setLoading(true)
+    setError('')
+    try {
+      const details = await GetSaleDetails(branchId, openedAt, new Date().toISOString())
+      setSummary(deriveDaySummary(details))
+    } catch (err) {
+      setError(describeError(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [branchId, openedAt])
+
+  useEffect(() => {
+    if (!enabled) return
+    void reload()
+  }, [enabled, sessionId, reload])
+
+  return { summary, loading, error, reload }
 }

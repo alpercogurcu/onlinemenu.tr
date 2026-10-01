@@ -14,10 +14,12 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { useCan } from "@/hooks/use-can"
 import { currentBranchId } from "@/lib/permissions"
 import { tableStatusVariant } from "@/lib/status-badge"
 import { useSetTableStatus, useTables, useZones, type ManualTableStatus } from "@/hooks/use-pos"
+import { useStorefrontSettings, useUpdateStorefrontSettings } from "@/hooks/use-storefront"
 import { useBranches } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
 import type { PosTable, PosTableStatus, PosZone } from "@/types"
@@ -96,6 +98,14 @@ export default function TablesPage() {
   // own "add the first table" prompt.
   const { data: zones } = useZones(branchId)
   const setStatus = useSetTableStatus()
+  // Branch-level "QR ile sipariş" kill switch. Gated on storefront.qr.manage
+  // for the same reason the QR button is (see the comment block above): a
+  // read-only role would meet a toggle it cannot flip, so neither the control
+  // nor its GET exists for them.
+  const { data: storefrontSettings, isLoading: settingsLoading } = useStorefrontSettings(branchId, {
+    enabled: canViewQR,
+  })
+  const updateSettings = useUpdateStorefrontSettings()
 
   const tablesByZone = new Map<string, PosTable[]>()
   for (const section of plan ?? []) {
@@ -108,6 +118,20 @@ export default function TablesPage() {
     if (canManage) return MANUAL_TRANSITIONS[status]
     if (canClean && status === "cleaning") return ["empty"]
     return []
+  }
+
+  async function handleOrderingToggle(next: boolean) {
+    // The switch is controlled by the query cache, so a failed PUT needs no
+    // manual rollback: the cache never changed, the switch stays where it was.
+    try {
+      const updated = await updateSettings.mutateAsync({
+        branch_id: branchId,
+        ordering_enabled: next,
+      })
+      toast.success(updated.ordering_enabled ? t("qrOrderingEnabled") : t("qrOrderingDisabled"))
+    } catch {
+      toast.error(t("qrOrderingUpdateFailed"))
+    }
   }
 
   async function handleStatusChange(table: PosTable, status: ManualTableStatus) {
@@ -155,6 +179,23 @@ export default function TablesPage() {
               </Select>
             )}
           </div>
+
+          {canViewQR && branchId !== "" && (
+            <div className="space-y-1">
+              <div className="flex h-9 items-center gap-2">
+                <Switch
+                  aria-label={t("qrOrdering")}
+                  checked={storefrontSettings?.ordering_enabled ?? false}
+                  disabled={settingsLoading || updateSettings.isPending}
+                  onCheckedChange={(next) => void handleOrderingToggle(next)}
+                />
+                <span className="text-sm font-medium">{t("qrOrdering")}</span>
+              </div>
+              {storefrontSettings && !storefrontSettings.ordering_enabled && (
+                <p className="text-muted-foreground text-xs">{t("qrOrderingOff")}</p>
+              )}
+            </div>
+          )}
 
           {canManage && (
             <>

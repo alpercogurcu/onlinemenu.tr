@@ -34,6 +34,13 @@ vi.mock("@/hooks/use-pos", () => ({
   useZones: () => ({ data: [{ id: "z1", name: "Salon", floor: 0, is_active: true, sort_order: 0 }] }),
   useSetTableStatus: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }))
+// The ordering toggle has its own behavioral suite (qr-ordering-toggle.test.tsx)
+// running against the real hooks; here it is stubbed so this file needs no
+// QueryClientProvider.
+vi.mock("@/hooks/use-storefront", () => ({
+  useStorefrontSettings: () => ({ data: { branch_id: "b1", ordering_enabled: true }, isLoading: false }),
+  useUpdateStorefrontSettings: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}))
 
 import TablesPage from "@/app/(main)/pos/tables/page"
 

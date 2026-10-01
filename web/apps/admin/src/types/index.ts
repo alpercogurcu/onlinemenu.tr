@@ -537,6 +537,14 @@ export interface IssuedQRCode {
   token: string
 }
 
+// Branch-level storefront settings — GET/PUT /api/v1/storefront/settings.
+// `ordering_enabled=false` keeps the guest menu readable but blocks placing
+// orders through the QR flow.
+export interface StorefrontSettings {
+  branch_id: string
+  ordering_enabled: boolean
+}
+
 // Sales report — GET /api/v1/pos/reports/sale-details response
 // (backend/internal/modules/pos/repo/report_repo.go). Every amount is kuruş
 // (int64); render with lib/money.ts's formatKurus, never divide by 100 here.

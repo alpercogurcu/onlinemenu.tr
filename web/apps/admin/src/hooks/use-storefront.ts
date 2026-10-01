@@ -1,9 +1,41 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { IssuedQRCode, QRCode } from "@/types"
+import type { IssuedQRCode, QRCode, StorefrontSettings } from "@/types"
 
 const QR_CODES_KEY = "storefront-qr-codes"
+const SETTINGS_KEY = "storefront-settings"
+
+// `enabled` lets the caller gate the fetch on permission: the toggle is only
+// rendered for storefront.qr.manage, so a read-only role never fires the GET.
+export function useStorefrontSettings(branchId: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: [SETTINGS_KEY, branchId],
+    queryFn: async () => {
+      const { data } = await api.get<StorefrontSettings>("/api/v1/storefront/settings", {
+        params: { branch_id: branchId },
+      })
+      return data
+    },
+    enabled: branchId !== "" && (opts?.enabled ?? true),
+  })
+}
+
+export function useUpdateStorefrontSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: { branch_id: string; ordering_enabled: boolean }) => {
+      const { data } = await api.put<StorefrontSettings>("/api/v1/storefront/settings", body)
+      return data
+    },
+    onSuccess: (data) => {
+      // Seed the cache with the PUT response so the switch flips immediately,
+      // then invalidate so the next render reconciles with the server.
+      qc.setQueryData([SETTINGS_KEY, data.branch_id], data)
+      void qc.invalidateQueries({ queryKey: [SETTINGS_KEY, data.branch_id] })
+    },
+  })
+}
 
 export function useQRCodes(branchId: string) {
   return useQuery({

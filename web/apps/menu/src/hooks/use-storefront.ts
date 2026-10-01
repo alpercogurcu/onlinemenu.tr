@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api, { PUBLIC_API_PREFIX } from "@/lib/api"
 import type {
+  MenuCategory,
   MenuResponse,
   Order,
   OrderListResponse,
@@ -25,12 +26,22 @@ const MENU_STALE_TIME_MS = 30_000
 const ORDER_POLL_INTERVAL_MS = 5_000
 const ORDER_LIST_POLL_INTERVAL_MS = 15_000
 
+export interface MenuData {
+  categories: MenuCategory[]
+  /** False while the branch has paused QR ordering; browsing stays open. */
+  orderingEnabled: boolean
+}
+
 export function useMenu() {
   return useQuery({
     queryKey: MENU_QUERY_KEY,
-    queryFn: async () => {
+    queryFn: async (): Promise<MenuData> => {
       const { data } = await api.get<MenuResponse>(`${PUBLIC_API_PREFIX}/menu`)
-      return data.categories ?? []
+      return {
+        categories: data.categories ?? [],
+        // Older API builds omit the field; absence means ordering is OPEN.
+        orderingEnabled: data.ordering_enabled ?? true,
+      }
     },
     staleTime: MENU_STALE_TIME_MS,
     // 401 means "re-scan the QR"; retrying cannot fix it and the interceptor

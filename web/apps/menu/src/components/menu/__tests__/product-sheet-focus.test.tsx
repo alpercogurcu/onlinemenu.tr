@@ -24,7 +24,7 @@ describe("ProductSheet odak davranışı", () => {
     // not kutusudur ve telefonda klavyeyi fırlatır. Sheet bunu engellemelidir.
     render(
       <NextIntlClientProvider locale="tr" messages={messages}>
-        <ProductSheet product={PRODUCT} onClose={vi.fn()} />
+        <ProductSheet product={PRODUCT} orderingEnabled onClose={vi.fn()} />
       </NextIntlClientProvider>,
     )
 

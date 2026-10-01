@@ -32,9 +32,13 @@ const MAX_NOTE_LENGTH = 500
 
 export function ProductSheet({
   product,
+  orderingEnabled,
   onClose,
 }: {
   product: MenuProduct | null
+  /** False while the branch has paused QR ordering: the sheet still opens so
+   * the diner can read the product, but the add-to-cart path is withheld. */
+  orderingEnabled: boolean
   onClose: () => void
 }) {
   return (
@@ -43,7 +47,12 @@ export function ProductSheet({
         // Keying on the product id remounts the body for each product, which
         // is what resets the selection and note — cheaper and harder to get
         // wrong than clearing state in an effect.
-        <ProductSheetBody key={product.id} product={product} onClose={onClose} />
+        <ProductSheetBody
+          key={product.id}
+          product={product}
+          orderingEnabled={orderingEnabled}
+          onClose={onClose}
+        />
       )}
     </Sheet>
   )
@@ -51,9 +60,11 @@ export function ProductSheet({
 
 function ProductSheetBody({
   product,
+  orderingEnabled,
   onClose,
 }: {
   product: MenuProduct
+  orderingEnabled: boolean
   onClose: () => void
 }) {
   const t = useTranslations("product")
@@ -145,12 +156,18 @@ function ProductSheetBody({
       </div>
 
       <SheetFooter className="gap-3 border-t">
-        <div className="flex items-center gap-3">
-          <QuantityStepper quantity={quantity} onChange={setQuantity} />
-          <Button size="touch-lg" className="flex-1" onClick={handleAdd}>
-            {t("addWithPrice", { price: formatKurus(totalPrice) })}
-          </Button>
-        </div>
+        {orderingEnabled ? (
+          <div className="flex items-center gap-3">
+            <QuantityStepper quantity={quantity} onChange={setQuantity} />
+            <Button size="touch-lg" className="flex-1" onClick={handleAdd}>
+              {t("addWithPrice", { price: formatKurus(totalPrice) })}
+            </Button>
+          </div>
+        ) : (
+          <p role="status" className="text-muted-foreground py-1 text-center text-sm">
+            {t("orderingClosed")}
+          </p>
+        )}
       </SheetFooter>
     </SheetContent>
   )

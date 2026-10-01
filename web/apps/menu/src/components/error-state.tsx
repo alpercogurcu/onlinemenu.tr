@@ -21,6 +21,7 @@ const CODE_MESSAGES: Record<string, ErrorMessageKey> = {
   [API_ERROR_CODES.tableNotReady]: "table_not_ready",
   [API_ERROR_CODES.tableOccupied]: "table_occupied",
   [API_ERROR_CODES.tableBranchMismatch]: "table_branch_mismatch",
+  [API_ERROR_CODES.orderingDisabled]: "ordering_disabled",
   [API_ERROR_CODES.internal]: "internal_error",
   [API_ERROR_CODES.rateLimited]: "rate_limited",
   [API_ERROR_CODES.unavailable]: "unavailable",

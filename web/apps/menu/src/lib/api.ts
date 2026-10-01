@@ -26,6 +26,7 @@ export const API_ERROR_CODES = {
   tableNotReady: "table_not_ready",
   tableOccupied: "table_occupied",
   tableBranchMismatch: "table_branch_mismatch",
+  orderingDisabled: "ordering_disabled",
   internal: "internal_error",
   // Not produced by the backend — synthesised below for transport-level
   // failures so every caller can branch on a single field.

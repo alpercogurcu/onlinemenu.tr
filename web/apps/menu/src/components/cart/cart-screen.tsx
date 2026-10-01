@@ -9,7 +9,8 @@ import { useState } from "react"
 import { Button } from "@onlinemenu/ui-kit"
 
 import { useProblemMessage } from "@/components/error-state"
-import { usePlaceOrder } from "@/hooks/use-storefront"
+import { OrderingClosedNotice } from "@/components/menu/ordering-closed-notice"
+import { useMenu, usePlaceOrder } from "@/hooks/use-storefront"
 import { toProblem, type ApiProblem } from "@/lib/api"
 import {
   MAX_CART_LINES,
@@ -38,6 +39,11 @@ export function CartScreen() {
 
   const [problem, setProblem] = useState<ApiProblem | null>(null)
   const placeOrder = usePlaceOrder()
+  // No extra endpoint: the cart reuses the cached menu query. While it is
+  // still loading, ordering is ASSUMED open — the server's 409 is the
+  // authority and arrives with the same diner-facing message either way.
+  const { data: menu } = useMenu()
+  const orderingEnabled = menu?.orderingEnabled ?? true
 
   if (lines.length === 0) {
     return (
@@ -87,6 +93,11 @@ export function CartScreen() {
 
   return (
     <div className="py-4">
+      {orderingEnabled ? null : (
+        <div className="mb-4">
+          <OrderingClosedNotice />
+        </div>
+      )}
       <ul className="flex flex-col gap-2">
         {lines.map((line) => (
           <li key={line.key}>
@@ -134,7 +145,7 @@ export function CartScreen() {
           <Button
             size="touch-lg"
             className="w-full"
-            disabled={placeOrder.isPending || tooManyLines}
+            disabled={placeOrder.isPending || tooManyLines || !orderingEnabled}
             onClick={handleSubmit}
           >
             {placeOrder.isPending ? t("submitting") : t("submit")}

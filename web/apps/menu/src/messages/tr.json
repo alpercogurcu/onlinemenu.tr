@@ -33,7 +33,9 @@
     "unavailable": "Tükendi",
     "categoryJump": "Kategoriye git",
     "viewCart": "Sepeti gör",
-    "itemCount": "{count} ürün"
+    "itemCount": "{count} ürün",
+    "orderingClosedTitle": "Şu anda QR ile sipariş alınamıyor.",
+    "orderingClosedHint": "Menüyü inceleyebilirsiniz; sipariş için personele seslenebilirsiniz."
   },
   "product": {
     "chooseOne": "Bir seçenek seçin",
@@ -46,7 +48,8 @@
     "add": "Sepete ekle",
     "addWithPrice": "Sepete ekle · {price}",
     "unavailable": "Bu ürün şu anda sipariş edilemiyor.",
-    "requiredMissing": "Zorunlu seçimleri tamamlayın: {groups}"
+    "requiredMissing": "Zorunlu seçimleri tamamlayın: {groups}",
+    "orderingClosed": "Şu anda QR ile sipariş alınamıyor; sipariş için personele seslenebilirsiniz."
   },
   "cart": {
     "title": "Sepet",
@@ -116,6 +119,7 @@
     "table_not_ready": "Masanız hazırlanıyor, birkaç dakika içinde tekrar deneyin.",
     "table_occupied": "Masanız şu anda sipariş alınabilir durumda değil. Lütfen personele danışın.",
     "table_branch_mismatch": "Bu QR kod artık bu masaya ait değil. Lütfen personele danışın.",
+    "ordering_disabled": "Şu anda QR ile sipariş alınamıyor. Sipariş için personele seslenebilirsiniz.",
     "not_found": "Aradığınız kayıt bulunamadı.",
     "unauthorized": "Oturumunuz bulunamadı.",
     "unknown_error": "Beklenmeyen bir hata oluştu.",

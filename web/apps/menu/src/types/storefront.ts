@@ -57,6 +57,9 @@ export interface MenuCategory {
 
 export interface MenuResponse {
   categories: MenuCategory[]
+  // Absent on API builds that predate the ordering switch. Absence means
+  // "open": defaulting the other way would shut every older storefront down.
+  ordering_enabled?: boolean
 }
 
 export interface PlaceOrderLineRequest {

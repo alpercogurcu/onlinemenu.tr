@@ -68,4 +68,14 @@ describe("toProblem", () => {
   it("does not treat a 4xx as retriable", () => {
     expect(toProblem(axiosErrorWith(404, "")).retriable).toBe(false)
   })
+
+  it("carries the ordering_disabled code of a 409 through unchanged", () => {
+    // Ordering paused by the business is FINAL for this attempt: retrying the
+    // same request cannot reopen it, so the problem must not read as retriable.
+    const problem = toProblem(
+      axiosErrorWith(409, { status: 409, code: "ordering_disabled", detail: "" }),
+    )
+    expect(problem.code).toBe(API_ERROR_CODES.orderingDisabled)
+    expect(problem.retriable).toBe(false)
+  })
 })

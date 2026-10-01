@@ -8,6 +8,7 @@ import { Badge, Skeleton, cn } from "@onlinemenu/ui-kit"
 
 import { CartBar } from "@/components/menu/cart-bar"
 import { CategoryNav, sectionDomId } from "@/components/menu/category-nav"
+import { OrderingClosedNotice } from "@/components/menu/ordering-closed-notice"
 import { ProductSheet } from "@/components/menu/product-sheet"
 import { ErrorState, RetryButton, useProblemMessage } from "@/components/error-state"
 import { useMenu } from "@/hooks/use-storefront"
@@ -21,7 +22,7 @@ export function MenuScreen() {
   const tCommon = useTranslations("common")
   const tErrors = useTranslations("errors")
   const problemMessage = useProblemMessage()
-  const { data: categories, isPending, isError, error, refetch } = useMenu()
+  const { data, isPending, isError, error, refetch } = useMenu()
   const [selected, setSelected] = useState<MenuProduct | null>(null)
 
   if (isPending) return <MenuSkeleton />
@@ -35,6 +36,8 @@ export function MenuScreen() {
       />
     )
   }
+
+  const { categories, orderingEnabled } = data
 
   if (categories.length === 0) {
     return (
@@ -55,6 +58,11 @@ export function MenuScreen() {
 
   return (
     <>
+      {orderingEnabled ? null : (
+        <div className="pt-4">
+          <OrderingClosedNotice />
+        </div>
+      )}
       {titled.length > 1 ? (
         <CategoryNav categories={titled.map(({ category, title }) => ({ id: category.id, title }))} />
       ) : null}
@@ -69,8 +77,15 @@ export function MenuScreen() {
         ))}
       </div>
 
-      <ProductSheet product={selected} onClose={() => setSelected(null)} />
-      <CartBar />
+      <ProductSheet
+        product={selected}
+        orderingEnabled={orderingEnabled}
+        onClose={() => setSelected(null)}
+      />
+      {/* The bar is the path INTO ordering; while ordering is closed it is
+          withheld even for a cart with leftover lines, so the only visible
+          affordances match what the diner can actually do. */}
+      {orderingEnabled ? <CartBar /> : null}
     </>
   )
 }

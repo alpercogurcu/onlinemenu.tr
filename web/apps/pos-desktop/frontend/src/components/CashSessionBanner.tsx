@@ -1,6 +1,3 @@
-import type { main } from '../../wailsjs/go/models'
-import { formatMoney } from '@onlinemenu/pos-core'
-
 type CashSessionBannerProps = {
   kind: 'missing' | 'stale'
   onOpen: () => void
@@ -17,8 +14,8 @@ type CashSessionBannerProps = {
  *
  * Only the two warning states render here (see lib/cashSession's
  * cashSessionBannerKind). An open, on-track session used to add a permanent
- * status row; it is now CashSessionStatusButton in the header, so the banner
- * area holds warnings only (bulgu #11).
+ * status row; it now lives in the üst durum çubuğu (StatusBar's "KASA AÇIK"
+ * chip), so the banner area holds warnings only (bulgu #11).
  */
 export function CashSessionBanner({ kind, onOpen }: CashSessionBannerProps) {
   const missing = kind === 'missing'
@@ -37,15 +34,5 @@ export function CashSessionBanner({ kind, onOpen }: CashSessionBannerProps) {
         {missing ? 'Kasa Aç' : 'Kasayı Aç'}
       </button>
     </div>
-  )
-}
-
-/** Header button for an open, on-track cash session: the expected drawer total, one tap to the kasa screen. */
-export function CashSessionStatusButton({ session, onOpen }: { session: main.CashSessionDTO; onOpen: () => void }) {
-  return (
-    <button type="button" onClick={onOpen} className="min-h-12 rounded px-2 text-ink-dim">
-      Kasa açık · {formatMoney(session.expected_close)}
-      {session.status === 'closing_control' ? ' (sayım gönderildi)' : ''}
-    </button>
   )
 }

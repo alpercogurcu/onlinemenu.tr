@@ -176,6 +176,14 @@ type Check struct {
 	// MergedIntoCheckID names the adisyon that absorbed this one when its
 	// status is "merged".
 	MergedIntoCheckID *string `json:"merged_into_check_id,omitempty"`
+	// ServiceType is "dine_in", "takeaway" or "delivery" (decode only — the
+	// POS never sends it; takeaway/delivery checks are born in the storefront).
+	ServiceType string `json:"service_type,omitempty"`
+	// CustomerName/CustomerPhone are set on takeaway/delivery checks and ""
+	// on dine-in ones (the backend always emits the keys — see
+	// pos/http/dto_test.go).
+	CustomerName  string `json:"customer_name,omitempty"`
+	CustomerPhone string `json:"customer_phone,omitempty"`
 }
 
 // ListOpenChecks calls GET /api/v1/pos/checks and filters to status "open"

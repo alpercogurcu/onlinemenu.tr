@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"onlinemenu.tr/pos-desktop/internal/apiclient"
 	"onlinemenu.tr/pos-desktop/internal/receipt"
@@ -78,6 +79,13 @@ type CheckDTO struct {
 	// Total is the check's running total in kuruş; absent when the endpoint
 	// that produced this DTO does not compute it (open/transfer/merge answers).
 	Total *int64 `json:"total,omitempty"`
+	// ServiceType splits the masa planı's Gel Al/Paket tabs from table-bound
+	// checks: "dine_in", "takeaway" or "delivery" (empty on older responses).
+	ServiceType string `json:"service_type,omitempty"`
+	// CustomerName/CustomerPhone identify a takeaway/delivery check instead
+	// of a table label ("GEL AL · Alper Vural").
+	CustomerName  string `json:"customer_name,omitempty"`
+	CustomerPhone string `json:"customer_phone,omitempty"`
 }
 
 // TableDTO mirrors apiclient.Table — layout_position is deliberately
@@ -675,6 +683,9 @@ func toCheckDTO(c apiclient.Check) CheckDTO {
 		dto.ClosedAt = c.ClosedAt.Format(rfc3339Millis)
 	}
 	dto.Total = c.Total
+	dto.ServiceType = c.ServiceType
+	dto.CustomerName = c.CustomerName
+	dto.CustomerPhone = c.CustomerPhone
 	return dto
 }
 
@@ -709,3 +720,70 @@ func toOrderDTO(o apiclient.Order) OrderDTO {
 // because toCheckDTO/toOrderDTO format explicitly rather than relying on
 // domain.Check/Order's zero-value handling upstream.
 const rfc3339Millis = "2006-01-02T15:04:05.000Z07:00"
+
+// SaleTotalsDTO mirrors apiclient.SaleTotals (kuruş amounts).
+type SaleTotalsDTO struct {
+	ClosedCheckCount int64 `json:"closed_check_count"`
+	Gross            int64 `json:"gross"`
+	ItemCount        int64 `json:"item_count"`
+	AverageCheck     int64 `json:"average_check"`
+}
+
+// PaymentTotalDTO mirrors apiclient.PaymentTotal — one (method, status)
+// bucket, values passed through verbatim (see that type's doc comment).
+type PaymentTotalDTO struct {
+	Method string `json:"method"`
+	Status string `json:"status"`
+	Count  int64  `json:"count"`
+	Total  int64  `json:"total"`
+}
+
+// SaleDetailsDTO mirrors apiclient.SaleDetails — the kasa kapanış ekranının
+// GÜN ÖZETİ source. Deriving "nakit/kart tahsilat" from Payments is the
+// frontend's job (a pure, vitest-covered function), not this binding's: the
+// binding stays a translation layer like every other method in this file.
+//
+// Payments is ALWAYS a non-nil (possibly empty) slice — a nil []PaymentTotalDTO
+// marshals to JSON null and the generated TypeScript types it as an array;
+// see CashSessionCloseResultDTO.Reasons for the same trap documented once.
+type SaleDetailsDTO struct {
+	Sales    SaleTotalsDTO     `json:"sales"`
+	Payments []PaymentTotalDTO `json:"payments"`
+}
+
+// GetSaleDetails returns the branch's day-end sales summary over
+// [fromISO, toISO] (both RFC3339 — the caller passes the cash session's
+// opened_at and "now", so the GÜN ÖZETİ covers exactly this shift). Times are
+// validated here, before the network call, so a malformed timestamp fails
+// with a Turkish message instead of the backend's 422 invalid_date_params
+// round-trip.
+func (a *App) GetSaleDetails(branchID, fromISO, toISO string) (SaleDetailsDTO, error) {
+	if branchID == "" {
+		return SaleDetailsDTO{}, fmt.Errorf("şube bilgisi eksik — oturum yeniden açılmalı")
+	}
+	from, err := time.Parse(time.RFC3339, fromISO)
+	if err != nil {
+		return SaleDetailsDTO{}, fmt.Errorf("gün özeti başlangıç zamanı geçersiz: %w", err)
+	}
+	to, err := time.Parse(time.RFC3339, toISO)
+	if err != nil {
+		return SaleDetailsDTO{}, fmt.Errorf("gün özeti bitiş zamanı geçersiz: %w", err)
+	}
+	details, err := a.api.GetSaleDetails(a.ctx, branchID, from, to)
+	if err != nil {
+		return SaleDetailsDTO{}, err
+	}
+	payments := make([]PaymentTotalDTO, len(details.Payments))
+	for i, p := range details.Payments {
+		payments[i] = PaymentTotalDTO{Method: p.Method, Status: p.Status, Count: p.Count, Total: p.Total}
+	}
+	return SaleDetailsDTO{
+		Sales: SaleTotalsDTO{
+			ClosedCheckCount: details.Sales.ClosedCheckCount,
+			Gross:            details.Sales.Gross,
+			ItemCount:        details.Sales.ItemCount,
+			AverageCheck:     details.Sales.AverageCheck,
+		},
+		Payments: payments,
+	}, nil
+}

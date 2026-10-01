@@ -30,7 +30,7 @@ import { EventsOn } from '../wailsjs/runtime/runtime'
 import { main } from '../wailsjs/go/models'
 import { CashierSwitchModal } from './components/CashierSwitchModal'
 import { BannerStack, type Banner } from './components/BannerStack'
-import { CashSessionBanner, CashSessionStatusButton } from './components/CashSessionBanner'
+import { CashSessionBanner } from './components/CashSessionBanner'
 import { CashSessionModal } from './components/CashSessionModal'
 import { CheckRail } from './components/CheckRail'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -39,6 +39,7 @@ import { PaymentScreen, type PaymentInitial, type PaymentRequest } from './compo
 import { ProductGrid } from './components/ProductGrid'
 import { Receipt } from './components/Receipt'
 import { LoginScreen } from './components/LoginScreen'
+import { StatusBar } from './components/StatusBar'
 import { TablePlan } from './components/TablePlan'
 import { useCashierSwitch } from './hooks/useCashierSwitch'
 import { useCashSession } from './hooks/useCashSession'
@@ -61,6 +62,7 @@ import {
   type TrackedPayment,
 } from './lib/fiscalStatus'
 import { cashSessionBannerKind } from './lib/cashSession'
+import { checksById, splitServiceChecks } from './lib/checkDisplay'
 import { seatGroups } from './lib/seatTotals'
 import {
   addNoticeFailure,
@@ -349,6 +351,12 @@ function App() {
   }, [sessionFiscalKey])
 
   const selectedCheckId = selectedCheck?.id ?? null
+
+  // Masa planı sekmeleri (AnaEkran tasarımı): Gel Al / Paket sekmeleri
+  // service_type'a göre, dolu masa kartındaki tutar/süre ise id eşlemesiyle
+  // beslenir — ikisi de aynı open-check listesinden türetilir.
+  const serviceSplit = useMemo(() => splitServiceChecks(openChecks), [openChecks])
+  const openChecksById = useMemo(() => checksById(openChecks), [openChecks])
 
   // The payment screen belongs to one check: moving to another (or to the floor
   // plan) must not carry it, or its amounts would be read against the wrong check.
@@ -1280,54 +1288,21 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col bg-surface text-ink">
-      <header className="flex min-h-12 shrink-0 items-center justify-between border-b border-line px-4 text-sm">
-        <span>
-          {session.full_name} ({session.email})
-        </span>
-        <div className="flex items-center gap-4">
-          {/*
-            Bağlı yazıcı sessizdir — yalnızca kopuk/hata durumunda uyarı
-            (warn) rengiyle bir rozet gösterilir (kırmızı hiçbir zaman: bu
-            app'te kırmızı yalnız void/iptal içindir, bkz. style.css). Amber
-            para/ana aksiyon anlamına ayrıldığı için uyarı ayrı bir token'dır.
-          */}
-          {kitchenPrinter && kitchenPrinter.status !== 'connected' && (
-            <span
-              className="rounded-full border border-warn bg-warn/20 px-2 py-0.5 text-xs font-semibold text-ink"
-              title={kitchenPrinter.error ?? ''}
-            >
-              Mutfak yazıcısı {kitchenPrinter.status === 'error' ? 'hata' : 'bağlı değil'}
-            </span>
-          )}
-          {printer && printer.status !== 'connected' && (
-            <span
-              className="rounded-full border border-warn bg-warn/20 px-2 py-0.5 text-xs font-semibold text-ink"
-              title={printer.error ?? ''}
-            >
-              Yazıcı {printer.status === 'error' ? 'hata' : 'bağlı değil'}
-            </span>
-          )}
-          {cashSession.session && !cashBannerKind && (
-            <CashSessionStatusButton session={cashSession.session} onOpen={() => setCashSessionModalOpen(true)} />
-          )}
-          <button
-            type="button"
-            disabled={!cashSession.session}
-            title={
-              cashSession.session
-                ? undefined
-                : 'Kasiyer değiştirmek için önce kasa açık olmalı — kasa oturumu, katılımın bağlı olduğu şey.'
-            }
-            onClick={() => setCashierSwitchModalOpen(true)}
-            className="min-h-12 rounded px-3 text-ink-dim disabled:opacity-40"
-          >
-            Kasiyer Değiştir
-          </button>
-          <button type="button" onClick={handleLogout} className="min-h-12 rounded px-3 text-ink-dim">
-            Çıkış
-          </button>
-        </div>
-      </header>
+      {/* Üst durum çubuğu (AnaEkran tasarımı): kasa rozeti + kasiyer solda,
+          cihaz rozetleri + Gün Sonu / oturum düğmeleri sağda. Eski başlıktaki
+          CashSessionStatusButton'ın işlevi buraya taşındı; banner alanı artık
+          yalnız uyarı durumlarını taşır (bkz. CashSessionBanner). */}
+      <StatusBar
+        cashSession={cashSession.session}
+        cashierName={session.full_name ?? ''}
+        cashierEmail={session.email ?? ''}
+        printer={printer}
+        kitchenPrinter={kitchenPrinter}
+        onOpenCashScreen={() => setCashSessionModalOpen(true)}
+        onSwitchCashier={() => setCashierSwitchModalOpen(true)}
+        canSwitchCashier={Boolean(cashSession.session)}
+        onLogout={() => void handleLogout()}
+      />
 
       <BannerStack banners={banners} />
 
@@ -1350,6 +1325,7 @@ function App() {
             onSelectOccupied={() => undefined}
             onCleanTable={handleCleanTable}
             awaitingFiscalCheckIds={awaitingFiscalCheckIds}
+            openChecksById={openChecksById}
             target={{
               kind: targetPick,
               prompt: targetPrompt(targetPick, selectedCheck.table_label || 'Adisyon'),
@@ -1397,6 +1373,12 @@ function App() {
             onSelectOccupied={handleSelectCheck}
             onCleanTable={handleCleanTable}
             awaitingFiscalCheckIds={awaitingFiscalCheckIds}
+            openChecksById={openChecksById}
+            serviceTabs={{
+              takeaway: serviceSplit.takeaway,
+              delivery: serviceSplit.delivery,
+              onSelectCheck: handleSelectCheck,
+            }}
           />
         )}
 

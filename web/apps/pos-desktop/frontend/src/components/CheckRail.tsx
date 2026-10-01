@@ -1,7 +1,18 @@
 import { useState } from 'react'
 import type { main } from '../../wailsjs/go/models'
 import { formatMoney } from '@onlinemenu/pos-core'
+import { checkTitle, elapsedLabel, serviceKind, SERVICE_LABELS } from '../lib/checkDisplay'
 import { PendingFiscalDot } from './PendingFiscalDot'
+
+// İkincil bilgi satırı (AnaEkran tasarımı): geçen süre; masasız serviste süre
+// yoksa bile satır tipi okunur kalsın diye servis etiketi tek başına düşer.
+// (Kalem sayısı liste yanıtında yok — adisyon açılınca fişte görünür.)
+function secondaryLabel(check: main.CheckDTO): string {
+  const elapsed = elapsedLabel(check.opened_at)
+  if (elapsed) return elapsed
+  const kind = serviceKind(check)
+  return kind ? SERVICE_LABELS[kind] : ''
+}
 
 type CheckRailProps = {
   checks: main.CheckDTO[]
@@ -15,14 +26,6 @@ type CheckRailProps = {
    * fiscalStatus.ts's checkIdsAwaitingFiscal). Degrades to this station's own
    * payments only when the session's role lacks payment.fiscal_status.read. */
   awaitingFiscalCheckIds: ReadonlySet<string>
-}
-
-function elapsedLabel(openedAt: string): string {
-  const openedMs = Date.parse(openedAt)
-  if (Number.isNaN(openedMs)) return ''
-  const minutes = Math.max(0, Math.floor((Date.now() - openedMs) / 60000))
-  if (minutes < 60) return `${minutes} dk`
-  return `${Math.floor(minutes / 60)} sa ${minutes % 60} dk`
 }
 
 /**
@@ -71,10 +74,13 @@ export function CheckRail({
                   }`}
                 >
                   <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full bg-teal" />
-                  <span className="flex-1">
-                    <span className="block font-medium text-ink">{chk.table_label || 'Masa'}</span>
+                  <span className="min-w-0 flex-1">
+                    {/* Adisyon rayı (AnaEkran tasarımı): bir masasız servis
+                        adisyonu masa adı yerine müşterisiyle anılır — bkz.
+                        lib/checkDisplay.checkTitle. */}
+                    <span className="block truncate font-medium text-ink">{checkTitle(chk)}</span>
                     <span className="block text-xs text-ink-dim tabular-nums">
-                      {elapsedLabel(chk.opened_at)}
+                      {secondaryLabel(chk)}
                     </span>
                   </span>
                   {awaitingFiscalCheckIds.has(chk.id) && <PendingFiscalDot />}

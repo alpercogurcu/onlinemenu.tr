@@ -10,6 +10,8 @@
 // pos-core's paymentPlan.itemTotal takes), kept out of the component so it is
 // testable without a DOM.
 
+import { formatMoney } from '@onlinemenu/pos-core'
+
 /** Narrow shape this module needs from a confirmed order (main.OrderDTO).
  * Declared locally rather than imported from the generated Wails binding —
  * same rationale as pos-core's paymentPlan.OrderSource. seat_no is optional so
@@ -59,6 +61,31 @@ export function seatGroups(orders: readonly SeatOrderSource[], paidItemIds: Read
     if (b.seat === 0) return -1
     return a.seat - b.seat
   })
+}
+
+export type SeatChip = {
+  seat: number
+  /** Chip text as rendered: "2 · 520,00 ₺", "1 · Ödendi", "Ortak · 160,00 ₺". */
+  label: string
+  /** remaining 0 — every item of the guest was item-paid; the chip is a badge,
+   * not a shortcut, and must not be tappable. */
+  settled: boolean
+}
+
+/**
+ * Presentation of one "Kişiler" chip on the payment screen (approved payment
+ * design): a settled guest reads "N · Ödendi", an open one "N · tutar", and
+ * the shared bucket keeps its "Ortak" name. Pure so the visible chip text is
+ * testable without a DOM.
+ */
+export function seatChip(group: SeatGroup): SeatChip {
+  const name = group.seat > 0 ? String(group.seat) : 'Ortak'
+  const settled = group.remaining <= 0
+  return {
+    seat: group.seat,
+    settled,
+    label: settled ? `${name} · Ödendi` : `${name} · ${formatMoney(group.remaining)}`,
+  }
 }
 
 /** Row label: "Kişi 2", or "Ortak" for the unassigned bucket. */

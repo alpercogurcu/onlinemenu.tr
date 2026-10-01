@@ -1,5 +1,6 @@
+import { formatMoney } from '@onlinemenu/pos-core'
 import { describe, expect, it } from 'vitest'
-import { seatBadge, seatGroups, seatLabel, type SeatOrderSource } from './seatTotals'
+import { seatBadge, seatChip, seatGroups, seatLabel, type SeatOrderSource } from './seatTotals'
 
 function order(...items: SeatOrderSource['items']): SeatOrderSource {
   return { items }
@@ -57,6 +58,29 @@ describe('seatGroups', () => {
     const orders = [order(item('a', 1, 900, 1), item('b', 1, 400, 2))]
     const groups = seatGroups(orders, new Set(['a']))
     expect(groups[0]).toEqual({ seat: 1, total: 900, remaining: 0 })
+  })
+})
+
+describe('seatChip', () => {
+  it('renders an open guest as "N · tutar" and keeps it tappable', () => {
+    expect(seatChip({ seat: 2, total: 52000, remaining: 52000 })).toEqual({
+      seat: 2,
+      settled: false,
+      label: `2 · ${formatMoney(52000)}`,
+    })
+  })
+
+  it('renders a settled guest (kalan 0) as "N · Ödendi" and disables the shortcut', () => {
+    expect(seatChip({ seat: 1, total: 47000, remaining: 0 })).toEqual({
+      seat: 1,
+      settled: true,
+      label: '1 · Ödendi',
+    })
+  })
+
+  it('names the shared bucket "Ortak" in both states', () => {
+    expect(seatChip({ seat: 0, total: 16000, remaining: 16000 }).label).toBe(`Ortak · ${formatMoney(16000)}`)
+    expect(seatChip({ seat: 0, total: 16000, remaining: 0 }).label).toBe('Ortak · Ödendi')
   })
 })
 

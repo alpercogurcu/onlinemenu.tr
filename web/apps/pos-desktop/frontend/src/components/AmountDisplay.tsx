@@ -17,7 +17,7 @@ export function AmountDisplay({ label, value }: AmountDisplayProps) {
     <div
       role="status"
       aria-label={label}
-      className="flex min-h-14 items-baseline justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2"
+      className="flex min-h-16 items-baseline justify-between gap-3 rounded-lg border border-line bg-surface px-4 py-3"
     >
       <span className="text-sm text-ink-dim">{label}</span>
       <span className="money font-display text-3xl font-bold tabular-nums text-ink">

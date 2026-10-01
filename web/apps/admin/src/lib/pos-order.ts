@@ -13,7 +13,7 @@ import {
   type OrderItemInput,
 } from "@onlinemenu/pos-core"
 
-import type { Product } from "@/types"
+import type { Product, ServiceType } from "@/types"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -141,12 +141,19 @@ export function orderSignature(checkId: string, items: readonly OrderItemInput[]
 export interface PlaceOrderBody {
   branch_id: string
   check_id: string
-  order_channel: "dine_in"
+  // Mirrors the check's service_type: takeaway/delivery rounds are tagged so
+  // the kitchen ticket and reports can tell them from table service.
+  order_channel: ServiceType
   items: OrderItemInput[]
 }
 
-export function placeOrderBody(branchId: string, checkId: string, items: OrderItemInput[]): PlaceOrderBody {
-  return { branch_id: branchId, check_id: checkId, order_channel: "dine_in", items }
+export function placeOrderBody(
+  branchId: string,
+  checkId: string,
+  items: OrderItemInput[],
+  channel: ServiceType = "dine_in",
+): PlaceOrderBody {
+  return { branch_id: branchId, check_id: checkId, order_channel: channel, items }
 }
 
 // ---------------------------------------------------------------------------

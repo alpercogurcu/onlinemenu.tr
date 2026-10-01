@@ -35,9 +35,16 @@ const product = (id: string, name: string, price: number, sort: number) => ({
   currency: "TRY", sku: "", unit: "adet", tax_rate_bps: 1000, is_active: true, sort_order: sort,
 })
 
+const SERVICE_CHECK = {
+  ...stamp, id: "svc1", branch_id: BRANCH, table_label: "Alper Vural", pax: 0, status: "open", note: "",
+  opened_at: "2026-10-01T10:00:00Z", closed_at: null, service_type: "takeaway", customer_name: "Alper Vural",
+}
+
 function routeGet(url: string) {
   const map: Record<string, unknown> = {
     "/api/v1/pos/tables": [{ zone_id: "z1", zone_name: "Salon", floor: 0, tables: [TABLE] }],
+    "/api/v1/pos/checks/svc1": SERVICE_CHECK,
+    "/api/v1/pos/checks/svc1/orders": [],
     "/api/v1/catalog/categories": [{ ...stamp, id: "cat", name: "Ana Yemekler", description: "", sort_order: 1, is_active: true }],
     "/api/v1/catalog/products": [product("kebap", "Adana Kebap", 32_000, 1), product("ayran", "Ayran", 4_000, 2)],
     "/api/v1/catalog/products/modifier-groups": [
@@ -148,6 +155,60 @@ describe("OrderScreen", { timeout: 20_000 }, () => {
       expect.objectContaining({ product_id: "ayran", quantity: 1, unit_price_amount: 4_000, modifier_ids: [] }),
     ])
     expect(screen.getByTestId("cart-count")).toHaveTextContent("0 kalem")
+  })
+
+  it("tapping a cart line opens the note editor; the note rides on the order item", async () => {
+    post.mockImplementation((url: string) =>
+      url === "/api/v1/pos/checks" ? Promise.resolve({ data: { id: "chk1" } }) : Promise.resolve({ data: { id: "o1" } }),
+    )
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("1 kalem"))
+
+    fireEvent.click(screen.getByRole("button", { name: "Ayran satır notu" }))
+    fireEvent.change(screen.getByLabelText("Ayran için not"), { target: { value: "Buzsuz" } })
+    fireEvent.click(screen.getByRole("button", { name: "Tamam" }))
+
+    const line = screen.getByTestId("cart-line")
+    expect(line).toHaveTextContent("Buzsuz")
+    expect(screen.queryByLabelText("Ayran için not")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Mutfağa gönder/ })[0])
+    await screen.findByText("Mutfağa gönderildi")
+    const [, body] = post.mock.calls.find(([u]) => u === "/api/v1/pos/orders")!
+    expect(body.items).toEqual([expect.objectContaining({ product_id: "ayran", note: "Buzsuz" })])
+  })
+
+  it("a gel al check: customer name + service badge in the header, no check reopen, order_channel = takeaway", async () => {
+    post.mockResolvedValue({ data: { id: "o1" } })
+    render(wrap(<OrderScreen branchId={BRANCH} serviceCheckId="svc1" onBackToTables={vi.fn()} />))
+
+    expect(await screen.findByRole("heading", { name: "Alper Vural" })).toBeInTheDocument()
+    expect(screen.getAllByText("Gel Al").length).toBeGreaterThan(0)
+    // Tableless flow never reads the floor plan.
+    expect(get.mock.calls.map(([u]) => u)).not.toContain("/api/v1/pos/tables")
+
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("1 kalem"))
+    fireEvent.click(screen.getAllByRole("button", { name: /Mutfağa gönder/ })[0])
+    await screen.findByText("Mutfağa gönderildi")
+
+    // The check already exists: no POST /pos/checks, the order goes straight on it.
+    expect(post.mock.calls.filter(([u]) => u === "/api/v1/pos/checks")).toHaveLength(0)
+    const [url, body] = post.mock.calls[0]
+    expect(url).toBe("/api/v1/pos/orders")
+    expect(body).toMatchObject({ branch_id: BRANCH, check_id: "svc1", order_channel: "takeaway" })
+  })
+
+  it("a closed gel al check explains itself instead of taking orders", async () => {
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/pos/checks/svc1"
+        ? Promise.resolve({ data: { ...SERVICE_CHECK, status: "closed" } })
+        : routeGet(url),
+    )
+    render(wrap(<OrderScreen branchId={BRANCH} serviceCheckId="svc1" onBackToTables={vi.fn()} />))
+    expect(await screen.findByText(/Bu adisyon kapatılmış/)).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Alper Vural" })).not.toBeInTheDocument()
   })
 
   it("network error keeps the cart; Tekrar dene resends the SAME key without reopening the check", async () => {

@@ -12,6 +12,7 @@ import {
   pendingTotal,
   removePendingLine,
   toOrderItemInputs,
+  updatePendingNote,
   type LineOptions,
   type ModifierGroupSource,
   type PendingLine,
@@ -25,7 +26,7 @@ import { SentItems } from "@/components/pos/order/sent-items"
 import { TouchConfirm, TouchSheet } from "@/components/pos/order/touch-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useTables } from "@/hooks/use-pos"
+import { useCheck, useTables } from "@/hooks/use-pos"
 import {
   useBranchProducts,
   useCleanTable,
@@ -54,7 +55,10 @@ const UNCATEGORISED = "__none__"
 
 interface OrderScreenProps {
   branchId: string
-  tableId: string
+  /** Dine-in: the table whose check this round belongs to. */
+  tableId?: string
+  /** Gel al / paket: an already-open tableless check (opened by the picker's form). */
+  serviceCheckId?: string
   onBackToTables: () => void
 }
 
@@ -68,16 +72,24 @@ interface SuccessState {
  * The waiter's order screen for one table (docs/pos-ux-spec.md §2-§3a):
  * categories → big product tiles → cart → "Mutfağa gönder".
  *
- * The check (adisyon) is opened lazily, on the first send, not when the table
- * is tapped: a waiter may open, change and cancel a check only through a
- * cashier (no pos.check.cancel), so a mis-tap on an empty table must not leave
- * an occupied table behind. To the waiter the flow looks the same.
+ * Dine-in: the check (adisyon) is opened lazily, on the first send, not when
+ * the table is tapped: a waiter may open, change and cancel a check only
+ * through a cashier (no pos.check.cancel), so a mis-tap on an empty table must
+ * not leave an occupied table behind. To the waiter the flow looks the same.
+ *
+ * Gel al / paket (serviceCheckId): the check already exists — the picker's
+ * form opened it, because without a name there is nothing to call the order —
+ * so sends go straight onto it, tagged with order_channel = service_type.
  */
-export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenProps) {
+export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables }: OrderScreenProps) {
   const t = useTranslations("posOrder")
-  const { data: plan, isLoading: planLoading, refetch: refetchPlan } = useTables(branchId, {
+  const serviceMode = serviceCheckId !== undefined
+  // The floor plan matters only to the table flow; "" disables the query.
+  const { data: plan, isLoading: planLoading, refetch: refetchPlan } = useTables(serviceMode ? "" : branchId, {
     refetchInterval: 20_000,
   })
+  const serviceCheckQuery = useCheck(serviceCheckId ?? "")
+  const serviceCheck = serviceMode ? serviceCheckQuery.data : undefined
   const categoriesQuery = useOrderCategories()
   const productsQuery = useBranchProducts(branchId)
   const refreshCatalog = useRefreshOrderCatalog()
@@ -104,7 +116,9 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
   }, [])
 
   const table = plan?.flatMap((zone) => zone.tables).find((tb) => tb.id === tableId)
-  const checkId = openedCheckId ?? table?.active_check_id ?? null
+  const checkId = serviceMode ? serviceCheckId : (openedCheckId ?? table?.active_check_id ?? null)
+  const channel = serviceMode ? (serviceCheck?.service_type ?? "dine_in") : "dine_in"
+  const displayName = serviceMode ? (serviceCheck?.customer_name || serviceCheck?.table_label || "") : (table?.name ?? "")
 
   const products = productsQuery.data ?? []
   const byCategory = new Map<string, Product[]>()
@@ -161,6 +175,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
   }
 
   async function ensureCheck(): Promise<{ id: string; joined: boolean }> {
+    if (serviceMode) return { id: serviceCheckId, joined: false }
     if (checkId) return { id: checkId, joined: false }
     if (!table) throw new Error("table not loaded")
     try {
@@ -191,7 +206,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
       const items = toOrderItemInputs(lines)
       submission.current = submissionKeyFor(submission.current, orderSignature(check.id, items), newIdempotencyKey)
       await placeOrder.mutateAsync({
-        body: placeOrderBody(branchId, check.id, items),
+        body: placeOrderBody(branchId, check.id, items, channel),
         idempotencyKey: submission.current.key,
       })
       submission.current = null
@@ -204,11 +219,17 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
       setError(described)
       if (described.kind === "price") void refreshCatalog()
       if (described.kind === "not_open") {
-        // The check was closed/cancelled at the counter meanwhile: the next
-        // send opens a fresh one for this table.
-        setOpenedCheckId(null)
-        submission.current = null
-        void refetchPlan()
+        if (serviceMode) {
+          // The gel al / paket check was closed at the counter meanwhile:
+          // re-read it so the guard below explains instead of failing again.
+          void serviceCheckQuery.refetch()
+        } else {
+          // The check was closed/cancelled at the counter meanwhile: the next
+          // send opens a fresh one for this table.
+          setOpenedCheckId(null)
+          submission.current = null
+          void refetchPlan()
+        }
       }
     } finally {
       setSending(false)
@@ -231,7 +252,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
     }
   }
 
-  if (planLoading) {
+  if (serviceMode ? serviceCheckQuery.isLoading : planLoading) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-12 w-full rounded-xl" />
@@ -244,16 +265,22 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
     )
   }
 
-  if (!table) {
+  if (serviceMode ? !serviceCheck || serviceCheck.status !== "open" : !table) {
     return (
       <div className="space-y-4 py-12 text-center">
-        <p className="text-base text-muted-foreground">{t("tableNotFound")}</p>
+        <p className="text-base text-muted-foreground">
+          {serviceMode
+            ? serviceCheck && serviceCheck.status !== "open"
+              ? t("service.checkClosed")
+              : t("service.checkNotFound")
+            : t("tableNotFound")}
+        </p>
         <button
           type="button"
           onClick={onBackToTables}
           className="bg-primary text-primary-foreground min-h-14 rounded-xl px-6 text-base font-bold"
         >
-          {t("backToTables")}
+          {serviceMode ? t("service.back") : t("backToTables")}
         </button>
       </div>
     )
@@ -261,7 +288,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
 
   const catalogFailed = productsQuery.isError || categoriesQuery.isError
   const catalogLoading = productsQuery.isLoading || categoriesQuery.isLoading
-  const showCleaning = table.status === "cleaning" && !checkId
+  const showCleaning = !serviceMode && table?.status === "cleaning" && !checkId
 
   return (
     <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start lg:gap-6">
@@ -276,12 +303,20 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
             className="bg-card flex min-h-12 shrink-0 items-center gap-2 rounded-xl border-2 px-3 text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <ArrowLeft className="size-5" aria-hidden="true" />
-            {t("backToTables")}
+            {serviceMode ? t("service.back") : t("backToTables")}
           </button>
-          <h1 className="min-w-0 flex-1 truncate text-2xl font-bold tracking-tight">{table.name}</h1>
-          <Badge variant={tableStatusVariant(table.status)} className="shrink-0 px-2.5 py-1 text-sm">
-            {t(`status.${table.status}`)}
-          </Badge>
+          <h1 className="min-w-0 flex-1 truncate text-2xl font-bold tracking-tight">{displayName}</h1>
+          {serviceMode ? (
+            <Badge variant="secondary" className="shrink-0 px-2.5 py-1 text-sm font-bold uppercase">
+              {serviceCheck?.service_type === "delivery" ? t("service.delivery") : t("service.takeaway")}
+            </Badge>
+          ) : (
+            table && (
+              <Badge variant={tableStatusVariant(table.status)} className="shrink-0 px-2.5 py-1 text-sm">
+                {t(`status.${table.status}`)}
+              </Badge>
+            )
+          )}
         </div>
 
         {showCleaning && (
@@ -299,7 +334,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
           </div>
         )}
 
-        {checkId && <SentItems checkId={checkId} />}
+        {checkId && <SentItems checkId={checkId} title={serviceMode ? t("sent.titleService") : undefined} />}
 
         {catalogFailed ? (
           <div className="space-y-3 py-8 text-center">
@@ -357,7 +392,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
       >
         <div className="border-b px-4 py-3">
           <h2 className="text-lg font-bold">
-            {t("cart.title")} · {table.name}
+            {t("cart.title")} · {displayName}
           </h2>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4">
@@ -366,6 +401,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
             disabled={sending}
             onChangeQuantity={(id, delta) => editLines((current) => changePendingQuantity(current, id, delta))}
             onRemove={(id) => editLines((current) => removePendingLine(current, id))}
+            onChangeNote={(id, note) => editLines((current) => updatePendingNote(current, id, note))}
           />
         </div>
         <div className="space-y-3 border-t px-4 py-3">
@@ -395,7 +431,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
         open={cartOpen}
         onOpenChange={setCartOpen}
         layout="bottom"
-        title={`${t("cart.title")} · ${table.name}`}
+        title={`${t("cart.title")} · ${displayName}`}
         closeLabel={t("cart.close")}
         footer={
           <div className="space-y-3">
@@ -414,6 +450,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
             disabled={sending}
             onChangeQuantity={(id, delta) => editLines((current) => changePendingQuantity(current, id, delta))}
             onRemove={(id) => editLines((current) => removePendingLine(current, id))}
+            onChangeNote={(id, note) => editLines((current) => updatePendingNote(current, id, note))}
           />
         </div>
       </TouchSheet>
@@ -441,7 +478,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
                 onClick={onBackToTables}
                 className="bg-primary text-primary-foreground min-h-14 flex-1 rounded-xl text-base font-bold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
-                {t("success.backToTables")}
+                {serviceMode ? t("success.backToPicker") : t("success.backToTables")}
               </button>
             </div>
           }
@@ -449,7 +486,7 @@ export function OrderScreen({ branchId, tableId, onBackToTables }: OrderScreenPr
           <div role="status" className="flex flex-col items-center gap-3 px-4 py-6 text-center">
             <CircleCheckBig className="text-status-success-fg size-14 motion-safe:animate-in motion-safe:zoom-in-75" aria-hidden="true" />
             <p className="text-lg font-semibold tabular-nums">
-              {t("success.body", { table: table.name, count: success.count, total: formatMoney(success.total) })}
+              {t("success.body", { table: displayName, count: success.count, total: formatMoney(success.total) })}
             </p>
             {success.joined && <p className="text-base text-muted-foreground">{t("success.occupiedJoined")}</p>}
           </div>

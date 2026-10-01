@@ -21,7 +21,7 @@ const NOT_BILLED: ReadonlySet<OrderStatus> = new Set(["rejected", "cancelled"])
  * What the table already ordered, folded by default: the waiter's job here is
  * the NEW round, but "did I already send the ayran?" must be one tap away.
  */
-export function SentItems({ checkId }: { checkId: string }) {
+export function SentItems({ checkId, title }: { checkId: string; title?: string }) {
   const t = useTranslations("posOrder.sent")
   const [open, setOpen] = useState(false)
   const { data: orders } = useCheckOrders(checkId)
@@ -42,7 +42,7 @@ export function SentItems({ checkId }: { checkId: string }) {
         className="flex min-h-14 w-full items-center gap-3 px-4 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         <span className="flex-1">
-          <span className="block text-base font-semibold">{t("title")}</span>
+          <span className="block text-base font-semibold">{title ?? t("title")}</span>
           <span className="block text-sm text-muted-foreground tabular-nums">
             {items.length === 0 ? t("empty") : t("summary", { count, total: formatMoney(total) })}
           </span>

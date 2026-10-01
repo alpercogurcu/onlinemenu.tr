@@ -110,6 +110,29 @@ export function removePendingLine(lines: PendingLine[], clientId: string): Pendi
   return lines.filter((l) => l.clientId !== clientId)
 }
 
+/**
+ * Rewrites one pending line's free kitchen note in place. The note is part of
+ * the line's options identity (optionsHash — the kitchen ticket differs), so
+ * the hash is recomputed; if the edit makes the line identical to another line
+ * of the same product, the two merge exactly as addProductToPending would have
+ * merged them (quantities added, capped at MAX_LINE_QUANTITY). Unknown
+ * clientId and a no-op edit return the input array unchanged.
+ */
+export function updatePendingNote(lines: PendingLine[], clientId: string, note: string): PendingLine[] {
+  const target = lines.find((l) => l.clientId === clientId)
+  if (!target) return lines
+  const trimmed = note.trim()
+  if (trimmed === target.note) return lines
+  const hash = optionsHash(target.modifiers, trimmed)
+  const twin = lines.find((l) => l !== target && l.productId === target.productId && l.optionsHash === hash)
+  if (twin) {
+    return lines
+      .filter((l) => l !== target)
+      .map((l) => (l === twin ? { ...l, quantity: Math.min(MAX_LINE_QUANTITY, l.quantity + target.quantity) } : l))
+  }
+  return lines.map((l) => (l === target ? { ...l, note: trimmed, optionsHash: hash } : l))
+}
+
 /** Base price plus every chosen option's price delta — the formula the server validates. */
 export function pendingUnitPrice(line: PendingLine): number {
   return unitPriceWith(line.productPriceAmount, line.modifiers)

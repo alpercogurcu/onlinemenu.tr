@@ -654,8 +654,39 @@
     }
   },
   "posOrder": {
-    "pickTitle": "Masa seçin",
-    "pickSubtitle": "Sipariş almak istediğiniz masaya dokunun.",
+    "pickTitle": "Sipariş al",
+    "pickSubtitle": "Masaya dokunun ya da Gel Al / Paket adisyonu açın.",
+    "tabs": {
+      "aria": "Sipariş türü",
+      "tables": "Masalar",
+      "takeaway": "Gel Al",
+      "delivery": "Paket"
+    },
+    "service": {
+      "takeaway": "Gel Al",
+      "delivery": "Paket",
+      "newTakeaway": "Yeni Gel Al",
+      "newDelivery": "Yeni Paket",
+      "formTitleTakeaway": "Yeni Gel Al siparişi",
+      "formTitleDelivery": "Yeni Paket siparişi",
+      "name": "Ad Soyad",
+      "phone": "Telefon",
+      "phoneOptional": "Telefon (isteğe bağlı)",
+      "address": "Adres (isteğe bağlı)",
+      "nameRequired": "Ad soyad girin.",
+      "phoneRequired": "Telefon numarası girin.",
+      "start": "Adisyonu aç",
+      "starting": "Açılıyor…",
+      "openFailed": "Adisyon açılamadı. Tekrar deneyin.",
+      "emptyTakeaway": "Açık Gel Al adisyonu yok.",
+      "emptyDelivery": "Açık Paket adisyonu yok.",
+      "itemCount": "{count} ürün",
+      "rowAria": "{name}, {service}",
+      "close": "Kapat",
+      "back": "Geri",
+      "checkNotFound": "Adisyon bulunamadı. Listeden yeniden seçin.",
+      "checkClosed": "Bu adisyon kapatılmış. Listeden yeni adisyon seçin."
+    },
     "branch": "Şube",
     "noBranch": "Önce bir şube seçin",
     "noTables": "Bu şubede masa yok. Masa tanımı için yöneticinize başvurun.",
@@ -684,6 +715,7 @@
     "added": "{product} eklendi",
     "sent": {
       "title": "Masada olanlar",
+      "titleService": "Adisyonda olanlar",
       "summary": "{count} kalem · {total}",
       "empty": "Henüz sipariş yok.",
       "detail": "Adisyon detayı",
@@ -710,7 +742,13 @@
       "remove": "Sil",
       "removeAria": "{product} satırını sil",
       "quantity": "Adet",
-      "close": "Kapat"
+      "close": "Kapat",
+      "noteEditAria": "{product} satır notu",
+      "noteAdd": "Not ekle",
+      "noteEdit": "Notu düzenle",
+      "noteLabel": "{product} için not",
+      "notePlaceholder": "Örn. buzsuz",
+      "noteSave": "Tamam"
     },
     "picker": {
       "close": "Kapat",
@@ -731,6 +769,7 @@
       "title": "Mutfağa gönderildi",
       "body": "{table} · {count} kalem · {total}",
       "backToTables": "Masalara dön",
+      "backToPicker": "Listeye dön",
       "continue": "Bu masaya ekle",
       "occupiedJoined": "Masada açık adisyon varmış; sipariş o adisyona eklendi."
     },

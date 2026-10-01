@@ -8,6 +8,7 @@ import {
   pendingTotal,
   pendingUnitPrice,
   toOrderItemInputs,
+  updatePendingNote,
   type PendingLine,
   type ProductSource,
 } from './cart'
@@ -152,6 +153,102 @@ describe('addProductToPending', () => {
   it('carries the "options could not be fetched" flag onto the line', () => {
     const [flagged] = addProductToPending([], { ...lahmacun, options_unavailable: true })
     expect(flagged.optionsUnavailable).toBe(true)
+  })
+})
+
+describe('updatePendingNote', () => {
+  const cases: {
+    name: string
+    lines: PendingLine[]
+    clientId: string
+    note: string
+    want: { count: number; notes?: string[]; quantities?: number[]; same?: boolean }
+  }[] = [
+    {
+      name: 'writes a note onto an option-less line and refreshes its hash',
+      lines: [line({ clientId: 'a' })],
+      clientId: 'a',
+      note: 'Buzsuz',
+      want: { count: 1, notes: ['Buzsuz'] },
+    },
+    {
+      name: 'trims surrounding whitespace',
+      lines: [line({ clientId: 'a' })],
+      clientId: 'a',
+      note: '  az şekerli  ',
+      want: { count: 1, notes: ['az şekerli'] },
+    },
+    {
+      name: 'clearing the note restores the plain identity',
+      lines: [line({ clientId: 'a', note: 'Buzsuz', optionsHash: optionsHash([], 'Buzsuz') })],
+      clientId: 'a',
+      note: '',
+      want: { count: 1, notes: [''] },
+    },
+    {
+      name: 'unknown clientId returns the input unchanged',
+      lines: [line({ clientId: 'a' })],
+      clientId: 'missing',
+      note: 'Buzsuz',
+      want: { count: 1, same: true },
+    },
+    {
+      name: 'a whitespace-only edit of an empty note is a no-op',
+      lines: [line({ clientId: 'a' })],
+      clientId: 'a',
+      note: '   ',
+      want: { count: 1, same: true },
+    },
+    {
+      name: 'merges into the twin line when the edit makes the options identical',
+      lines: [
+        line({ clientId: 'a', quantity: 2, note: 'Buzsuz', optionsHash: optionsHash([], 'Buzsuz') }),
+        line({ clientId: 'b', quantity: 3 }),
+      ],
+      clientId: 'a',
+      note: '',
+      want: { count: 1, quantities: [5], notes: [''] },
+    },
+    {
+      name: 'a merged quantity is capped at MAX_LINE_QUANTITY',
+      lines: [
+        line({ clientId: 'a', quantity: 10, note: 'Buzsuz', optionsHash: optionsHash([], 'Buzsuz') }),
+        line({ clientId: 'b', quantity: MAX_LINE_QUANTITY }),
+      ],
+      clientId: 'a',
+      note: '',
+      want: { count: 1, quantities: [MAX_LINE_QUANTITY] },
+    },
+    {
+      name: 'does not merge across different products',
+      lines: [
+        line({ clientId: 'a', productId: 'p1', note: 'Buzsuz', optionsHash: optionsHash([], 'Buzsuz') }),
+        line({ clientId: 'b', productId: 'p2' }),
+      ],
+      clientId: 'a',
+      note: '',
+      want: { count: 2, notes: ['', ''] },
+    },
+  ]
+
+  it.each(cases)('$name', ({ lines, clientId, note, want }) => {
+    const next = updatePendingNote(lines, clientId, note)
+    expect(next).toHaveLength(want.count)
+    if (want.same) expect(next).toBe(lines)
+    if (want.notes) expect(next.map((l) => l.note)).toEqual(want.notes)
+    if (want.quantities) expect(next.map((l) => l.quantity)).toEqual(want.quantities)
+    for (const l of next) expect(l.optionsHash).toBe(optionsHash(l.modifiers, l.note))
+  })
+
+  it('keeps an edited line separate from an optioned line of the same product', () => {
+    const lines = [
+      line({ clientId: 'a' }),
+      line({ clientId: 'b', modifiers: [HOT], optionsHash: optionsHash([HOT], '') }),
+    ]
+    const next = updatePendingNote(lines, 'a', 'Soğansız')
+    expect(next).toHaveLength(2)
+    expect(next[0].note).toBe('Soğansız')
+    expect(next[1].modifiers).toEqual([HOT])
   })
 })
 

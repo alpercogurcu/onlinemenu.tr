@@ -10,8 +10,9 @@ import { useBranches } from "@/hooks/use-tenant"
 import { currentBranchId } from "@/lib/permissions"
 import { useAuthStore } from "@/store/auth-store"
 
-// /pos/order              -> table plan (step 1)
+// /pos/order              -> table plan / gel al / paket picker (step 1)
 // /pos/order?branch=&table= -> order screen for that table
+// /pos/order?branch=&check= -> order screen for a tableless (gel al / paket) check
 //
 // Kept in the URL (not component state) so the browser back button walks the
 // same path the waiter did, and the tables page can link straight to a table.
@@ -36,15 +37,21 @@ function OrderRoute() {
   const scopedBranchId = currentBranchId()
   const branchId = scopedBranchId ?? (params.get("branch") || branches?.[0]?.id || "")
   const tableId = params.get("table") ?? ""
+  const checkId = params.get("check") ?? ""
 
-  function go(nextBranch: string, nextTable?: string) {
+  function go(nextBranch: string, next?: { table?: string; check?: string }) {
     const query = new URLSearchParams({ branch: nextBranch })
-    if (nextTable) query.set("table", nextTable)
+    if (next?.table) query.set("table", next.table)
+    if (next?.check) query.set("check", next.check)
     router.push(`/pos/order?${query.toString()}`)
   }
 
   if (tableId && branchId) {
     return <OrderScreen key={tableId} branchId={branchId} tableId={tableId} onBackToTables={() => go(branchId)} />
+  }
+
+  if (checkId && branchId) {
+    return <OrderScreen key={checkId} branchId={branchId} serviceCheckId={checkId} onBackToTables={() => go(branchId)} />
   }
 
   return (
@@ -53,7 +60,8 @@ function OrderRoute() {
       branches={branches}
       branchLocked={scopedBranchId !== null}
       onBranchChange={(next) => go(next)}
-      onPick={(table) => go(branchId, table.id)}
+      onPick={(table) => go(branchId, { table: table.id })}
+      onPickCheck={(check) => go(branchId, { check: check.id })}
     />
   )
 }

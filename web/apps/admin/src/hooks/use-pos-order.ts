@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback } from "react"
 
 import api from "@/lib/api"
@@ -9,7 +9,7 @@ import {
   type PlaceOrderBody,
   type ProductOptionsWire,
 } from "@/lib/pos-order"
-import type { Category, Check, Order, Product } from "@/types"
+import type { Category, Check, Order, OrderStatus, Product } from "@/types"
 
 // The web order screen (/pos/order) reads the catalog in the shape a waiter
 // needs, not the shape the catalog editor needs, so it has its own hooks:
@@ -133,6 +133,60 @@ export function useOpenTableCheck() {
     },
     onSettled: () => invalidateFloor(qc),
   })
+}
+
+export interface OpenServiceCheckBody {
+  branch_id: string
+  service_type: "takeaway" | "delivery"
+  customer_name: string
+  customer_phone?: string
+  customer_address?: string
+}
+
+// A tableless check (gel al / paket): no table_id — the backend derives the
+// KDS/ticket label from customer_name. Optional fields are only sent when
+// filled so the backend never stores empty strings over its defaults.
+export function useOpenServiceCheck() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: OpenServiceCheckBody) => {
+      const { data } = await api.post<Check>("/api/v1/pos/checks", body)
+      return data
+    },
+    onSettled: () => invalidateFloor(qc),
+  })
+}
+
+// Rejected/cancelled orders are off the bill (same rule as SentItems), so the
+// picker row's "N ürün" matches what the customer will actually receive.
+const NOT_BILLED: ReadonlySet<OrderStatus> = new Set(["rejected", "cancelled"])
+
+/**
+ * Item quantities of the given checks, for the gel al / paket rows
+ * ("Alper Vural — 5 ürün · ₺940"). One request per check, but the query key
+ * is shared with useCheckOrders so an order screen visit fills this cache and
+ * vice versa; open takeaway/delivery checks are few at any moment.
+ */
+export function useCheckItemCounts(checkIds: string[]): Map<string, number> {
+  const results = useQueries({
+    queries: checkIds.map((id) => ({
+      queryKey: ["checks", id, "orders"] as const,
+      queryFn: async () => {
+        const { data } = await api.get<Order[]>(`/api/v1/pos/checks/${id}/orders`)
+        return data ?? []
+      },
+      staleTime: 30_000,
+    })),
+  })
+  const counts = new Map<string, number>()
+  results.forEach((result, i) => {
+    if (!result.data) return
+    const count = result.data
+      .filter((order) => !NOT_BILLED.has(order.status))
+      .reduce((sum, order) => sum + order.items.reduce((s, item) => s + item.quantity, 0), 0)
+    counts.set(checkIds[i], count)
+  })
+  return counts
 }
 
 // POST /pos/orders requires Idempotency-Key (ADR-SEC-003). The caller owns

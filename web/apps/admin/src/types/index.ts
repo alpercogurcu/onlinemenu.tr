@@ -128,6 +128,10 @@ export type OrderStatus =
 // today it is always undefined over the wire. The UI therefore renders the
 // source badge only when the field is actually present.
 export type CheckSource = "pos" | "online_qr"
+// How the order leaves the house (backend service_type / order_channel):
+// dine_in at a table, takeaway (gel al) picked up at the counter, delivery
+// (paket) carried to the customer's address.
+export type ServiceType = "dine_in" | "takeaway" | "delivery"
 
 export interface Check {
   id: string
@@ -146,6 +150,12 @@ export interface Check {
   // single total query) — open/close/cancel responses omit it entirely
   // (omitempty), so it must stay optional here rather than nullable.
   total?: number
+  // Masasız adisyonlar (gel al / paket). Optional: rows written before the
+  // feature carry no service_type and are treated as dine_in.
+  service_type?: ServiceType
+  customer_name?: string
+  customer_phone?: string
+  customer_address?: string
 }
 export interface OrderItem {
   id: string

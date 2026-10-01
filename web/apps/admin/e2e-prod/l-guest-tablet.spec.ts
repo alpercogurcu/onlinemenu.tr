@@ -395,7 +395,10 @@ test.describe("(l) misafir QR akışı — tablet görünüm (Serdivan)", () => 
 
     // Gönderim sonrası doğrudan sipariş detayına düşülür (?placed=1 banner'ı).
     await expect(page.getByText("Siparişiniz alındı")).toBeVisible()
-    await expect(page.getByText("Onay bekliyor").first()).toBeVisible()
+    // Serdivan basit akışta (pos_branch_settings order_flow=simple): misafir
+    // siparişi accepted doğar, rozet 'Onaylandı'dır — 'Onay bekliyor' yalnız
+    // tam akışlı şubelerde görülür.
+    await expect(page.getByText("Onaylandı").first()).toBeVisible()
 
     // Sipariş listesi: başlıktaki "Siparişlerim" bağlantısı SPA gezinmesidir,
     // misafir çerezi ve sepet oturumu korunur.
@@ -405,7 +408,7 @@ test.describe("(l) misafir QR akışı — tablet görünüm (Serdivan)", () => 
     await expect(page.getByRole("heading", { name: "Siparişlerim" })).toBeVisible()
 
     // Liste kaydının erişilebilir adı durum rozetini içerir.
-    const entry = page.getByRole("link", { name: /Onay bekliyor/ }).first()
+    const entry = page.getByRole("link", { name: /Onaylandı/ }).first()
     await expect(entry).toBeVisible()
     await entry.click()
     await page.waitForURL(/\/orders\/[^/?]+$/)

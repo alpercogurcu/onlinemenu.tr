@@ -2,6 +2,7 @@
 
 import { ChevronUp, CircleAlert, Loader2, RotateCcw, Send, ShoppingBasket } from "lucide-react"
 import { useTranslations } from "next-intl"
+import type { ReactNode } from "react"
 
 import { formatMoney } from "@onlinemenu/pos-core"
 
@@ -76,6 +77,8 @@ interface CartBarProps {
   onOpenCart: () => void
   onSend: () => void
   onRetry: () => void
+  /** Row pinned INSIDE the sticky bar, right above the basket/send row (the guest chips). */
+  topRow?: ReactNode
 }
 
 /**
@@ -84,10 +87,11 @@ interface CartBarProps {
  * Sticky, not fixed, so it sits inside the content column and never covers the
  * sidebar on a tablet; safe-area padding keeps it off the iOS home indicator.
  */
-export function CartBar({ count, total, sending, error, onOpenCart, onSend, onRetry }: CartBarProps) {
+export function CartBar({ count, total, sending, error, onOpenCart, onSend, onRetry, topRow }: CartBarProps) {
   const t = useTranslations("posOrder.cart")
   return (
     <div className="bg-background/95 supports-[backdrop-filter]:bg-background/80 sticky bottom-0 z-20 -mx-4 mt-auto space-y-2 border-t px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur lg:hidden">
+      {topRow}
       <SendError error={error} onRetry={onRetry} sending={sending} />
       <div className="flex items-stretch gap-3">
         <button

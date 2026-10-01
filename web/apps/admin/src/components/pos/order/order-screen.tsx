@@ -22,11 +22,12 @@ import { CartBar, SendButton, SendError } from "@/components/pos/order/cart-bar"
 import { CartLines } from "@/components/pos/order/cart-lines"
 import { OptionPanel } from "@/components/pos/order/option-panel"
 import { CategoryChips, ProductGrid } from "@/components/pos/order/product-grid"
+import { MAX_SEATS, SeatPicker } from "@/components/pos/order/seat-picker"
 import { SentItems } from "@/components/pos/order/sent-items"
 import { TouchConfirm, TouchSheet } from "@/components/pos/order/touch-sheet"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useCheck, useTables } from "@/hooks/use-pos"
+import { useCheck, useCheckOrders, useTables } from "@/hooks/use-pos"
 import {
   useBranchProducts,
   useCleanTable,
@@ -108,8 +109,13 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
   const [success, setSuccess] = useState<SuccessState | null>(null)
   const [cartOpen, setCartOpen] = useState(false)
   const [leaveOpen, setLeaveOpen] = useState(false)
+  const [seatCount, setSeatCount] = useState(1)
+  const [activeSeat, setActiveSeat] = useState(1)
   const submission = useRef<SubmissionKey | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Guest chips follow the check's existing items once, on open; a waiter's
+  // own tap wins over a late-arriving fetch, so seeding is one-shot.
+  const seatsSeeded = useRef(false)
 
   useEffect(() => () => {
     if (flashTimer.current) clearTimeout(flashTimer.current)
@@ -117,6 +123,25 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
 
   const table = plan?.flatMap((zone) => zone.tables).find((tb) => tb.id === tableId)
   const checkId = serviceMode ? serviceCheckId : (openedCheckId ?? table?.active_check_id ?? null)
+  // Gel al / paket is a single customer: no guest chips, items go unassigned (0).
+  const seatsEnabled = !serviceMode
+  const checkOrdersQuery = useCheckOrders(seatsEnabled ? (checkId ?? "") : "")
+
+  useEffect(() => {
+    if (!seatsEnabled || seatsSeeded.current) return
+    const orders = checkOrdersQuery.data
+    if (!orders) return
+    seatsSeeded.current = true
+    let maxSeat = 0
+    for (const order of orders) {
+      for (const item of order.items) maxSeat = Math.max(maxSeat, item.seat_no ?? 0)
+    }
+    if (maxSeat >= 1) {
+      const capped = Math.min(MAX_SEATS, maxSeat)
+      setSeatCount((current) => Math.max(current, capped))
+      setActiveSeat(capped)
+    }
+  }, [seatsEnabled, checkOrdersQuery.data])
   const channel = serviceMode ? (serviceCheck?.service_type ?? "dine_in") : "dine_in"
   const displayName = serviceMode ? (serviceCheck?.customer_name || serviceCheck?.table_label || "") : (table?.name ?? "")
 
@@ -145,8 +170,23 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
     setError(null)
   }
 
+  function selectSeat(seat: number) {
+    seatsSeeded.current = true
+    setActiveSeat(seat)
+  }
+
+  function addSeat() {
+    seatsSeeded.current = true
+    const next = Math.min(MAX_SEATS, seatCount + 1)
+    setSeatCount(next)
+    setActiveSeat(next)
+  }
+
   function addToCart(product: Product, options?: LineOptions, optionsUnavailable = false) {
-    editLines((current) => addProductToPending(current, { ...product, options_unavailable: optionsUnavailable }, options))
+    const seat = seatsEnabled ? activeSeat : 0
+    editLines((current) =>
+      addProductToPending(current, { ...product, options_unavailable: optionsUnavailable }, { ...options, seat }),
+    )
     tapHaptic()
     setFlashId(product.id)
     if (flashTimer.current) clearTimeout(flashTimer.current)
@@ -382,6 +422,11 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
           onOpenCart={() => setCartOpen(true)}
           onSend={() => void send()}
           onRetry={() => void send()}
+          topRow={
+            seatsEnabled ? (
+              <SeatPicker count={seatCount} active={activeSeat} onSelect={selectSeat} onAdd={addSeat} />
+            ) : undefined
+          }
         />
       </div>
 
@@ -395,6 +440,11 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
             {t("cart.title")} · {displayName}
           </h2>
         </div>
+        {seatsEnabled && (
+          <div className="border-b px-4 py-2.5">
+            <SeatPicker count={seatCount} active={activeSeat} onSelect={selectSeat} onAdd={addSeat} />
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto px-4">
           <CartLines
             lines={lines}

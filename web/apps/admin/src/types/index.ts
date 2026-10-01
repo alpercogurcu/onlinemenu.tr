@@ -166,6 +166,9 @@ export interface OrderItem {
   note: string
   // Selected option (modifier) ids. The DTO carries ids only, no names.
   modifier_ids?: string[]
+  // Guest (kuver) number, 1-based; 0 = unassigned. Optional: rows written
+  // before the feature carry no seat_no.
+  seat_no?: number
 }
 export interface Order {
   id: string

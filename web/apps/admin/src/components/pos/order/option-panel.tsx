@@ -28,7 +28,9 @@ import { cn } from "@/lib/utils"
 interface OptionPanelProps {
   product: ProductSource
   groups: ModifierGroupSource[]
-  onConfirm: (options: Required<LineOptions>) => void
+  // The panel answers options/note/quantity; the guest (seat) is the order
+  // screen's concern and is stamped on in addToCart.
+  onConfirm: (options: Required<Omit<LineOptions, "seat">>) => void
   onCancel: () => void
 }
 

@@ -41,6 +41,7 @@ function line(overrides: Partial<PendingLine> = {}): PendingLine {
     quantity: 2,
     modifiers: [],
     note: '',
+    seat: 0,
     optionsHash: optionsHash([], ''),
     optionsUnavailable: false,
     ...overrides,
@@ -154,6 +155,41 @@ describe('addProductToPending', () => {
     const [flagged] = addProductToPending([], { ...lahmacun, options_unavailable: true })
     expect(flagged.optionsUnavailable).toBe(true)
   })
+
+  const seatCases: {
+    name: string
+    seats: [number | undefined, number | undefined]
+    want: { count: number; seats: number[]; quantities: number[] }
+  }[] = [
+    {
+      name: 'defaults the seat to 0 (unassigned) and merges as before',
+      seats: [undefined, undefined],
+      want: { count: 1, seats: [0], quantities: [2] },
+    },
+    {
+      name: 'merges the same product + options tapped for the same guest',
+      seats: [2, 2],
+      want: { count: 1, seats: [2], quantities: [2] },
+    },
+    {
+      name: 'keeps the same product + options apart for different guests',
+      seats: [1, 2],
+      want: { count: 2, seats: [1, 2], quantities: [1, 1] },
+    },
+    {
+      name: 'an unassigned line never merges with a guest line',
+      seats: [undefined, 1],
+      want: { count: 2, seats: [0, 1], quantities: [1, 1] },
+    },
+  ]
+
+  it.each(seatCases)('$name', ({ seats, want }) => {
+    const first = addProductToPending([], tea, seats[0] === undefined ? {} : { seat: seats[0] })
+    const next = addProductToPending(first, tea, seats[1] === undefined ? {} : { seat: seats[1] })
+    expect(next).toHaveLength(want.count)
+    expect(next.map((l) => l.seat)).toEqual(want.seats)
+    expect(next.map((l) => l.quantity)).toEqual(want.quantities)
+  })
 })
 
 describe('updatePendingNote', () => {
@@ -240,6 +276,29 @@ describe('updatePendingNote', () => {
     for (const l of next) expect(l.optionsHash).toBe(optionsHash(l.modifiers, l.note))
   })
 
+  it('does not merge across guests: the same note on another seat stays a separate line', () => {
+    const lines = [
+      line({ clientId: 'a', seat: 1, note: 'Buzsuz', optionsHash: optionsHash([], 'Buzsuz') }),
+      line({ clientId: 'b', seat: 2 }),
+    ]
+    const next = updatePendingNote(lines, 'a', '')
+    expect(next).toHaveLength(2)
+    expect(next.map((l) => l.seat)).toEqual([1, 2])
+    expect(next.map((l) => l.note)).toEqual(['', ''])
+  })
+
+  it('merges into the twin of the SAME guest when the edit makes the options identical', () => {
+    const lines = [
+      line({ clientId: 'a', seat: 2, quantity: 2, note: 'Buzsuz', optionsHash: optionsHash([], 'Buzsuz') }),
+      line({ clientId: 'b', seat: 2, quantity: 3 }),
+      line({ clientId: 'c', seat: 1, quantity: 1 }),
+    ]
+    const next = updatePendingNote(lines, 'a', '')
+    expect(next).toHaveLength(2)
+    expect(next.map((l) => l.seat)).toEqual([2, 1])
+    expect(next.map((l) => l.quantity)).toEqual([5, 1])
+  })
+
   it('keeps an edited line separate from an optioned line of the same product', () => {
     const lines = [
       line({ clientId: 'a' }),
@@ -279,8 +338,14 @@ describe('toOrderItemInputs', () => {
         unit_price_amount: 6500,
         note: 'Acılı | Lavaş(+5) | Soğansız',
         modifier_ids: ['hot', 'lavash'],
+        seat_no: 0,
       },
     ])
+  })
+
+  it('sends each line\'s guest as seat_no', () => {
+    const lines = addProductToPending(addProductToPending([], tea, { seat: 1 }), tea, { seat: 3 })
+    expect(toOrderItemInputs(lines).map((i) => i.seat_no)).toEqual([1, 3])
   })
 
   it('sends a plain line with an empty note and no modifiers', () => {

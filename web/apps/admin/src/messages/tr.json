@@ -729,6 +729,11 @@
         "cancelled": "İptal"
       }
     },
+    "seats": {
+      "label": "Kişi",
+      "person": "Kişi {n}",
+      "add": "Kişi ekle"
+    },
     "cart": {
       "title": "Yeni sipariş",
       "empty": "Sepet boş. Ürünlere dokunarak ekleyin.",

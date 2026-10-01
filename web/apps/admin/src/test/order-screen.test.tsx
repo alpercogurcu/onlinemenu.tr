@@ -236,6 +236,107 @@ describe("OrderScreen", { timeout: 20_000 }, () => {
     expect(post.mock.calls.filter(([u]) => u === "/api/v1/pos/checks")).toHaveLength(1)
   })
 
+  // The visible picker depends on viewport (aside vs sticky bar), so chip
+  // queries take the first match; both instances share the same state.
+  const chip = (n: number) => screen.getAllByRole("radio", { name: `Kişi ${n}` })[0]
+  const addSeatBtn = () => screen.getAllByRole("button", { name: "Kişi ekle" })[0]
+
+  it("dine-in starts with a single active guest chip; '+' adds the next guest and keeps it selected", async () => {
+    post.mockImplementation((url: string) =>
+      url === "/api/v1/pos/checks" ? Promise.resolve({ data: { id: "chk1" } }) : Promise.resolve({ data: { id: "o1" } }),
+    )
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+    await tile("Ayran")
+
+    expect(screen.getAllByTestId("seat-picker").length).toBeGreaterThan(0)
+    expect(chip(1)).toHaveAttribute("aria-checked", "true")
+    expect(screen.queryAllByRole("radio", { name: "Kişi 2" })).toHaveLength(0)
+
+    fireEvent.click(addSeatBtn())
+    expect(chip(2)).toHaveAttribute("aria-checked", "true")
+    expect(chip(1)).toHaveAttribute("aria-checked", "false")
+
+    // The LAST selection stays the default: both taps land on guest 2.
+    fireEvent.click(await tile("Ayran"))
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("1 kalem"))
+    expect(chip(2)).toHaveAttribute("aria-checked", "true")
+    const line = screen.getByTestId("cart-line")
+    expect(within(line).getByLabelText("Kişi 2")).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Mutfağa gönder/ })[0])
+    await screen.findByText("Mutfağa gönderildi")
+    const [, body] = post.mock.calls.find(([u]) => u === "/api/v1/pos/orders")!
+    expect(body.items).toEqual([expect.objectContaining({ product_id: "ayran", quantity: 2, seat_no: 2 })])
+  })
+
+  it("the same product for different guests stays separate lines and each carries its own seat_no", async () => {
+    post.mockImplementation((url: string) =>
+      url === "/api/v1/pos/checks" ? Promise.resolve({ data: { id: "chk1" } }) : Promise.resolve({ data: { id: "o1" } }),
+    )
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("1 kalem"))
+    fireEvent.click(addSeatBtn())
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("2 kalem"))
+
+    const cartLines = screen.getAllByTestId("cart-line")
+    expect(cartLines).toHaveLength(2)
+    expect(within(cartLines[0]).getByLabelText("Kişi 1")).toBeInTheDocument()
+    expect(within(cartLines[1]).getByLabelText("Kişi 2")).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Mutfağa gönder/ })[0])
+    await screen.findByText("Mutfağa gönderildi")
+    const [, body] = post.mock.calls.find(([u]) => u === "/api/v1/pos/orders")!
+    expect(body.items).toEqual([
+      expect.objectContaining({ product_id: "ayran", quantity: 1, seat_no: 1 }),
+      expect.objectContaining({ product_id: "ayran", quantity: 1, seat_no: 2 }),
+    ])
+  })
+
+  it("an occupied table seeds the chips from the check's items: max seat_no becomes the count and the active guest", async () => {
+    get.mockImplementation((url: string) => {
+      if (url === "/api/v1/pos/tables") {
+        return Promise.resolve({ data: [{ zone_id: "z1", zone_name: "Salon", floor: 0, tables: [{ ...TABLE, status: "occupied", active_check_id: "chk9" }] }] })
+      }
+      if (url === "/api/v1/pos/checks/chk9/orders") {
+        return Promise.resolve({
+          data: [
+            { id: "o1", status: "accepted", items: [
+              { id: "i1", product_id: "ayran", product_name: "Ayran", quantity: 1, unit_price_amount: 4_000, note: "", seat_no: 3 },
+              { id: "i2", product_id: "kebap", product_name: "Adana Kebap", quantity: 1, unit_price_amount: 32_000, note: "", seat_no: 1 },
+            ] },
+          ],
+        })
+      }
+      return routeGet(url)
+    })
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+    await tile("Ayran")
+
+    await waitFor(() => expect(chip(3)).toHaveAttribute("aria-checked", "true"))
+    // Both picker instances (aside + sticky bar) show chips 1..3, nothing more.
+    expect(screen.getAllByRole("radio", { name: /^Kişi \d+$/ })).toHaveLength(6)
+    expect(chip(1)).toHaveAttribute("aria-checked", "false")
+  })
+
+  it("gel al / paket: no guest chips, no badges, items go unassigned (seat_no 0)", async () => {
+    post.mockResolvedValue({ data: { id: "o1" } })
+    render(wrap(<OrderScreen branchId={BRANCH} serviceCheckId="svc1" onBackToTables={vi.fn()} />))
+
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("1 kalem"))
+    expect(screen.queryAllByTestId("seat-picker")).toHaveLength(0)
+    expect(within(screen.getByTestId("cart-line")).queryByLabelText(/^Kişi \d/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Mutfağa gönder/ })[0])
+    await screen.findByText("Mutfağa gönderildi")
+    const [, body] = post.mock.calls.find(([u]) => u === "/api/v1/pos/orders")!
+    expect(body.items).toEqual([expect.objectContaining({ product_id: "ayran", seat_no: 0 })])
+  })
+
   it("price_mismatch -> Turkish message, cart kept, catalog refetched", async () => {
     post.mockImplementation((url: string) =>
       url === "/api/v1/pos/checks"

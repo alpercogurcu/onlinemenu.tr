@@ -31,6 +31,13 @@ export type PendingLine = {
   modifiers: SelectedModifier[]
   /** Free/ready-made kitchen note ("Soğansız"), separate from the option names. */
   note: string
+  /**
+   * 1-based guest (kuver) number the line belongs to; 0 = unassigned (service
+   * checks — gel al / paket — and clients that do not split by guest). Part of
+   * the merge identity: the same product for a different guest stays a
+   * separate line, because the bill may be split per guest.
+   */
+  seat: number
   /** Merge key: two taps of the same product only share a line when this matches. */
   optionsHash: string
   optionsUnavailable: boolean
@@ -40,6 +47,8 @@ export type LineOptions = {
   modifiers?: SelectedModifier[]
   note?: string
   quantity?: number
+  /** Guest number the line is for; omitted/0 = unassigned. */
+  seat?: number
 }
 
 export const MAX_LINE_QUANTITY = 99
@@ -65,9 +74,10 @@ export function addProductToPending(lines: PendingLine[], product: ProductSource
   const modifiers = options.modifiers ?? []
   const note = (options.note ?? '').trim()
   const quantity = options.quantity ?? 1
+  const seat = options.seat ?? 0
   const hash = optionsHash(modifiers, note)
 
-  const existing = lines.find((l) => l.productId === product.id && l.optionsHash === hash)
+  const existing = lines.find((l) => l.productId === product.id && l.optionsHash === hash && l.seat === seat)
   if (existing) {
     return lines.map((l) =>
       l === existing ? { ...l, quantity: Math.min(MAX_LINE_QUANTITY, l.quantity + quantity) } : l,
@@ -87,6 +97,7 @@ export function addProductToPending(lines: PendingLine[], product: ProductSource
       quantity: Math.min(MAX_LINE_QUANTITY, quantity),
       modifiers,
       note,
+      seat,
       optionsHash: hash,
       optionsUnavailable: product.options_unavailable ?? false,
     },
@@ -114,9 +125,10 @@ export function removePendingLine(lines: PendingLine[], clientId: string): Pendi
  * Rewrites one pending line's free kitchen note in place. The note is part of
  * the line's options identity (optionsHash — the kitchen ticket differs), so
  * the hash is recomputed; if the edit makes the line identical to another line
- * of the same product, the two merge exactly as addProductToPending would have
- * merged them (quantities added, capped at MAX_LINE_QUANTITY). Unknown
- * clientId and a no-op edit return the input array unchanged.
+ * of the same product FOR THE SAME GUEST (seat), the two merge exactly as
+ * addProductToPending would have merged them (quantities added, capped at
+ * MAX_LINE_QUANTITY). Unknown clientId and a no-op edit return the input
+ * array unchanged.
  */
 export function updatePendingNote(lines: PendingLine[], clientId: string, note: string): PendingLine[] {
   const target = lines.find((l) => l.clientId === clientId)
@@ -124,7 +136,9 @@ export function updatePendingNote(lines: PendingLine[], clientId: string, note: 
   const trimmed = note.trim()
   if (trimmed === target.note) return lines
   const hash = optionsHash(target.modifiers, trimmed)
-  const twin = lines.find((l) => l !== target && l.productId === target.productId && l.optionsHash === hash)
+  const twin = lines.find(
+    (l) => l !== target && l.productId === target.productId && l.optionsHash === hash && l.seat === target.seat,
+  )
   if (twin) {
     return lines
       .filter((l) => l !== target)
@@ -171,6 +185,8 @@ export type OrderItemInput = {
   unit_price_amount: number
   note: string
   modifier_ids: string[]
+  /** Guest (kuver) number the item belongs to; 0 = unassigned. */
+  seat_no: number
 }
 
 export function toOrderItemInputs(lines: PendingLine[]): OrderItemInput[] {
@@ -184,6 +200,7 @@ export function toOrderItemInputs(lines: PendingLine[]): OrderItemInput[] {
     unit_price_amount: pendingUnitPrice(l),
     note: orderNoteFor(l),
     modifier_ids: l.modifiers.map((m) => m.id),
+    seat_no: l.seat,
   }))
 }
 

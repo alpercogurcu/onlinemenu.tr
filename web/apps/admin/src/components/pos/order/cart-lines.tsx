@@ -12,6 +12,7 @@ import {
   type PendingLine,
 } from "@onlinemenu/pos-core"
 
+import { SeatBadge } from "@/components/pos/order/seat-picker"
 import { Input } from "@/components/ui/input"
 
 const stepClass =
@@ -63,7 +64,10 @@ export function CartLines({ lines, disabled, onChangeQuantity, onRemove, onChang
         const editing = editingId === line.clientId
         const info = (
           <>
-            <div className="text-base font-semibold break-words">{line.productName}</div>
+            <div className="flex items-start gap-2">
+              <SeatBadge seat={line.seat} />
+              <div className="min-w-0 text-base font-semibold break-words">{line.productName}</div>
+            </div>
             {detail && <div className="text-sm break-words text-muted-foreground">{detail}</div>}
             {line.optionsUnavailable && (
               <div className="text-status-warning-fg mt-1 flex items-start gap-1 text-sm">

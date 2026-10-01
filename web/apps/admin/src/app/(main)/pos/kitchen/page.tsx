@@ -220,6 +220,16 @@ export function KitchenOrderCard({
                   <span data-testid="kds-item-qty" className="w-9 shrink-0 font-bold tabular-nums">
                     {item.quantity}×
                   </span>
+                  {/* Kuver rozeti: aşçı tabağı kişiye göre ayırır; 0 = kişi
+                      atanmamış, rozet basılmaz (mutfak fişiyle aynı kural). */}
+                  {(item.seat_no ?? 0) > 0 && (
+                    <span
+                      data-testid="kds-item-seat"
+                      className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-full border border-current px-1.5 text-sm font-bold"
+                    >
+                      K{item.seat_no}
+                    </span>
+                  )}
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium break-words">{item.product_name}</span>
                     {/* Line note = chosen options + free text, composed by

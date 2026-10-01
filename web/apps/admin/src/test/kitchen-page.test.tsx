@@ -212,3 +212,27 @@ describe("KitchenPage device-dark root", () => {
     expect(document.documentElement).not.toHaveClass("dark")
   })
 })
+
+describe("kişi (kuver) rozeti", () => {
+  it("seat_no>0 kalemde K rozeti basılır, 0'da basılmaz", () => {
+    const detail = baseDetail()
+    detail.items = [
+      { id: "item-1", product_id: "p1", product_name: "Çay", quantity: 2, unit_price_amount: 500, note: "", seat_no: 2 },
+      { id: "item-2", product_id: "p2", product_name: "Su", quantity: 1, unit_price_amount: 300, note: "", seat_no: 0 },
+    ]
+    render(
+      <KitchenOrderCard
+        order={baseOrder()}
+        detail={detail}
+        now={Date.now()}
+        isNew={false}
+        onAdvance={() => {}}
+        isMutating={false}
+        canAccept
+      />,
+    )
+
+    expect(screen.getByTestId("kds-item-seat")).toHaveTextContent("K2")
+    expect(screen.getAllByTestId("kds-item-seat")).toHaveLength(1)
+  })
+})

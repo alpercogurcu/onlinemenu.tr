@@ -26,6 +26,9 @@ type View = 'opening' | 'status' | 'movement' | 'ledger' | 'counting' | 'closing
 type CashSessionModalProps = {
   open: boolean
   onClose: () => void
+  /** false = kasa kilidi ekranı: oturum açılmadan modal kapatılamaz, Kapat
+   * düğmesi hiç basılmaz (saha kuralı — App.tsx'teki kilit erken dönüşü). */
+  dismissible?: boolean
   checked: boolean
   loading: boolean
   session: main.CashSessionDTO | null
@@ -62,6 +65,7 @@ type CashSessionModalProps = {
 export function CashSessionModal({
   open,
   onClose,
+  dismissible = true,
   checked,
   loading,
   session,
@@ -219,9 +223,11 @@ export function CashSessionModal({
                 mid-press (see closeSession's own pre-close refresh). */}
             {loading && checked && <span className="ml-2 text-xs font-normal text-ink-dim">yenileniyor…</span>}
           </h2>
-          <button type="button" onClick={onClose} className="min-h-12 min-w-12 rounded text-ink-dim" aria-label="Kapat">
-            ✕
-          </button>
+          {dismissible && (
+            <button type="button" onClick={onClose} className="min-h-12 min-w-12 rounded text-ink-dim" aria-label="Kapat">
+              ✕
+            </button>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">

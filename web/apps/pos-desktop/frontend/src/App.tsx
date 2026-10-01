@@ -1116,6 +1116,49 @@ function App() {
     )
   }
 
+  // Kasa kilidi (saha kuralı): açık kasa oturumu yokken uygulama TEK ekrandır —
+  // masa planına, adisyona ve ödemeye kasa açılmadan ulaşılamaz; "kasa
+  // kapalıyken nakit alınamadı" durumu hiç doğmaz. `checked` beklenir ki
+  // uygulama açılışında oturum daha okunmadan kilit bir an parlamasın; kilit
+  // kapatılamaz (dismissible=false), tek çıkış kasayı açmak ya da oturumdan
+  // çıkmaktır.
+  if (cashSession.checked && !cashSession.session) {
+    return (
+      <div className="min-h-screen bg-surface">
+        <div className="flex items-center justify-end px-6 py-3">
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="min-h-12 rounded border border-line px-4 text-sm text-ink-dim"
+          >
+            Çıkış
+          </button>
+        </div>
+        <CashSessionModal
+          open
+          dismissible={false}
+          onClose={() => undefined}
+          checked={cashSession.checked}
+          loading={cashSession.loading}
+          session={cashSession.session}
+          error={cashSession.error}
+          closingSnapshot={cashSession.closingSnapshot}
+          stale={cashSession.stale}
+          cannotCloseReasons={cashSession.cannotCloseReasons}
+          movements={cashSession.movements}
+          canOpenSession={canOpenCheck}
+          onOpenSession={cashSession.openSession}
+          onRecordMovement={cashSession.recordMovement}
+          onSubmitClosingCount={cashSession.submitClosingCount}
+          onCloseSession={cashSession.closeSession}
+          onDismissCannotClose={cashSession.dismissCannotClose}
+          onRefresh={cashSession.refresh}
+          onLoadMovements={cashSession.loadMovements}
+        />
+      </div>
+    )
+  }
+
   // Warning banners under the header, most important first and held to two rows
   // (BannerStack): a missing fiscal record is money, a missing kitchen ticket is
   // food that will not be cooked, a closed drawer blocks cash sales, a receipt

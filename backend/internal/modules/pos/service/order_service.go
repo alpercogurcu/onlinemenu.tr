@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -66,7 +67,12 @@ type OrderService struct {
 	// openCheckTx). The staff paths still go through CheckService.
 	checkRepo *repo.CheckRepo
 	tableRepo *repo.TableRepo
-	logger    *zap.Logger
+	// settings answers "is this branch on the simple order flow" inside each
+	// placement's own write transaction (no process-level cache — the same
+	// per-call discipline storefront's ordering gate follows), so flipping the
+	// flag takes effect on the very next order.
+	settings *repo.BranchSettingsRepo
+	logger   *zap.Logger
 }
 
 // OrderParams groups fx-injected dependencies.
@@ -77,16 +83,27 @@ type OrderParams struct {
 	OrderRepo *repo.OrderRepo
 	CheckRepo *repo.CheckRepo
 	TableRepo *repo.TableRepo
-	Pricer    catalogpub.StaffPricer
-	Logger    *zap.Logger
+	// Settings is optional at construction (`optional:"true"` keeps the many
+	// pre-existing test literals compiling): BranchSettingsRepo is a stateless
+	// struct with zero dependencies, so a nil here is defaulted below rather
+	// than treated as a wiring error — there is nothing to mis-wire, and a
+	// default repo behaves identically to an injected one.
+	Settings *repo.BranchSettingsRepo `optional:"true"`
+	Pricer   catalogpub.StaffPricer
+	Logger   *zap.Logger
 }
 
 func NewOrderService(p OrderParams) *OrderService {
+	settings := p.Settings
+	if settings == nil {
+		settings = repo.NewBranchSettingsRepo()
+	}
 	return &OrderService{
 		db:        p.DB,
 		orderRepo: p.OrderRepo,
 		checkRepo: p.CheckRepo,
 		tableRepo: p.TableRepo,
+		settings:  settings,
 		pricer:    p.Pricer,
 		logger:    p.Logger,
 	}
@@ -124,10 +141,13 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 		return domain.Order{}, err
 	}
 	o.TenantID = tenantID
-	o.Status = domain.OrderStatusPending
 
 	var created domain.Order
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		acceptedBy := principal.PersonID
+		if err := s.applyBirthStatus(ctx, tx, &o, &acceptedBy); err != nil {
+			return err
+		}
 		check, err := s.lockWritableCheck(ctx, tx, o.CheckID, o.BranchID)
 		if err != nil {
 			return err
@@ -139,19 +159,70 @@ func (s *OrderService) Place(ctx context.Context, tenantID uuid.UUID, principal 
 		if err := s.derivePax(ctx, tx, check, created.Items); err != nil {
 			return err
 		}
-		return repo.InsertOutbox(ctx, tx, tenantID, "order", created.ID.String(), "order.placed", map[string]any{
+		if err := repo.InsertOutbox(ctx, tx, tenantID, "order", created.ID.String(), "order.placed", map[string]any{
 			"tenant_id":     tenantID,
 			"order_id":      created.ID,
 			"branch_id":     created.BranchID,
 			"check_id":      created.CheckID,
 			"order_channel": created.OrderChannel,
 			"item_count":    len(created.Items),
-		})
+		}); err != nil {
+			return err
+		}
+		return insertBornAcceptedEvent(ctx, tx, created)
 	})
 	if err != nil {
 		return domain.Order{}, wrapErr(err, "pos/service/order: place: %w")
 	}
 	return created, nil
+}
+
+// applyBirthStatus stamps the order's birth status from its branch's order
+// flow, read INSIDE the caller's write transaction so the verdict commits or
+// rolls back with the order itself (and a flipped flag applies from the very
+// next order — no process-level cache).
+//
+// full (the default, and every branch without a settings row): orders are born
+// pending, exactly as before this setting existed.
+//
+// simple (ADR-SEC-005-style branch preference, pos_branch_settings): the
+// branch runs on kitchen receipts alone — nobody sits at a KDS to accept
+// tickets — so the order is born accepted, with the acceptance bookkeeping
+// (accepted_at, accepted_by) filled at insert time so a born-accepted row is
+// indistinguishable from one accepted through POST /orders/{id}/accept.
+// acceptedBy is nil on the guest QR path: an anonymous diner has no person
+// row, and the order was auto-accepted by configuration, not by a person.
+func (s *OrderService) applyBirthStatus(ctx context.Context, tx pgx.Tx, o *domain.Order, acceptedBy *uuid.UUID) error {
+	o.Status = domain.OrderStatusPending
+	flow, err := s.settings.OrderFlowByBranch(ctx, tx, o.BranchID)
+	if err != nil {
+		return err
+	}
+	if flow != domain.OrderFlowSimple {
+		return nil
+	}
+	now := time.Now().UTC()
+	o.Status = domain.OrderStatusAccepted
+	o.AcceptedAt = &now
+	o.AcceptedBy = acceptedBy
+	return nil
+}
+
+// insertBornAcceptedEvent records the auto-acceptance of a simple-flow order
+// as the SAME order.accepted event POST /orders/{id}/accept emits (DATA-002:
+// no new event type is invented; order.placed's payload carries no status, so
+// a consumer tracking status by events needs this second event to see the
+// order as accepted). It is a no-op for a pending (full-flow) birth.
+// accepted_by is null for a guest QR order — see applyBirthStatus.
+func insertBornAcceptedEvent(ctx context.Context, tx pgx.Tx, created domain.Order) error {
+	if created.Status != domain.OrderStatusAccepted {
+		return nil
+	}
+	return repo.InsertOutbox(ctx, tx, created.TenantID, "order", created.ID.String(), "order.accepted", map[string]any{
+		"tenant_id":   created.TenantID,
+		"order_id":    created.ID,
+		"accepted_by": created.AcceptedBy,
+	})
 }
 
 // repriceItems re-derives every line's price from the catalog and rejects the
@@ -319,21 +390,26 @@ func (s *OrderService) PlaceGuest(ctx context.Context, req pub.GuestOrderRequest
 func (s *OrderService) placeGuestOnce(ctx context.Context, req pub.GuestOrderRequest, link pub.GuestOrderLinker) (pub.GuestOrderResult, error) {
 	var result pub.GuestOrderResult
 	err := s.db.WithTenantTx(ctx, req.TenantID, func(tx pgx.Tx) error {
+		order := domain.Order{
+			TenantID:     req.TenantID,
+			BranchID:     req.BranchID,
+			OrderChannel: domain.OrderChannelDineIn,
+			Source:       domain.SourceOnlineQR,
+			Note:         req.Note,
+			Items:        guestOrderItems(req.Lines),
+		}
+		// Birth status (settings read, plain SELECT) resolves before the check
+		// lock, matching Place's read-then-lock order on the staff path.
+		if err := s.applyBirthStatus(ctx, tx, &order, nil); err != nil {
+			return err
+		}
+
 		check, err := s.resolveGuestCheck(ctx, tx, req)
 		if err != nil {
 			return err
 		}
+		order.CheckID = &check.ID
 
-		order := domain.Order{
-			TenantID:     req.TenantID,
-			BranchID:     req.BranchID,
-			CheckID:      &check.ID,
-			OrderChannel: domain.OrderChannelDineIn,
-			Source:       domain.SourceOnlineQR,
-			Status:       domain.OrderStatusPending,
-			Note:         req.Note,
-			Items:        guestOrderItems(req.Lines),
-		}
 		created, err := s.orderRepo.Create(ctx, tx, order)
 		if err != nil {
 			return err
@@ -350,7 +426,7 @@ func (s *OrderService) placeGuestOnce(ctx context.Context, req pub.GuestOrderReq
 			}
 		}
 
-		return repo.InsertOutbox(ctx, tx, req.TenantID, "order", created.ID.String(), "order.placed", map[string]any{
+		if err := repo.InsertOutbox(ctx, tx, req.TenantID, "order", created.ID.String(), "order.placed", map[string]any{
 			"tenant_id":     req.TenantID,
 			"order_id":      created.ID,
 			"branch_id":     created.BranchID,
@@ -358,7 +434,10 @@ func (s *OrderService) placeGuestOnce(ctx context.Context, req pub.GuestOrderReq
 			"order_channel": created.OrderChannel,
 			"source":        string(created.Source),
 			"item_count":    len(created.Items),
-		})
+		}); err != nil {
+			return err
+		}
+		return insertBornAcceptedEvent(ctx, tx, created)
 	})
 	if err != nil {
 		return pub.GuestOrderResult{}, mapGuestErr(err)

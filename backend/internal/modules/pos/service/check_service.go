@@ -66,10 +66,14 @@ var ErrCustomerPhoneRequired = errors.New("pos/service/check: customer_phone req
 
 // CheckService manages dine-in check (adisyon) lifecycle.
 type CheckService struct {
-	db         *db.Pool
-	checkRepo  *repo.CheckRepo
-	tableRepo  *repo.TableRepo
-	orderRepo  *repo.OrderRepo
+	db        *db.Pool
+	checkRepo *repo.CheckRepo
+	tableRepo *repo.TableRepo
+	orderRepo *repo.OrderRepo
+	// settings answers "is this branch on the simple order flow" inside each
+	// close's own write transaction (no process-level cache), so Close can run
+	// the deliver cascade for receipt-only branches — see deliverLiveOrders.
+	settings   *repo.BranchSettingsRepo
 	saleReader paymentpub.SaleReader
 	logger     *zap.Logger
 }
@@ -78,20 +82,29 @@ type CheckService struct {
 type CheckParams struct {
 	fx.In
 
-	DB         *db.Pool
-	CheckRepo  *repo.CheckRepo
-	TableRepo  *repo.TableRepo
-	OrderRepo  *repo.OrderRepo
+	DB        *db.Pool
+	CheckRepo *repo.CheckRepo
+	TableRepo *repo.TableRepo
+	OrderRepo *repo.OrderRepo
+	// Settings is optional for the same reason OrderParams.Settings is: the
+	// repo is a stateless zero-dependency struct, so a nil is defaulted in the
+	// constructor instead of breaking every pre-existing test literal.
+	Settings   *repo.BranchSettingsRepo `optional:"true"`
 	SaleReader paymentpub.SaleReader
 	Logger     *zap.Logger
 }
 
 func NewCheckService(p CheckParams) *CheckService {
+	settings := p.Settings
+	if settings == nil {
+		settings = repo.NewBranchSettingsRepo()
+	}
 	return &CheckService{
 		db:         p.DB,
 		checkRepo:  p.CheckRepo,
 		tableRepo:  p.TableRepo,
 		orderRepo:  p.OrderRepo,
+		settings:   settings,
 		saleReader: p.SaleReader,
 		logger:     p.Logger,
 	}
@@ -459,6 +472,9 @@ func (s *CheckService) Close(ctx context.Context, tenantID uuid.UUID, principal 
 		if err := paymentCoversTotal(paid, pending, total); err != nil {
 			return err
 		}
+		if err := s.deliverLiveOrders(ctx, tx, tenantID, checkID, current.BranchID, closedBy); err != nil {
+			return err
+		}
 
 		closed, err = s.checkRepo.UpdateStatus(ctx, tx, checkID, domain.CheckStatusClosed, domain.CheckStatusOpen, &closedBy)
 		if err != nil {
@@ -560,6 +576,55 @@ func (s *CheckService) Cancel(ctx context.Context, tenantID uuid.UUID, principal
 		return domain.Check{}, wrapErr(err, "pos/service/check: cancel: %w")
 	}
 	return cancelled, nil
+}
+
+// deliverLiveOrders is Close's cascade for simple-order-flow branches
+// (pos_branch_settings.order_flow = 'simple'): a branch that runs on kitchen
+// receipts alone never enters the KDS statuses, so at the moment the check is
+// paid and closed its still-live orders (pending/accepted/preparing/ready)
+// are the food that was in fact cooked and served — they are pulled to
+// 'delivered' in the SAME transaction, one order.status_changed event each
+// (DATA-002: a new event per order, never a rewrite), mirroring
+// cancelLiveOrders' shape so the kitchen display and the guest QR screen
+// resolve the ticket through the existing event path.
+//
+// The flow is read inside this transaction (no process-level cache — the
+// storefront ordering gate's discipline), and a full-flow branch, including
+// every branch without a settings row, returns before touching any order:
+// Close's pre-existing behaviour is byte-for-byte unchanged there.
+//
+// Delivered item amounts already counted toward GetTotal (only
+// rejected/cancelled are excluded), so running after paymentCoversTotal
+// changes no money math — it only spares the cascade when the close is about
+// to fail anyway.
+func (s *CheckService) deliverLiveOrders(ctx context.Context, tx pgx.Tx, tenantID, checkID, branchID, closedBy uuid.UUID) error {
+	flow, err := s.settings.OrderFlowByBranch(ctx, tx, branchID)
+	if err != nil {
+		return err
+	}
+	if flow != domain.OrderFlowSimple {
+		return nil
+	}
+	if s.orderRepo == nil {
+		return errors.New("pos/service/check: order repo not wired")
+	}
+	ids, err := s.orderRepo.DeliverActiveByCheck(ctx, tx, checkID)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := repo.InsertOutbox(ctx, tx, tenantID, "order", id.String(), "order.status_changed", map[string]any{
+			"tenant_id":    tenantID,
+			"order_id":     id,
+			"check_id":     checkID,
+			"status":       domain.OrderStatusDelivered,
+			"delivered_by": closedBy,
+			"reason":       "check_closed",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // cancelLiveOrders is Cancel's cascade; the event shape matches

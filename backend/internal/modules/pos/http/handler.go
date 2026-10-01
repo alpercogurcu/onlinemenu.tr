@@ -26,25 +26,27 @@ import (
 
 // Handler exposes POS REST endpoints.
 type Handler struct {
-	checks  *service.CheckService
-	orders  *service.OrderService
-	tables  *service.TableService
-	reports *service.ReportService
-	logger  *zap.Logger
-	engine  *auth.Engine
+	checks   *service.CheckService
+	orders   *service.OrderService
+	tables   *service.TableService
+	reports  *service.ReportService
+	settings *service.BranchSettingsService
+	logger   *zap.Logger
+	engine   *auth.Engine
 }
 
 // Params groups fx-injected dependencies.
 type Params struct {
 	fx.In
 
-	Checks  *service.CheckService
-	Orders  *service.OrderService
-	Tables  *service.TableService
-	Reports *service.ReportService
-	Logger  *zap.Logger
-	Cache   *redis.Client
-	Engine  *auth.Engine
+	Checks   *service.CheckService
+	Orders   *service.OrderService
+	Tables   *service.TableService
+	Reports  *service.ReportService
+	Settings *service.BranchSettingsService
+	Logger   *zap.Logger
+	Cache    *redis.Client
+	Engine   *auth.Engine
 }
 
 // HandlerWithCache wraps Handler with the Redis client needed for the
@@ -56,7 +58,7 @@ type HandlerWithCache struct {
 
 func NewHandler(p Params) *HandlerWithCache {
 	return &HandlerWithCache{
-		h:     &Handler{checks: p.Checks, orders: p.Orders, tables: p.Tables, reports: p.Reports, logger: p.Logger, engine: p.Engine},
+		h:     &Handler{checks: p.Checks, orders: p.Orders, tables: p.Tables, reports: p.Reports, settings: p.Settings, logger: p.Logger, engine: p.Engine},
 		cache: p.Cache,
 	}
 }
@@ -119,6 +121,15 @@ func (hwc *HandlerWithCache) RegisterRoutes(r *chi.Mux) {
 		// setTableStatus then requires pos.table.manage for every edge except
 		// cleaning -> empty.
 		r.With(hwc.h.permit("pos.table.clean")).Post("/tables/{id}/status", hwc.h.setTableStatus)
+
+		// Branch POS preferences: waiter screen category layout + order flow
+		// (full/simple). Reading is open to every check-facing role via
+		// pos.check.read (the waiter screen draws its layout from it); writing
+		// is a management decision behind pos.table.manage, like the floor
+		// plan it configures. PUT is naturally idempotent (an upsert of the
+		// same values), so it carries no Idempotency-Key middleware.
+		r.With(hwc.h.permit("pos.check.read")).Get("/branch-settings", hwc.h.getBranchSettings)
+		r.With(hwc.h.permit("pos.table.manage")).Put("/branch-settings", hwc.h.putBranchSettings)
 
 		// Day-end sales report (Sprint pilot-mvp): shift_manager only, mirrors
 		// role_permissions seed's reports:read grant (see
@@ -740,6 +751,93 @@ func (h *Handler) cancelOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// Branch settings handlers
+// ---------------------------------------------------------------------------
+
+// branchSettingsResponse is the frozen wire shape both the admin PUT and the
+// waiter/cashier GET observe. It deliberately carries no timestamps or
+// updated_by: a branch with no settings row answers from the defaults, and
+// those fields would force the response to distinguish "no row" from
+// "all defaults" — exactly what the lazy-row contract forbids.
+type branchSettingsResponse struct {
+	BranchID             uuid.UUID `json:"branch_id"`
+	WaiterCategoryLayout string    `json:"waiter_category_layout"`
+	OrderFlow            string    `json:"order_flow"`
+}
+
+func toBranchSettingsResponse(s domain.BranchSettings) branchSettingsResponse {
+	return branchSettingsResponse{
+		BranchID:             s.BranchID,
+		WaiterCategoryLayout: string(s.WaiterCategoryLayout),
+		OrderFlow:            string(s.OrderFlow),
+	}
+}
+
+// getBranchSettings serves GET /branch-settings?branch_id=. A branch that was
+// never configured answers the defaults (top/full) without creating a row.
+// SEC-005: a branch-scoped principal naming another branch gets 403 via the
+// service's requireBranch — same as every other branch-parameterized read
+// (listZones/listTables).
+func (h *Handler) getBranchSettings(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	branchID, err := uuid.Parse(r.URL.Query().Get("branch_id"))
+	if err != nil {
+		http.Error(w, "branch_id query parameter is required", http.StatusUnprocessableEntity)
+		return
+	}
+	s, err := h.settings.Get(r.Context(), p.TenantID, p, branchID)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toBranchSettingsResponse(s))
+}
+
+// putBranchSettings upserts the branch's preferences. Pointer fields so an
+// omitted field keeps the branch's current value (or the default when this
+// PUT creates the row) — the PATCH-like partial-update convention
+// updateZone/updateTable already follow. A present-but-unknown value is 422.
+func (h *Handler) putBranchSettings(w http.ResponseWriter, r *http.Request) {
+	p, ok := requirePrincipal(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		BranchID             uuid.UUID `json:"branch_id"`
+		WaiterCategoryLayout *string   `json:"waiter_category_layout"`
+		OrderFlow            *string   `json:"order_flow"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.BranchID == uuid.Nil {
+		http.Error(w, "branch_id is required", http.StatusUnprocessableEntity)
+		return
+	}
+
+	set := service.SetBranchSettingsRequest{BranchID: req.BranchID, UpdatedBy: p.PersonID}
+	if req.WaiterCategoryLayout != nil {
+		layout := domain.WaiterCategoryLayout(*req.WaiterCategoryLayout)
+		set.WaiterCategoryLayout = &layout
+	}
+	if req.OrderFlow != nil {
+		flow := domain.OrderFlow(*req.OrderFlow)
+		set.OrderFlow = &flow
+	}
+
+	s, err := h.settings.Set(r.Context(), p.TenantID, p, set)
+	if err != nil {
+		h.error(w, r, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, toBranchSettingsResponse(s))
+}
+
+// ---------------------------------------------------------------------------
 // Table plan handlers (zones + tables)
 // ---------------------------------------------------------------------------
 
@@ -1248,6 +1346,16 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 			"seat_no must be between 0 and 99")
 		return
 	}
+	if errors.Is(err, service.ErrInvalidWaiterCategoryLayout) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidCategoryLayout,
+			"waiter_category_layout must be top or side")
+		return
+	}
+	if errors.Is(err, service.ErrInvalidOrderFlow) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidOrderFlow,
+			"order_flow must be full or simple")
+		return
+	}
 	if errors.Is(err, service.ErrInvalidServiceType) {
 		respondError(w, http.StatusUnprocessableEntity, codeInvalidServiceType, "invalid service_type")
 		return
@@ -1360,6 +1468,8 @@ const (
 	codeCustomerNameRequired  = "customer_name_required"
 	codeCustomerPhoneRequired = "customer_phone_required"
 	codeInvalidBranchID       = "invalid_branch_id"
+	codeInvalidCategoryLayout = "invalid_waiter_category_layout"
+	codeInvalidOrderFlow      = "invalid_order_flow"
 	codeInvalidRange          = "invalid_range"
 	codeRangeTooLong          = "range_too_long"
 	codeInvalidTimezone       = "invalid_tz"

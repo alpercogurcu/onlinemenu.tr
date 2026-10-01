@@ -55,12 +55,17 @@ func uuidStrings(ids []uuid.UUID) []string {
 // Source is normalized to SourcePOS when empty: the INSERT names the column
 // explicitly, so a zero-value Go string would be written as an empty string and violate the
 // column CHECK instead of falling back to the column DEFAULT.
+//
+// accepted_at/accepted_by are listed so a simple-flow order born 'accepted'
+// (OrderService.applyBirthStatus) carries the same acceptance bookkeeping as
+// one accepted through OrderRepo.Accept; every other caller passes both as
+// nil, which writes the NULLs the columns held before this existed.
 func (r *OrderRepo) Create(ctx context.Context, tx pgx.Tx, o domain.Order) (domain.Order, error) {
 	const qOrder = `
 		INSERT INTO orders
 		    (tenant_id, branch_id, check_id, order_channel, source, delivery_integrator_id,
-		     status, accept_deadline_at, note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		     status, accept_deadline_at, accepted_at, accepted_by, note)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING ` + orderColumns
 
 	source := o.Source
@@ -70,7 +75,7 @@ func (r *OrderRepo) Create(ctx context.Context, tx pgx.Tx, o domain.Order) (doma
 
 	row := tx.QueryRow(ctx, qOrder,
 		o.TenantID, o.BranchID, o.CheckID, string(o.OrderChannel), string(source),
-		o.DeliveryIntegratorID, string(o.Status), o.AcceptDeadlineAt, o.Note,
+		o.DeliveryIntegratorID, string(o.Status), o.AcceptDeadlineAt, o.AcceptedAt, o.AcceptedBy, o.Note,
 	)
 	created, err := scanOrder(row)
 	if err != nil {
@@ -367,6 +372,46 @@ func (r *OrderRepo) CancelActiveByCheck(ctx context.Context, tx pgx.Tx, checkID 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("pos/repo/order: cancel active by check: %w", err)
+	}
+	return ids, nil
+}
+
+// DeliverActiveByCheck marks every order of a check that is still live for
+// the kitchen (domain.KitchenActiveOrderStatuses) as delivered and returns the
+// ids it touched, so the caller can record one order.status_changed event per
+// order. It is the simple-order-flow close cascade (CheckService.Close):
+// a branch that runs on kitchen receipts alone never enters the intermediate
+// statuses, so pending/accepted → delivered here deliberately shortcuts edges
+// domain.TransitionOrderStatus does not list — "the check is being paid" is
+// the only delivery signal such a branch produces. Terminal orders
+// (rejected/cancelled/delivered) are left alone.
+func (r *OrderRepo) DeliverActiveByCheck(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) ([]uuid.UUID, error) {
+	const q = `
+		UPDATE orders SET status = 'delivered', updated_at = NOW()
+		WHERE check_id = $1 AND status = ANY($2)
+		RETURNING id`
+
+	statuses := make([]string, len(domain.KitchenActiveOrderStatuses))
+	for i, s := range domain.KitchenActiveOrderStatuses {
+		statuses[i] = string(s)
+	}
+
+	rows, err := tx.Query(ctx, q, checkID, statuses)
+	if err != nil {
+		return nil, fmt.Errorf("pos/repo/order: deliver active by check: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("pos/repo/order: deliver active by check scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pos/repo/order: deliver active by check: %w", err)
 	}
 	return ids, nil
 }

@@ -90,6 +90,10 @@ function ProductSheetBody({
       side="bottom"
       closeLabel={tCommon("close")}
       className="max-h-[90dvh] rounded-t-2xl"
+      // Radix açılışta ilk odaklanabilir elemana odaklanır; seçeneksiz üründe
+      // bu not kutusudur ve telefonda sheet açılır açılmaz klavyeyi fırlatır.
+      // Not yazmak istisnai eylemdir — odak misafirin dokunuşuna bırakılır.
+      onOpenAutoFocus={(event) => event.preventDefault()}
       // A product with no description renders no SheetDescription, and Radix
       // warns unless the opt-out is explicit. Spread conditionally: when a
       // description IS rendered the prop must stay absent so Radix keeps its

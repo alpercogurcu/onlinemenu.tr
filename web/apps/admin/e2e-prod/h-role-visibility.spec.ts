@@ -44,8 +44,12 @@ const CASES: RoleCase[] = [
   {
     name: "kasiyer (Serdivan)",
     account: ACCOUNTS.cashierSerdivan,
+    // 2026-10-01: pos.report.read kasiyere açıldı (kasa kapanışındaki gün
+    // özeti kasiyerin mutabakat aracı) — Genel Bakış menüye girdi; iniş
+    // sayfası bilinçli olarak adisyonlar kaldı (ROLE_HOMES: kasiyer güne
+    // raporla değil adisyonla başlar).
     home: "/pos/checks",
-    menu: ["/pos/tables", "/pos/checks", "/pos/kitchen"],
+    menu: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen"],
     forbidden: ["/catalog/products", "/catalog/branch-pricing", "/settings/branches", "/payment/payments"],
   },
   {

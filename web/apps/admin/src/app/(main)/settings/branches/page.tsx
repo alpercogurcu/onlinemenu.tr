@@ -33,6 +33,8 @@ import {
 } from "@/lib/branch-options"
 import type { Branch } from "@/types"
 
+import { PosSettingsCard } from "./pos-settings-card"
+
 interface FormState {
   name: string
   operation_type: string
@@ -158,6 +160,8 @@ export default function BranchesPage() {
           )}
         </CardContent>
       </Card>
+
+      <PosSettingsCard branches={branches} />
 
       <FormDialog
         open={dialogOpen}

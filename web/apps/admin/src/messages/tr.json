@@ -790,5 +790,22 @@
       "reserved": "Rezerve",
       "cleaning": "Temizlikte"
     }
+  },
+  "branchPosSettings": {
+    "title": "POS Tercihleri",
+    "subtitle": "Garson ekranı ve sipariş akışı şubeye göre ayarlanır; değişiklik anında kaydedilir.",
+    "branch": "Şube",
+    "branchPlaceholder": "Şube seçin",
+    "layoutTitle": "Garson ekranı kategori yerleşimi",
+    "layoutTop": "Üstte yatay (kaydırmalı)",
+    "layoutSide": "Solda dikey liste",
+    "layoutHint": "Dikey liste kalabalık menüde kategorilere tek bakışta erişim sağlar (Sanal Adisyon alışkanlığı).",
+    "flowTitle": "Sipariş akışı",
+    "flowFull": "Tam — mutfak ekranıyla (onay → hazırlanıyor → hazır → teslim)",
+    "flowSimple": "Basit — mutfak fişiyle (onay adımı yok; hesap kapatılınca siparişler otomatik tamamlanır)",
+    "flowHint": "Yoğun şubelerde basit akış garsonu hızlandırır: sipariş fişle mutfağa düşer, ekranda adım takibi yapılmaz.",
+    "flowWarning": "Basit akışta mutfak ekranı ve sipariş durum takibi devre dışı kalır.",
+    "saved": "POS tercihleri kaydedildi",
+    "saveFailed": "POS tercihleri kaydedilemedi"
   }
 }

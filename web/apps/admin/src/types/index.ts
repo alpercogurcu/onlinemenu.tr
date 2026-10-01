@@ -558,6 +558,17 @@ export interface StorefrontSettings {
   ordering_enabled: boolean
 }
 
+// POS branch preferences — GET/PUT /api/v1/pos/branch-settings. A branch
+// without a stored row is answered with the defaults (top / full).
+export type WaiterCategoryLayout = "top" | "side"
+export type PosOrderFlow = "full" | "simple"
+
+export interface PosBranchSettings {
+  branch_id: string
+  waiter_category_layout: WaiterCategoryLayout
+  order_flow: PosOrderFlow
+}
+
 // Sales report — GET /api/v1/pos/reports/sale-details response
 // (backend/internal/modules/pos/repo/report_repo.go). Every amount is kuruş
 // (int64); render with lib/money.ts's formatKurus, never divide by 100 here.

@@ -162,6 +162,10 @@ func TestAuthz_PosReportRead_ManagerAndShiftManagerAllowed(t *testing.T) {
 	}{
 		{"manager", tablePolicyManagerID},
 		{"shift_manager", tablePolicyShiftManagerID},
+		// Cashier was added 2026-10-01 (authz.rego pos_report_actions): the
+		// drawer-close screen builds its day summary from sale-details, and the
+		// person reconciling the physical drawer is the cashier.
+		{"cashier", tablePolicyCashierID},
 	} {
 		d, err := eng.Decide(context.Background(), "pos.report.read", tablePolicyPrincipal(tc.id))
 		require.NoError(t, err)
@@ -170,18 +174,17 @@ func TestAuthz_PosReportRead_ManagerAndShiftManagerAllowed(t *testing.T) {
 }
 
 // TestAuthz_PosReportRead_CounterAndKitchenRolesDenied is the regression
-// test for the report's shift_manager-only scope: counter staff (cashier,
-// waiter) and kitchen/bar can see checks/tables but must NOT see the day-end
-// chain figures (mirrors role_permissions seed: reports/read is
-// shift_manager-only, see permission_wiring_test.go's {"reports","read"}
-// entry and authz.rego's pos_report_actions comment).
+// test for the report grant's remaining boundary: the waiter on the floor and
+// kitchen/bar can see checks/tables but must NOT see the day-end chain
+// figures. Cashier moved to the allowed matrix above when authz.rego's
+// pos_report_actions was widened for the drawer-close day summary
+// (2026-10-01) — this test was not updated with it and pinned the old rule.
 func TestAuthz_PosReportRead_CounterAndKitchenRolesDenied(t *testing.T) {
 	eng := newSmokeTestEngine(t)
 	for _, tc := range []struct {
 		name string
 		id   uuid.UUID
 	}{
-		{"cashier", tablePolicyCashierID},
 		{"waiter", tablePolicyWaiterID},
 		{"kitchen", tablePolicyKitchenID},
 		{"bar", tablePolicyBarID},

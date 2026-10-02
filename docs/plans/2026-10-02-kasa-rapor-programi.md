@@ -122,6 +122,55 @@ Close'un "ödenen ≥ toplam" değişmezi de bozulmaz.
   sidebar-menu-config'e ayar sızdırılmaz. Doğrudan URL çalışmaya devam eder.
 - Bilinen boşluk: kitchen rolünde branch-settings 403 → menü gizlenmez; kabul edildi.
 
+## G. Kasa ödeme ekranı UX + beşli yuvarlama (2026-10-02 eki)
+
+Kullanıcı şikâyeti: sağda fiş varken solda yeniden kalem seçiliyor; x2 kalemin 1'i
+ödenemiyor; nakit küsurat yemez, beşe aşağı yuvarlama yok. Tasarım incelemesi kök
+nedeni de buldu: `buildPaymentLines` tutar seçimden saparsa orantılayıp HER kalemi
+"1 × paylaştırılmış fiyat" olarak ÖKC'ye gönderiyor (ad/adet yanıltıcı).
+
+### G.1 Ödeme ekranı (karar)
+- Seçim yüzeyi sağdaki adisyon (Receipt) olur; soldaki ItemPicker kalkar.
+  Receipt'teki mevcut `moveSelection` seçim-kipi deseni `paySelection` olarak
+  yeniden kullanılır; orta panelde Ödenecek/Alınan/numpad/kipler kalır.
+- Birim bazlı seçim: `Set<itemId>` → `Map<itemId, qty>`. quantity>1 satırda dokunuş
+  +1 birim, satır içi stepper [−] 1/2 [+] (≥56px), uzun basış = tümü. Kısmen ödenmiş
+  satır "2× Burger — 1 ödendi, 1 kalan", yalnız kalan seçilebilir. Seçim toplamı =
+  tutar olduğundan orantılama dalına düşülmez → fiş gerçek ad/adet/birim fiyatla basılır.
+- Kişiler (seat) çipi "o kişinin ödenmemiş birimlerini seç" davranışına geçer
+  (çoklu çip seçimi; seat backend'e yine gönderilmez).
+- **MVP istemci hesaplayıcı kalır (backend değişmez)** — para güvenliği
+  `payment_exceeds_due` guard'ında. **Kalıcı kalem tahsisi** (`payment_item_allocations`
+  append-only: payment_id, order_item_id bare UUID, quantity_milli, amount; failed/voided
+  ödeme tahsisi serbest bırakır) **Faz 2'ye eklendi** — BillableLinesForCheck ile aynı
+  paket; sunucunun basket'ı kendisinin türetmesini ve `adj_qty ≤ net_qty − allocated_qty`
+  kalem-düzeyi ikram kuralını mümkün kılar; tahsisli kalem taşınamaz. Web kasa (Faz 5)
+  ön koşulu. Amount-bazlı ödemeler (Tümü/Böl/Başka tutar) tahsissiz kalır.
+
+### G.2 Yuvarlama (karar)
+- Politika: şube ayarı izin+sınır verir, kasiyer anlık düğmeyle uygular ("↓ 435,00'e
+  yuvarla (−2,50)", geri alınabilir). Otomatik uygulama MVP'de yok.
+- `pos_branch_settings`: rounding_cash_enabled, rounding_card_enabled (DEFAULT false),
+  rounding_step_minor CHECK IN (50,100,500,1000) DEFAULT 500,
+  rounding_max_per_check_minor DEFAULT 1000.
+- Model: `payments.rounding_amount BIGINT DEFAULT 0 CHECK (>=0)`. amount_total = fiilen
+  alınan; taksit adisyondan amount_total+rounding düşer. **Tek kablolama yeri:**
+  `TotalPaidForCheck`/`PendingTotalForCheck` → `SUM(amount_total + rounding_amount)`
+  (Close, overpayment guard, adjustment_below_paid otomatik tutarlı).
+  `SumCompletedCashPayments` DEĞİŞMEZ → kasa beklenen nakdi ve sayım formülü aynı kalır.
+- Sunucu kuralları (ihlal → `422 rounding_not_allowed`): rounding < step;
+  amount+rounding = kalan borç (ya da kalan seçili tutar); amount % step == 0;
+  şubede yöntem açık; adisyon başına Σ rounding ≤ max. Yalnız aşağı yuvarlama.
+- Fiş: `FiscalSale.Discount {Description:"Yuvarlama", Value}` — Token addBasket sepet
+  `adjust` sözleşmesi doğrulandı; `buildFiscalSale` dolduracak + mapper/mock'a
+  `TotalMinor == Σsatır − indirim` doğrulaması eklenecek (bugün hiç yok — mevcut açık).
+  Token cihazının indirimi KDV oranlarına nasıl dağıttığı DOĞRULANMADI → Token teyidine
+  kadar yalnız mock/ÖKC'siz şubede açılır.
+- Raporlar: ciro = yuvarlama düşülmüş net (Z raporu ile tutarlılık); brüt + "Yuvarlama
+  indirimi" ayrı satır; Hesaplanan KDV orantılı dağıtımla düşer; royalty matrahı net
+  üzerinden (sözleşme notu). B mutabakat formülü genişler:
+  Σ(amount_total+rounding) = closed brüt + written_off tahsil edilen.
+
 ## Uygulama sırası
 
 1. **Faz 0:** Bölüm 0'ın iki bloklayıcısı (+ regresyon).

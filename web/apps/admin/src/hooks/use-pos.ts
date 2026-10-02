@@ -135,6 +135,7 @@ export function useSetTableStatus() {
 
 export function useChecks(params?: {
   status?: string
+  branch_id?: string
   limit?: number
   refetchInterval?: number
 }) {

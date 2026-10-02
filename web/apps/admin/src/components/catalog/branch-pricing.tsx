@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import {
@@ -28,11 +27,12 @@ import {
   useUpsertBranchOverride,
 } from "@/hooks/use-branch-overrides"
 import { useCategories, useProducts } from "@/hooks/use-catalog"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { useBranches } from "@/hooks/use-tenant"
+import { useAuthStore } from "@/store/auth-store"
 import { branchSaleState, overrideDiffers } from "@/lib/branch-overrides"
 import { formatKurus, formatKurusForInput, parseLiraToKurus } from "@/lib/money"
 import { branchSaleStateVariant } from "@/lib/status-badge"
-import { useAuthStore } from "@/store/auth-store"
 import type { BranchProductOverride, Product } from "@/types"
 
 interface RowProps {
@@ -144,26 +144,25 @@ function BranchPricingRow({
   )
 }
 
-// Owner-facing screen for ADR-DATA-009: pick a branch, then edit each
-// product's branch price and whether that branch sells it. The list is the
-// TENANT catalog joined client-side with the branch's overrides — never
-// GET /products?branch_id=, which drops closed products and would leave the
-// owner no row to re-open them from.
+// Owner-facing screen for ADR-DATA-009: the branch comes from the global
+// header switcher, the page edits each product's price for it and whether
+// that branch sells it. The list is the TENANT catalog joined client-side
+// with the branch's overrides — never GET /products?branch_id=, which drops
+// closed products and would leave the owner no row to re-open them from.
 export function BranchPricing() {
   const t = useTranslations("catalog.branchPricing")
   const tCommon = useTranslations("catalog.common")
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
 
-  const [branchParam, setBranchParam] = useState(() => searchParams.get("branch") ?? "")
   const [search, setSearch] = useState(() => searchParams.get("q") ?? "")
   const [onlyOverridden, setOnlyOverridden] = useState(() => searchParams.get("only") === "1")
 
-  const branchesQuery = useBranches(tenantId)
-  const branches = useMemo(() => branchesQuery.data ?? [], [branchesQuery.data])
-  const branchId = branches.some((b) => b.id === branchParam) ? branchParam : (branches[0]?.id ?? "")
+  const { branchId, branches, isLoading: branchesLoading } = useSelectedBranch()
+  // Shares the cache entry behind useSelectedBranch's list; only read here
+  // for the error/retry affordance the hook deliberately does not carry.
+  const branchesQuery = useBranches(useAuthStore((s) => s.tenantId) ?? "")
 
   const productsQuery = useProducts()
   const categoriesQuery = useCategories()
@@ -196,16 +195,16 @@ export function BranchPricing() {
   }, [products, overrideByProduct, search, onlyOverridden])
 
   // Best-effort mirror of the filters into the URL (same trade-off as the
-  // products list): a reload or a shared link lands on the same view.
-  const syncQuery = (next: { branch?: string; q?: string; only?: boolean }) => {
+  // products list): a reload or a shared link lands on the same view. The
+  // branch itself is global state now (header switcher) and no longer lives
+  // in this page's URL.
+  const syncQuery = (next: { q?: string; only?: boolean }) => {
     const params = new URLSearchParams(searchParams.toString())
     const merged = {
-      branch: next.branch ?? branchId,
       q: next.q ?? search,
       only: next.only ?? onlyOverridden,
     }
-    if (merged.branch) params.set("branch", merged.branch)
-    else params.delete("branch")
+    params.delete("branch")
     if (merged.q) params.set("q", merged.q)
     else params.delete("q")
     if (merged.only) params.set("only", "1")
@@ -253,7 +252,7 @@ export function BranchPricing() {
     }
   }
 
-  const isLoading = branchesQuery.isLoading || productsQuery.isLoading || (branchId !== "" && overridesQuery.isLoading)
+  const isLoading = branchesLoading || productsQuery.isLoading || (branchId !== "" && overridesQuery.isLoading)
   const isError = branchesQuery.isError || productsQuery.isError || overridesQuery.isError
   const retry = () => {
     void branchesQuery.refetch()
@@ -337,21 +336,6 @@ export function BranchPricing() {
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Select
-          value={branchId}
-          onValueChange={(value) => {
-            setBranchParam(value)
-            syncQuery({ branch: value })
-          }}
-          className="w-auto min-w-48"
-          aria-label={t("branch")}
-        >
-          {branches.map((branch) => (
-            <SelectItem key={branch.id} value={branch.id}>
-              {branch.is_active ? branch.name : t("branchInactive", { name: branch.name })}
-            </SelectItem>
-          ))}
-        </Select>
         <Input
           placeholder={t("search")}
           aria-label={t("search")}

@@ -34,11 +34,11 @@ test.describe("(f) yönetim paneli", () => {
     await gotoSpa(page, "/catalog/branch-pricing")
     await expect(page.getByRole("heading", { name: "Şube Fiyatları" })).toBeVisible()
 
-    // Süzgecin erişilebilir adı catalog.branchPricing.branch = "Şube";
-    // rozetin metni catalog.branchPricing.state.branch = "Şube fiyatı".
-    // İkisi ayrı anahtardır, karıştırılmamalı. Süzgeç ada göre seçilir
-    // (sayfada başka bir combobox yok ama sıraya güvenmek kırılgandır).
-    const branchFilter = page.getByRole("combobox", { name: "Şube" })
+    // Sayfa-içi şube süzgeci kaldırıldı: şube artık header'daki GLOBAL
+    // seçiciden gelir (erişilebilir adı "Şube seçimi") ve tüm sayfalar
+    // o seçimden beslenir. Rozet metni catalog.branchPricing.state.branch
+    // = "Şube fiyatı" olduğu gibi kaldı.
+    const branchFilter = page.getByRole("combobox", { name: "Şube seçimi" })
     const badges = page.locator("span[data-slot=badge]", { hasText: "Şube fiyatı" })
 
     await branchFilter.selectOption({ label: "İzmit" })

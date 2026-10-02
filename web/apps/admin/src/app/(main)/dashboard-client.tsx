@@ -2,7 +2,7 @@
 
 import axios from "axios"
 import { useTranslations } from "next-intl"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import {
   Area,
   AreaChart,
@@ -26,16 +26,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useCan } from "@/hooks/use-can"
 import { useProducts } from "@/hooks/use-catalog"
 import { useChecks } from "@/hooks/use-pos"
 import { periodRange, useCalendarDay, useSaleDetails, type ReportPeriod } from "@/hooks/use-reports"
-import { useBranches } from "@/hooks/use-tenant"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { formatKurus } from "@/lib/money"
 import { axisLira, fillDailySeries } from "@/lib/report-chart"
-import { useAuthStore } from "@/store/auth-store"
 
 // dd.MM label for the AreaChart x-axis — by_day's `date` is a plain
 // YYYY-MM-DD string (no time/zone component: it is already the backend's
@@ -50,16 +48,10 @@ export default function DashboardClient() {
   const t = useTranslations("dashboard")
   const canViewReport = useCan("pos.report.read")
 
-  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
-  const { data: branches } = useBranches(tenantId)
-  const [branchId, setBranchId] = useState("")
+  // Branch comes from the global header switcher (use-selected-branch);
+  // the page no longer carries its own branch Select.
+  const { branchId } = useSelectedBranch()
   const [period, setPeriod] = useState<ReportPeriod>("today")
-
-  useEffect(() => {
-    if (!branchId && branches && branches.length > 0) {
-      setBranchId(branches[0].id)
-    }
-  }, [branches, branchId])
 
   // `day` is a deliberate memo dependency, not a stray one: useCalendarDay()
   // only changes value once local midnight passes, which is exactly what
@@ -73,7 +65,9 @@ export default function DashboardClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `day` intentionally forces a recompute; see comment above
   const { from, to } = useMemo(() => periodRange(period), [period, day])
 
-  const openChecks = useChecks({ status: "open", limit: 100 })
+  // Branch-scoped like the report below it: the "open checks" figure must
+  // describe the branch the header switcher names, not the whole chain.
+  const openChecks = useChecks({ status: "open", limit: 100, ...(branchId !== "" ? { branch_id: branchId } : {}) })
   const allProducts = useProducts({ limit: 5 })
   const report = useSaleDetails({ branchId, from, to })
 
@@ -117,26 +111,7 @@ export default function DashboardClient() {
         </Card>
       </div>
 
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="w-56 space-y-1">
-          <label className="text-sm font-medium" htmlFor="dashboard-branch-select">
-            {t("branch")}
-          </label>
-          <Select
-            id="dashboard-branch-select"
-            value={branchId}
-            onValueChange={setBranchId}
-            disabled={!branches || branches.length === 0}
-          >
-            <SelectItem value="">{t("branchPlaceholder")}</SelectItem>
-            {(branches ?? []).map((branch) => (
-              <SelectItem key={branch.id} value={branch.id}>
-                {branch.name}
-              </SelectItem>
-            ))}
-          </Select>
-        </div>
-
+      <div className="flex flex-wrap items-end justify-end gap-4">
         <PeriodPicker value={period} onChange={setPeriod} />
       </div>
 

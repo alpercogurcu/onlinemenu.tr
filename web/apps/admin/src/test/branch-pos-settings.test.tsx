@@ -3,7 +3,7 @@
 // GET /pos/branch-settings, changing one PUTs only the edited field, and a
 // role without pos.table.manage gets neither the card nor the GET.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -39,6 +39,16 @@ vi.mock("@/lib/api", () => ({
 }))
 
 import BranchesPage from "@/app/(main)/settings/branches/page"
+import { branchScopeKey, useBranchStore } from "@/store/branch-store"
+
+// The card reads the GLOBAL branch (header switcher -> branch store); tests
+// flip the store the way BranchSwitcher does. The mocked auth store carries
+// tenant t1 and no user, so the scope key is branchScopeKey("t1", undefined).
+function switchGlobalBranch(id: string) {
+  act(() => {
+    useBranchStore.getState().setBranch(branchScopeKey("t1", undefined), id)
+  })
+}
 
 function Wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -91,6 +101,7 @@ describe("BranchesPage POS preferences", () => {
   beforeEach(() => {
     granted = new Set(MANAGER)
     serverSettings = {}
+    useBranchStore.setState({ selections: {} })
     get.mockReset()
     put.mockReset()
     post.mockReset()
@@ -153,24 +164,26 @@ describe("BranchesPage POS preferences", () => {
     await waitFor(() => expect(simple).toBeChecked())
   })
 
-  it("fetches the selected branch's settings when the branch changes", async () => {
+  it("fetches the selected branch's settings when the global branch changes", async () => {
     serverSettings.b2 = { branch_id: "b2", waiter_category_layout: "side", order_flow: "full" }
     renderPage()
 
     await screen.findByRole("radio", { name: LAYOUT_TOP })
-    fireEvent.change(screen.getByLabelText("Şube"), { target: { value: "b2" } })
+    switchGlobalBranch("b2")
 
     await waitFor(() =>
       expect(get).toHaveBeenCalledWith("/api/v1/pos/branch-settings", { params: { branch_id: "b2" } }),
     )
     await waitFor(() => expect(screen.getByRole("radio", { name: LAYOUT_SIDE })).toBeChecked())
+    // The card names the branch it edits now that it has no Select of its own.
+    expect(screen.getByText(/POS Tercihleri — Adapazarı/)).toBeInTheDocument()
   })
 
   it("renders no card and fires no GET without pos.table.manage", async () => {
     granted = new Set<string>()
     renderPage()
 
-    expect(screen.queryByText("POS Tercihleri")).not.toBeInTheDocument()
+    expect(screen.queryByText(/POS Tercihleri/)).not.toBeInTheDocument()
     expect(screen.queryByRole("radio")).not.toBeInTheDocument()
     // The settings query is permission-gated (enabled: canManage), so a
     // role without the permission must not even issue the request.

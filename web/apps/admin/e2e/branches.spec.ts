@@ -1106,7 +1106,7 @@ test.describe("çoklu şube", () => {
       await expect(page.getByRole("link", { name: "Şube Fiyatları" })).toBeVisible()
       await gotoSpa(page, "/catalog/branch-pricing")
 
-      await page.getByRole("combobox", { name: "Şube" }).selectOption({ label: BRANCH_B_NAME })
+      await page.getByRole("combobox", { name: "Şube seçimi" }).selectOption({ label: BRANCH_B_NAME })
       await expect(rowFor(priced)).toBeVisible()
 
       // Untouched: tenant price everywhere, nothing "şubeye özel".

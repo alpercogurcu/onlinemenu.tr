@@ -2,32 +2,32 @@
 
 import { TriangleAlert } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { useState } from "react"
 import { toast } from "sonner"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Select, SelectItem } from "@/components/ui/select"
 import { useCan } from "@/hooks/use-can"
 import {
   usePosBranchSettings,
   useUpdatePosBranchSettings,
   type PosBranchSettingsInput,
 } from "@/hooks/use-pos-branch-settings"
-import type { Branch, PosOrderFlow, WaiterCategoryLayout } from "@/types"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
+import type { PosOrderFlow, WaiterCategoryLayout } from "@/types"
 
 const LAYOUTS: WaiterCategoryLayout[] = ["top", "side"]
 const FLOWS: PosOrderFlow[] = ["full", "simple"]
 
-// Per-branch POS preferences on the Şubeler page. Gated on pos.table.manage
-// the same way the QR toggle on Masalar is: a role without the permission
-// gets neither the controls nor the GET (the section simply does not exist).
-export function PosSettingsCard({ branches }: { branches: Branch[] }) {
+// Per-branch POS preferences on the Şubeler page. The card edits the GLOBAL
+// branch (header switcher) and names it in its title — the per-card branch
+// Select is gone. Gated on pos.table.manage the same way the QR toggle on
+// Masalar is: a role without the permission gets neither the controls nor
+// the GET (the section simply does not exist).
+export function PosSettingsCard() {
   const t = useTranslations("branchPosSettings")
   const canManage = useCan("pos.table.manage")
-  const [selectedBranchId, setSelectedBranchId] = useState("")
-  const branchId = selectedBranchId || branches[0]?.id || ""
+  const { branchId, branch } = useSelectedBranch()
 
   const { data: settings, isLoading } = usePosBranchSettings(branchId, { enabled: canManage })
   const update = useUpdatePosBranchSettings()
@@ -52,27 +52,13 @@ export function PosSettingsCard({ branches }: { branches: Branch[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t("title")}</CardTitle>
+        <CardTitle>
+          {t("title")}
+          {branch ? ` — ${branch.name}` : ""}
+        </CardTitle>
         <CardDescription>{t("subtitle")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="w-full max-w-56 space-y-2">
-          <Label htmlFor="pos-settings-branch">{t("branch")}</Label>
-          <Select
-            id="pos-settings-branch"
-            value={branchId}
-            onValueChange={setSelectedBranchId}
-            disabled={branches.length === 0}
-          >
-            {branches.length === 0 && <SelectItem value="">{t("branchPlaceholder")}</SelectItem>}
-            {branches.map((branch) => (
-              <SelectItem key={branch.id} value={branch.id}>
-                {branch.name}
-              </SelectItem>
-            ))}
-          </Select>
-        </div>
-
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <fieldset className="space-y-3">
             <legend className="text-sm font-medium">{t("layoutTitle")}</legend>

@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useCreateWarehouse, useWarehouses } from "@/hooks/use-inventory"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { useBranches } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
 import type { WarehouseType } from "@/types"
@@ -49,13 +50,17 @@ export default function WarehousesPage() {
 
   const tenantId = useAuthStore((s) => s.tenantId) ?? ""
   const { data: branches } = useBranches(tenantId)
+  // The form still offers every branch (a warehouse is created FOR a
+  // branch, this is data entry, not a view filter) but defaults to the
+  // globally selected one.
+  const { branchId: selectedBranchId } = useSelectedBranch()
   const { data, isLoading } = useWarehouses()
   const createWarehouse = useCreateWarehouse()
 
   const branchMap = new Map((branches ?? []).map((b) => [b.id, b.name]))
 
   const handleOpen = () => {
-    setForm({ ...defaultForm, branch_id: branches?.[0]?.id ?? "" })
+    setForm({ ...defaultForm, branch_id: selectedBranchId || (branches?.[0]?.id ?? "") })
     setDialogOpen(true)
   }
 

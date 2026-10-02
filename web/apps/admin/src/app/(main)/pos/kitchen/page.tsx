@@ -19,22 +19,18 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { useAcceptOrder, useAdvanceOrder, useOrderDetails } from "@/hooks/use-pos"
 import { useCan } from "@/hooks/use-can"
-import { useBranches } from "@/hooks/use-tenant"
-import { currentBranchId } from "@/lib/permissions"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { type KitchenConnectionStatus, useKitchenStream } from "@/hooks/use-kitchen-stream"
 import { ELAPSED_TONE_CLASS, elapsedTone, formatElapsed } from "@/lib/kds-format"
 import { kitchenOrdersByStatus, type KitchenOrder } from "@/lib/kitchen-events"
 import { useDeviceDark } from "@/lib/use-device-dark"
 import { cn } from "@/lib/utils"
-import { useAuthStore } from "@/store/auth-store"
 import type { Order, OrderStatus } from "@/types"
 
-const BRANCH_STORAGE_KEY = "kds-branch-id"
 const SOUND_STORAGE_KEY = "kds-sound-enabled"
 const DARK_STORAGE_KEY = "kds-dark"
 
@@ -268,14 +264,11 @@ export function KitchenOrderCard({
 }
 
 export default function KitchenPage() {
-  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
-  const { data: branches, isLoading: branchesLoading } = useBranches(tenantId)
-  // Non-null for a branch-scoped operator (cashier/waiter/kitchen/bar/...) —
-  // they always work their own branch, so the branch control below renders
-  // as static text for them instead of a Select that would let them pick a
-  // branch they have no access to and land on an empty/403'd board.
-  const scopedBranchId = currentBranchId()
-  const [branchId, setBranchId] = useState<string | null>(null)
+  // Branch comes from the global header switcher (use-selected-branch):
+  // branch-scoped operators are pinned to their own branch there, the old
+  // per-page Select and its "kds-branch-id" localStorage key are gone.
+  const { branchId: selectedBranchId, branch, isLoading: branchesLoading } = useSelectedBranch()
+  const branchId = selectedBranchId === "" ? null : selectedBranchId
   const [now, setNow] = useState(() => Date.now())
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(false)
@@ -289,17 +282,6 @@ export default function KitchenPage() {
   useEffect(() => {
     setSoundEnabled(typeof window !== "undefined" && localStorage.getItem(SOUND_STORAGE_KEY) === "true")
   }, [])
-
-  useEffect(() => {
-    if (!branches || branches.length === 0) return
-    const stored = typeof window !== "undefined" ? localStorage.getItem(BRANCH_STORAGE_KEY) : null
-    const own = currentBranchId()
-    const pick = (id: string | null) => (id && branches.some((b) => b.id === id) ? id : null)
-    // A branch-scoped operator always lands on their own branch; the stored
-    // choice only matters for chain-wide users who can actually switch.
-    const initial = pick(own) ?? pick(stored) ?? branches[0].id
-    setBranchId((current) => current ?? initial)
-  }, [branches])
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1_000)
@@ -331,11 +313,6 @@ export default function KitchenPage() {
     [columns],
   )
   const details = useOrderDetails(allOrderIds)
-
-  const handleBranchChange = (id: string) => {
-    setBranchId(id)
-    if (typeof window !== "undefined") localStorage.setItem(BRANCH_STORAGE_KEY, id)
-  }
 
   const handleSoundToggle = (checked: boolean) => {
     setSoundEnabled(checked)
@@ -389,27 +366,11 @@ export default function KitchenPage() {
         <div className="flex flex-wrap items-center gap-3">
           <ConnectionBadge status={status} />
 
-          {scopedBranchId ? (
-            <span className="text-sm font-medium">
-              {branches?.find((b) => b.id === branchId)?.name ?? "—"}
-            </span>
-          ) : (
-            branches &&
-            branches.length > 1 && (
-              <Select
-                className="w-48"
-                value={branchId ?? ""}
-                onValueChange={handleBranchChange}
-                aria-label="Şube seçimi"
-              >
-                {branches.map((branch) => (
-                  <SelectItem key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </SelectItem>
-                ))}
-              </Select>
-            )
-          )}
+          {/* The branch is picked in the global header switcher; the board
+              still names it here because a wall tablet often runs this page
+              fullscreen-adjacent and the cook must know whose tickets these
+              are at a glance. */}
+          <span className="text-sm font-medium">{branch?.name ?? "—"}</span>
 
           <div className="flex items-center gap-2">
             {soundEnabled ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}

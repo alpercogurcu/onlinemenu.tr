@@ -4,7 +4,7 @@
 // fields (the backend defaults an omitted is_available to true, so a
 // price-only body would silently re-open a product the owner closed).
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -14,6 +14,7 @@ import { BranchPricing } from "@/components/catalog/branch-pricing"
 import { clearAccessToken, setAccessToken } from "@/lib/api"
 import messages from "@/messages/tr.json"
 import { useAuthStore } from "@/store/auth-store"
+import { branchScopeKey, useBranchStore } from "@/store/branch-store"
 import type { BranchProductOverride, Product } from "@/types"
 
 const replace = vi.fn()
@@ -123,10 +124,19 @@ function Wrapper({ children }: { children: ReactNode }) {
 const rowOf = (id: string) => screen.getByTestId(`branch-pricing-row-${id}`)
 const priceInput = (id: string) => within(rowOf(id)).getByLabelText(/şube fiyatı$/) as HTMLInputElement
 
+// The page has no branch Select any more — the branch is switched in the
+// global header (BranchSwitcher -> branch store), so tests flip the store
+// the same way the switcher does.
+function switchGlobalBranch(id: string) {
+  act(() => {
+    useBranchStore.getState().setBranch(branchScopeKey("t1", useAuthStore.getState().user?.id), id)
+  })
+}
+
 async function openIzmit() {
   render(<BranchPricing />, { wrapper: Wrapper })
   await screen.findByText("Adana Kebap")
-  fireEvent.change(screen.getByLabelText("Şube"), { target: { value: "b2" } })
+  switchGlobalBranch("b2")
   await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/catalog/branches/b2/product-overrides"))
   // The table is replaced by a skeleton while the new branch's overrides load.
   await screen.findByTestId("branch-pricing-row-p1")
@@ -140,6 +150,7 @@ function commitPrice(id: string, text: string) {
 
 beforeEach(() => {
   useAuthStore.setState({ tenantId: "t1" })
+  useBranchStore.setState({ selections: {} })
   overrides = []
   get.mockReset()
   put.mockReset()
@@ -338,10 +349,12 @@ describe("BranchPricing", () => {
     await screen.findByText("Adana Kebap")
     expect(priceInput("p2").value).toBe("")
 
-    fireEvent.change(screen.getByLabelText("Şube"), { target: { value: "b2" } })
+    switchGlobalBranch("b2")
 
     await waitFor(() => expect(priceInput("p2").value).toBe("310,00"))
-    expect(replace).toHaveBeenCalledWith("/catalog/branch-pricing?branch=b2")
+    // The branch no longer lives in this page's URL — switching it must not
+    // rewrite the query string.
+    expect(replace).not.toHaveBeenCalled()
   })
 })
 

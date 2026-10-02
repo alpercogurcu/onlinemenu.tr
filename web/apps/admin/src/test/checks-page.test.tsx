@@ -14,6 +14,16 @@ const cancelMutate = vi.fn()
 let checks: Check[] = []
 
 vi.mock("@/hooks/use-can", () => ({ useCan: () => true }))
+vi.mock("@/hooks/use-selected-branch", () => ({
+  useSelectedBranch: () => ({
+    branchId: "b",
+    branch: { id: "b", name: "Serdivan" },
+    branches: [{ id: "b", name: "Serdivan" }],
+    locked: false,
+    isLoading: false,
+    setBranch: vi.fn(),
+  }),
+}))
 vi.mock("@/hooks/use-pos", () => ({
   useChecks: () => ({ data: checks, isLoading: false }),
   useCloseCheck: () => ({ mutateAsync: closeMutate, isPending: false }),

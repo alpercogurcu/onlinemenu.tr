@@ -161,7 +161,7 @@ export default function BranchesPage() {
         </CardContent>
       </Card>
 
-      <PosSettingsCard branches={branches} />
+      <PosSettingsCard />
 
       <FormDialog
         open={dialogOpen}

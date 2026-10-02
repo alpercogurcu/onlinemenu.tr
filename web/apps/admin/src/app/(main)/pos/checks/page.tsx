@@ -21,6 +21,7 @@ import {
 import { ConfirmDialog } from "@/components/catalog/confirm-dialog"
 import { useCan } from "@/hooks/use-can"
 import { useCancelCheck, useChecks, useCloseCheck } from "@/hooks/use-pos"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { checkStatusVariant } from "@/lib/status-badge"
 import { cn } from "@/lib/utils"
 import { checkDurationLabel, formatCheckTotal, isLongOpenCheck } from "@/lib/pos-format"
@@ -39,7 +40,15 @@ export default function ChecksPage() {
   const canClose = useCan("pos.check.close")
   const canCancel = useCan("pos.check.cancel")
   const hasActions = canClose || canCancel
-  const { data, isLoading } = useChecks({ refetchInterval: 30_000 })
+  // Scoped to the globally selected branch (header switcher) so this page
+  // always shows the same branch the operator just worked on in Masalar.
+  // While the branch list is still loading (branchId "") the filter is
+  // simply absent — the backend treats that as "no branch filter".
+  const { branchId } = useSelectedBranch()
+  const { data, isLoading } = useChecks({
+    ...(branchId !== "" ? { branch_id: branchId } : {}),
+    refetchInterval: 30_000,
+  })
   const closeCheck = useCloseCheck()
   const cancelCheck = useCancelCheck()
 

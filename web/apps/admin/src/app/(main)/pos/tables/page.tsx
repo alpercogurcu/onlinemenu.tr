@@ -3,7 +3,7 @@
 import { LayoutGrid, Pencil, Plus, QrCode, ReceiptText, ShoppingBasket, Users } from "lucide-react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { toast } from "sonner"
 
 import { TableFormDialog } from "@/components/pos/table-form-dialog"
@@ -16,12 +16,10 @@ import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { useCan } from "@/hooks/use-can"
-import { currentBranchId } from "@/lib/permissions"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { tableStatusVariant } from "@/lib/status-badge"
 import { useSetTableStatus, useTables, useZones, type ManualTableStatus } from "@/hooks/use-pos"
 import { useStorefrontSettings, useUpdateStorefrontSettings } from "@/hooks/use-storefront"
-import { useBranches } from "@/hooks/use-tenant"
-import { useAuthStore } from "@/store/auth-store"
 import type { PosTable, PosTableStatus, PosZone } from "@/types"
 
 // Mirrors domain.allowedTableTransitions (backend/internal/modules/pos/domain/
@@ -61,24 +59,13 @@ export default function TablesPage() {
   const canOrder = useCan("pos.order.place")
   //   pos.check.read      — an occupied table links to its adisyon
   const canReadChecks = useCan("pos.check.read")
-  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
-  const { data: branches } = useBranches(tenantId)
-  // Non-null for a branch-scoped operator — they always work their own
-  // branch, so the branch control below renders as static text for them
-  // instead of a Select that would let them pick a branch they have no
-  // access to and land on an empty/403'd board.
-  const scopedBranchId = currentBranchId()
-  const [branchId, setBranchId] = useState("")
+  // Branch comes from the global header switcher: branch-scoped operators
+  // are pinned to their own branch there, chain-wide users pick once for
+  // the whole app (use-selected-branch.ts).
+  const { branchId } = useSelectedBranch()
   const [qrTable, setQrTable] = useState<SelectedTable | null>(null)
   const [zoneDialog, setZoneDialog] = useState<{ zone?: PosZone } | null>(null)
   const [tableDialog, setTableDialog] = useState<{ table?: PosTable; zoneId?: string } | null>(null)
-
-  useEffect(() => {
-    if (!branchId && branches && branches.length > 0) {
-      const own = currentBranchId()
-      setBranchId(own && branches.some((b) => b.id === own) ? own : branches[0].id)
-    }
-  }, [branches, branchId])
 
   // This page is table-backed, not check-backed: a QR code is issued per table
   // and its whole point is to let a guest at an EMPTY table start ordering.
@@ -154,32 +141,6 @@ export default function TablesPage() {
         </div>
 
         <div className="flex flex-wrap items-end gap-3">
-          <div className="w-56 space-y-1">
-            <span id="branch-label" className="text-sm font-medium">
-              {t("branch")}
-            </span>
-            {scopedBranchId ? (
-              <p aria-labelledby="branch-label" className="flex h-9 items-center text-sm font-medium">
-                {branches?.find((b) => b.id === branchId)?.name ?? "—"}
-              </p>
-            ) : (
-              <Select
-                id="branch-select"
-                aria-labelledby="branch-label"
-                value={branchId}
-                onValueChange={setBranchId}
-                disabled={!branches || branches.length === 0}
-              >
-                <SelectItem value="">{t("branchPlaceholder")}</SelectItem>
-                {(branches ?? []).map((branch) => (
-                  <SelectItem key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </SelectItem>
-                ))}
-              </Select>
-            )}
-          </div>
-
           {canViewQR && branchId !== "" && (
             <div className="space-y-1">
               <div className="flex h-9 items-center gap-2">

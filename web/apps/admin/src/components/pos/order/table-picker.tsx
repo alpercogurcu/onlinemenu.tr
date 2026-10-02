@@ -9,23 +9,19 @@ import { formatMoney } from "@onlinemenu/pos-core"
 
 import { NewServiceCheckSheet, ServiceCheckList, type ServiceCheckFormValues, type ServiceKind } from "@/components/pos/order/service-checks"
 import { TouchConfirm } from "@/components/pos/order/touch-sheet"
-import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useTables } from "@/hooks/use-pos"
 import { useCleanTable, useOpenChecks, useOpenServiceCheck, type OpenServiceCheckBody } from "@/hooks/use-pos-order"
 import { describeOrderError } from "@/lib/pos-order"
 import { statusSurfaceClass, tableStatusVariant } from "@/lib/status-badge"
 import { cn } from "@/lib/utils"
-import type { Branch, Check, PosTable } from "@/types"
+import type { Check, PosTable } from "@/types"
 
 type PickerMode = "tables" | ServiceKind
 
 interface TablePickerProps {
+  /** Selected in the global header switcher (use-selected-branch). */
   branchId: string
-  branches: Branch[] | undefined
-  /** True for a branch-scoped operator: the branch is shown, not chosen. */
-  branchLocked: boolean
-  onBranchChange: (branchId: string) => void
   onPick: (table: PosTable) => void
   /** A gel al / paket check was picked or just opened: go to its order screen. */
   onPickCheck: (check: Check) => void
@@ -41,7 +37,7 @@ interface TablePickerProps {
  * take a new check (the server refuses it), so tapping one asks
  * "temizlendi mi?" and frees it first instead of failing later.
  */
-export function TablePicker({ branchId, branches, branchLocked, onBranchChange, onPick, onPickCheck }: TablePickerProps) {
+export function TablePicker({ branchId, onPick, onPickCheck }: TablePickerProps) {
   const t = useTranslations("posOrder")
   const { data: plan, isLoading } = useTables(branchId, { refetchInterval: 20_000 })
   const { data: openChecks } = useOpenChecks(branchId)
@@ -97,29 +93,6 @@ export function TablePicker({ branchId, branches, branchLocked, onBranchChange, 
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("pickTitle")}</h1>
           <p className="text-base text-muted-foreground">{t("pickSubtitle")}</p>
-        </div>
-        <div className="w-full space-y-1 sm:w-64">
-          <span id="order-branch-label" className="text-sm font-medium">
-            {t("branch")}
-          </span>
-          {branchLocked ? (
-            <p aria-labelledby="order-branch-label" className="text-base font-semibold">
-              {branches?.find((b) => b.id === branchId)?.name ?? "—"}
-            </p>
-          ) : (
-            <Select
-              aria-labelledby="order-branch-label"
-              className="h-12 text-base"
-              value={branchId}
-              onValueChange={onBranchChange}
-            >
-              {(branches ?? []).map((branch) => (
-                <SelectItem key={branch.id} value={branch.id}>
-                  {branch.name}
-                </SelectItem>
-              ))}
-            </Select>
-          )}
         </div>
       </div>
 

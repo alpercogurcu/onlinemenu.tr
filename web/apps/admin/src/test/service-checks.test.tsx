@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { TablePicker } from "@/components/pos/order/table-picker"
 import messages from "@/messages/tr.json"
-import type { Branch, Check } from "@/types"
+import type { Check } from "@/types"
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
@@ -24,7 +24,6 @@ vi.mock("@/lib/api", () => ({
 }))
 
 const BRANCH = "b1"
-const branches = [{ id: BRANCH, name: "Merkez" }] as Branch[]
 
 const check = (over: Partial<Check>): Check =>
   ({
@@ -89,14 +88,7 @@ function wrap(children: ReactNode) {
 function renderPicker(onPickCheck = vi.fn()) {
   render(
     wrap(
-      <TablePicker
-        branchId={BRANCH}
-        branches={branches}
-        branchLocked
-        onBranchChange={vi.fn()}
-        onPick={vi.fn()}
-        onPickCheck={onPickCheck}
-      />,
+      <TablePicker branchId={BRANCH} onPick={vi.fn()} onPickCheck={onPickCheck} />,
     ),
   )
   return onPickCheck

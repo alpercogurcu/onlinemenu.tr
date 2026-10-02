@@ -12,7 +12,7 @@ import {
   Router as RouterIcon,
   Zap,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { FormDialog } from "@/components/layouts/form-dialog"
@@ -30,7 +30,6 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -46,8 +45,7 @@ import {
   useSyncFiscalSections,
   useUpdateFiscalTerminal,
 } from "@/hooks/use-fiscal"
-import { useBranches } from "@/hooks/use-tenant"
-import { useAuthStore } from "@/store/auth-store"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import type { BasketMode, FiscalTerminal } from "@/types"
 
 interface TerminalFormState {
@@ -99,15 +97,9 @@ function statusBadge(isActive: boolean) {
 }
 
 export default function FiscalTerminalsPage() {
-  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
-  const { data: branches } = useBranches(tenantId)
-  const [branchId, setBranchId] = useState("")
-
-  useEffect(() => {
-    if (!branchId && branches && branches.length > 0) {
-      setBranchId(branches[0].id)
-    }
-  }, [branches, branchId])
+  // Branch comes from the global header switcher (use-selected-branch);
+  // the page no longer carries its own branch Select.
+  const { branchId } = useSelectedBranch()
 
   const { data, isLoading } = useFiscalTerminals(branchId)
   const terminals = data ?? []
@@ -237,19 +229,6 @@ export default function FiscalTerminalsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select
-            value={branchId}
-            onChange={(e) => setBranchId(e.target.value)}
-            className="w-48"
-            aria-label="Şube seçin"
-          >
-            <SelectItem value="">Şube seçin</SelectItem>
-            {(branches ?? []).map((b) => (
-              <SelectItem key={b.id} value={b.id}>
-                {b.name}
-              </SelectItem>
-            ))}
-          </Select>
           <Button onClick={handleOpenCreate} disabled={!branchId}>
             <Plus className="size-4" />
             Terminal Ekle

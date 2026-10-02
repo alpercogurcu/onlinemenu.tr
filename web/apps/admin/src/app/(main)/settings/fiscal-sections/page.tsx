@@ -7,14 +7,6 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Select, SelectItem } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -32,8 +24,7 @@ import {
   useFiscalTerminals,
   useReplaceFiscalSectionMappings,
 } from "@/hooks/use-fiscal"
-import { useBranches } from "@/hooks/use-tenant"
-import { useAuthStore } from "@/store/auth-store"
+import { useSelectedBranch } from "@/hooks/use-selected-branch"
 
 // Category -> device VAT section id. `undefined` means "not mapped yet".
 type MappingState = Record<string, number | undefined>
@@ -53,16 +44,13 @@ function mappingsEqual(a: MappingState, b: MappingState): boolean {
 }
 
 export default function FiscalSectionMappingPage() {
-  const tenantId = useAuthStore((s) => s.tenantId) ?? ""
-  const { data: branches } = useBranches(tenantId)
-  const [branchId, setBranchId] = useState("")
+  // Branch comes from the global header switcher (use-selected-branch).
+  // A header branch switch while the mapping table is dirty can no longer
+  // be intercepted page-locally; unsaved edits are simply replaced by the
+  // new branch's rows (the beforeunload guard below still covers tab
+  // close/refresh).
+  const { branchId } = useSelectedBranch()
   const [terminalId, setTerminalId] = useState("")
-
-  useEffect(() => {
-    if (!branchId && branches && branches.length > 0) {
-      setBranchId(branches[0].id)
-    }
-  }, [branches, branchId])
 
   const { data: terminalsData } = useFiscalTerminals(branchId)
   const terminals = terminalsData ?? []
@@ -116,24 +104,6 @@ export default function FiscalSectionMappingPage() {
     return () => window.removeEventListener("beforeunload", handler)
   }, [isDirty])
 
-  const [pendingBranchId, setPendingBranchId] = useState<string | null>(null)
-
-  const requestBranchChange = (nextBranchId: string) => {
-    if (isDirty && nextBranchId !== branchId) {
-      setPendingBranchId(nextBranchId)
-    } else {
-      setBranchId(nextBranchId)
-    }
-  }
-
-  const confirmBranchChange = () => {
-    if (pendingBranchId !== null) {
-      setBranchId(pendingBranchId)
-      setTerminalId("")
-      setPendingBranchId(null)
-    }
-  }
-
   const handleMapChange = (categoryId: string, value: string) => {
     setMappings((m) => ({ ...m, [categoryId]: value ? Number(value) : undefined }))
   }
@@ -167,19 +137,6 @@ export default function FiscalSectionMappingPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select
-            value={branchId}
-            onChange={(e) => requestBranchChange(e.target.value)}
-            className="w-48"
-            aria-label="Şube seçin"
-          >
-            <SelectItem value="">Şube seçin</SelectItem>
-            {(branches ?? []).map((b) => (
-              <SelectItem key={b.id} value={b.id}>
-                {b.name}
-              </SelectItem>
-            ))}
-          </Select>
           <Select
             value={terminalId}
             onChange={(e) => setTerminalId(e.target.value)}
@@ -324,26 +281,6 @@ export default function FiscalSectionMappingPage() {
           {replaceMappings.isPending ? "Kaydediliyor..." : "Kaydet"}
         </Button>
       </div>
-
-      <Dialog open={pendingBranchId !== null} onOpenChange={(open) => !open && setPendingBranchId(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Kaydedilmemiş değişiklikler var</DialogTitle>
-            <DialogDescription>
-              Şube değiştirilirse bu ekrandaki kaydedilmemiş eşleme değişiklikleri kaybolur. Devam
-              etmek istiyor musunuz?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPendingBranchId(null)}>
-              Vazgeç
-            </Button>
-            <Button variant="destructive" onClick={confirmBranchChange}>
-              Değişikliklerimi kaybet
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

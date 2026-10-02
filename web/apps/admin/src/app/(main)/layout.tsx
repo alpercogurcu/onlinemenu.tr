@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useState } from "react"
 import RouteGuard from "@/components/auth/route-guard"
 import SessionGuard from "@/components/auth/session-guard"
 import AdminSidebar from "@/components/layouts/admin-sidebar"
+import BranchSwitcher from "@/components/layouts/branch-switcher"
 import DynamicBreadcrumb from "@/components/layouts/dynamic-breadcrumb"
 import NavProfile from "@/components/layouts/nav-profile"
 import { Separator } from "@/components/ui/separator"
@@ -77,6 +78,7 @@ function MainShell({ children }: Readonly<{ children: ReactNode }>) {
             <Separator orientation="vertical" className="mr-2 h-4" />
             <DynamicBreadcrumb />
             <div className="flex items-center gap-2 ml-auto">
+              <BranchSwitcher />
               <NavProfile />
             </div>
           </header>

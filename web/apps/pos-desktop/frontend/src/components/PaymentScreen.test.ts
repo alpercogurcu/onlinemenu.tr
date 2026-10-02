@@ -4,7 +4,8 @@
 // pinned here; the chip/label logic itself lives in lib/seatTotals.ts with its
 // own tests.
 import { describe, expect, it } from 'vitest'
-import { CARD_DEVICE_NOTICE, PAID_ITEM_LABEL, SEAT_TAP_HINT } from './PaymentScreen'
+import { PAID_ROW_LABEL } from '../lib/payRow'
+import { CARD_DEVICE_NOTICE, SEAT_TAP_HINT, SELECT_FROM_RECEIPT_HINT } from './PaymentScreen'
 
 describe('payment screen copy', () => {
   it('keeps the permanent card-device notice under the Kart action', () => {
@@ -14,10 +15,16 @@ describe('payment screen copy', () => {
   })
 
   it('explains what tapping a seat chip does', () => {
-    expect(SEAT_TAP_HINT).toBe('Kişiye dokun — tutarı aşağıya yazar. Kayıt normal kısmi ödemedir.')
+    expect(SEAT_TAP_HINT).toBe(
+      'Kişiye dokun — o kişinin ödenmemiş kalemleri seçilir. Birden çok kişi birlikte seçilebilir.',
+    )
   })
 
-  it('labels a settled item row in place of its amount', () => {
-    expect(PAID_ITEM_LABEL).toBe('Ödendi')
+  it('points the cashier at the receipt rail while nothing is picked', () => {
+    expect(SELECT_FROM_RECEIPT_HINT).toBe('Sağdaki adisyondan kalem seçebilirsiniz.')
+  })
+
+  it('labels a settled item row on the rail', () => {
+    expect(PAID_ROW_LABEL).toBe('Ödendi')
   })
 })

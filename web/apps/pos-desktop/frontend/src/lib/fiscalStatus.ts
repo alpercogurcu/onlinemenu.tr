@@ -23,7 +23,7 @@
 //
 // All amounts are integers in kuruş (see format.ts).
 
-import { remainingBalance } from '@onlinemenu/pos-core'
+import { remainingBalance, type ItemQty } from '@onlinemenu/pos-core'
 
 /**
  * Lifecycle of a payment as this client models it. The first four mirror
@@ -62,9 +62,9 @@ export type TrackedPayment = {
   receivedAmount: number
   /** How it was taken. Absent on payments that predate the payment screen. */
   method?: 'cash' | 'card'
-  /** Order-item ids this payment paid for, when it was an item payment (see
-   * @onlinemenu/pos-core's paymentPlan.ts itemsPaidBy). Absent for full/split/amount payments. */
-  itemIds?: string[]
+  /** Order-item units this payment paid for, when it was an item payment (see
+   * @onlinemenu/pos-core's paymentPlan.ts paidQtyBy). Absent for full/split/amount payments. */
+  items?: ItemQty[]
   /** Epoch ms at which this payment was registered. Drives the anti-flicker
    * delay in requirement 6 (see shouldRenderPendingBadge). */
   registeredAtMs: number

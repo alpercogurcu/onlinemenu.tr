@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { main } from '../../wailsjs/go/models'
-import { formatMoney, type PendingLine } from '@onlinemenu/pos-core'
+import { formatMoney, type PaidQty, type PaySelection, type PendingLine } from '@onlinemenu/pos-core'
+import { useLongPress } from '../hooks/useLongPress'
 import type { RemoteCompletedRow, RemotePendingFiscal, TrackedPayment } from '../lib/fiscalStatus'
 import { shortOrderId } from '../lib/kitchenPrint'
+import { PAID_ROW_LABEL, payRowState } from '../lib/payRow'
 import { seatBadge } from '../lib/seatTotals'
 import { ErrorBanner } from './ErrorBanner'
 import { FiscalStatusBadge } from './FiscalStatusBadge'
@@ -68,8 +70,17 @@ type ReceiptProps = {
     onPickTarget: () => void
     onCancel: () => void
   } | null
-  /** Items already covered by an item payment — they cannot be moved. */
-  paidItemIds: ReadonlySet<string>
+  /** While the payment screen is open the rail is its item-selection surface
+   * (units per row, see lib/payRow.ts); null otherwise. */
+  paySelection: {
+    selected: PaySelection
+    onTap: (itemId: string, available: number) => void
+    onStep: (itemId: string, available: number, delta: number) => void
+    onSelectAll: (itemId: string, available: number) => void
+  } | null
+  /** Units already covered by an item payment, per item. A row with any paid
+   * unit cannot be moved. */
+  paidQty: PaidQty
   /** Result of the last transfer/merge/move, shown briefly (empty when none). */
   notice: string
   /** Requirement 3 — retry a failed payment: the parent drops it from the tracked
@@ -113,7 +124,8 @@ export function Receipt({
   paymentActive,
   actions,
   moveSelection,
-  paidItemIds,
+  paySelection,
+  paidQty,
   notice,
   onRetryPayment,
   onCloseCheck,
@@ -131,7 +143,7 @@ export function Receipt({
     <aside className="flex h-full w-96 shrink-0 flex-col border-l border-line bg-panel">
       <div className="flex items-center justify-between gap-2 border-b border-line p-4">
         <h2 className="min-w-0 truncate font-display text-lg font-bold text-ink">{tableLabel || 'Adisyon'}</h2>
-        {actions && !moveSelection && (
+        {actions && !moveSelection && !paymentActive && (
           <CheckActionsMenu
             disabled={actions.disabled}
             onTransfer={actions.onTransfer}
@@ -177,6 +189,20 @@ export function Receipt({
                   {item.note && <p className="break-words pl-7 text-xs text-ink-dim">{item.note}</p>}
                 </>
               )
+              if (paySelection && !moveSelection) {
+                const state = payRowState(item.quantity, paidQty.get(item.id) ?? 0, paySelection.selected.get(item.id) ?? 0)
+                return (
+                  <PayRow
+                    key={item.id}
+                    itemId={item.id}
+                    line={line}
+                    state={state}
+                    onTap={paySelection.onTap}
+                    onStep={paySelection.onStep}
+                    onSelectAll={paySelection.onSelectAll}
+                  />
+                )
+              }
               if (!moveSelection) {
                 return (
                   <div key={item.id} className="receipt-line-enter py-1">
@@ -184,7 +210,7 @@ export function Receipt({
                   </div>
                 )
               }
-              const paid = paidItemIds.has(item.id)
+              const paid = (paidQty.get(item.id) ?? 0) > 0
               const selected = moveSelection.selectedIds.has(item.id)
               return (
                 <button
@@ -207,12 +233,12 @@ export function Receipt({
                   </span>
                   <span className="min-w-0 flex-1">
                     {line}
-                    {paid && <span className="block text-xs text-teal">Ödendi — taşınamaz</span>}
+                    {paid && <span className="block text-xs text-teal">Ödemesi alındı — taşınamaz</span>}
                   </span>
                 </button>
               )
             })}
-            {!moveSelection && <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />}
+            {!moveSelection && !paySelection && <KitchenTicketButton orderId={order.id} onReprint={onReprintKitchenTicket} />}
           </div>
         ))}
 
@@ -323,6 +349,112 @@ export function Receipt({
       </div>
       )}
     </aside>
+  )
+}
+
+const STEP_BUTTON =
+  'flex h-14 min-w-14 items-center justify-center rounded-md border border-line bg-surface px-3 font-sans text-lg font-bold text-ink disabled:opacity-40'
+
+/**
+ * One check row as the payment screen's selection surface. A tap adds one
+ * open unit (wrapping to none after the last), a long press takes the whole
+ * row; once a multi-unit row has a pick, a stepper with "Tümü" appears under
+ * it for exact counts. Paid units stay visible — dimmed with a teal check —
+ * so the cashier sees what is settled, but only the open ones can be picked.
+ */
+function PayRow({
+  itemId,
+  line,
+  state,
+  onTap,
+  onStep,
+  onSelectAll,
+}: {
+  itemId: string
+  line: ReactNode
+  state: ReturnType<typeof payRowState>
+  onTap: (itemId: string, available: number) => void
+  onStep: (itemId: string, available: number, delta: number) => void
+  onSelectAll: (itemId: string, available: number) => void
+}) {
+  const press = useLongPress(
+    () => onTap(itemId, state.available),
+    () => onSelectAll(itemId, state.available),
+  )
+  const picked = state.selected > 0
+  const full = picked && state.selected === state.available
+
+  if (state.settled) {
+    return (
+      <div className="mb-1 flex min-h-14 items-center gap-3 rounded-md border border-line/50 px-2 py-1 text-ink-dim opacity-60">
+        <CheckIcon size={20} className="shrink-0 text-teal" />
+        <span className="min-w-0 flex-1">
+          {line}
+          <span className="block font-sans text-xs font-semibold text-teal">{PAID_ROW_LABEL}</span>
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`mb-1 rounded-md border ${picked ? 'border-amber bg-amber/10' : 'border-line'}`}>
+      <button
+        type="button"
+        aria-pressed={picked}
+        className="flex min-h-14 w-full select-none items-center gap-3 px-2 py-1 text-left"
+        {...press}
+      >
+        <span
+          aria-hidden="true"
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border font-sans text-xs font-bold ${
+            full ? 'border-amber bg-amber text-amber-ink' : picked ? 'border-amber text-amber' : 'border-ink-dim'
+          }`}
+        >
+          {full ? <CheckIcon size={16} /> : picked ? state.selected : null}
+        </span>
+        <span className="min-w-0 flex-1">
+          {line}
+          {state.partialLabel && (
+            <span className="flex items-center gap-1 font-sans text-xs text-teal">
+              <CheckIcon size={12} />
+              {state.partialLabel}
+            </span>
+          )}
+        </span>
+      </button>
+      {state.stepper && picked && (
+        <div className="flex items-center gap-2 px-2 pb-2 pl-11 font-sans">
+          <button
+            type="button"
+            aria-label="Bir birim çıkar"
+            onClick={() => onStep(itemId, state.available, -1)}
+            className={STEP_BUTTON}
+          >
+            −
+          </button>
+          <span className="min-w-12 text-center text-base font-semibold tabular-nums text-ink" aria-live="polite">
+            {state.selected}/{state.available}
+          </span>
+          <button
+            type="button"
+            aria-label="Bir birim ekle"
+            disabled={full}
+            onClick={() => onStep(itemId, state.available, 1)}
+            className={STEP_BUTTON}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            disabled={full}
+            onClick={() => onSelectAll(itemId, state.available)}
+            className={`${STEP_BUTTON} text-sm`}
+          >
+            Tümü
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 

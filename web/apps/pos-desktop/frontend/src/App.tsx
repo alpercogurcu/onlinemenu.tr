@@ -63,7 +63,6 @@ import {
 } from './lib/fiscalStatus'
 import { cashSessionBannerKind } from './lib/cashSession'
 import { checksById, splitServiceChecks } from './lib/checkDisplay'
-import { seatGroups } from './lib/seatTotals'
 import {
   addNoticeFailure,
   describeNoticeFailure,
@@ -76,17 +75,21 @@ import {
   confirmedOrdersTotal,
   describeError,
   describeTableCleanError,
-  itemsPaidBy,
   moveNotice,
+  paidQtyBy,
   payableItems,
   pendingTotal as sumPendingTotal,
   changePendingQuantity,
   removePendingLine,
+  stepUnits,
+  tapUnits,
   targetPrompt,
   toOrderItemInputs,
   type LineOptions,
+  type PaySelection,
   type PendingLine,
   type TargetKind,
+  withSelectedQty,
 } from '@onlinemenu/pos-core'
 import {
   addKitchenFailure,
@@ -136,7 +139,14 @@ function App() {
   // Kitchen information slips (transfer/merge/move) that did not print. The move
   // itself stands; these stay visible until reprinted or dismissed.
   const [noticeFailures, setNoticeFailures] = useState<NoticeFailure[]>([])
-  const [paymentSession, setPaymentSession] = useState<{ id: number; initial: PaymentInitial | null } | null>(null)
+  // `selection` holds the units picked on the receipt rail, which is the
+  // payment screen's selection surface; it lives with the session so closing
+  // the screen drops it.
+  const [paymentSession, setPaymentSession] = useState<{
+    id: number
+    initial: PaymentInitial | null
+    selection: PaySelection
+  } | null>(null)
   const [pendingLines, setPendingLines] = useState<PendingLine[]>([])
 
   // --- Payment money, split into two buckets (ADR-FISCAL-002) -------------
@@ -434,8 +444,7 @@ function App() {
 
   const confirmedTotal = confirmedOrdersTotal(confirmedOrders)
   const checkItems = useMemo(() => payableItems(confirmedOrders), [confirmedOrders])
-  const paidItemIds = useMemo(() => itemsPaidBy(trackedForSelected), [trackedForSelected])
-  const paymentSeatGroups = useMemo(() => seatGroups(confirmedOrders, paidItemIds), [confirmedOrders, paidItemIds])
+  const paidQty = useMemo(() => paidQtyBy(trackedForSelected), [trackedForSelected])
   const settledPaidTotal = settledTotal(serverCompleted, trackedForSelected, remoteSettledForSelected)
   const remaining = collectableRemaining(
     confirmedTotal,
@@ -840,7 +849,7 @@ function App() {
           status: parseStatus(payment.status),
           receivedAmount: request.received,
           method: request.method,
-          itemIds: request.itemIds.length > 0 ? request.itemIds : undefined,
+          items: request.items.length > 0 ? request.items : undefined,
           registeredAtMs: Date.now(),
         },
       ])
@@ -875,10 +884,18 @@ function App() {
   // one stays on record server-side; nothing here mutates it.
   function handleRetryPayment(payment: TrackedPayment) {
     setTrackedPayments((prev) => prev.filter((p) => p.id !== payment.id))
-    setPaymentSession({ id: Date.now(), initial: { due: payment.amountTotal, method: payment.method ?? 'cash' } })
+    setPaymentSession({
+      id: Date.now(),
+      initial: { due: payment.amountTotal, method: payment.method ?? 'cash' },
+      selection: new Map(),
+    })
   }
 
   const closePaymentScreen = useCallback(() => setPaymentSession(null), [])
+
+  const updatePaySelection = useCallback((update: (current: PaySelection) => PaySelection) => {
+    setPaymentSession((session) => (session ? { ...session, selection: update(session.selection) } : session))
+  }, [])
 
   // printReceiptFor is best-effort by design (task note: "baskı hatası
   // kapanışı ENGELLEMEZ"): a failure here never throws back to its caller —
@@ -1352,12 +1369,13 @@ function App() {
                 key={paymentSession.id}
                 tableLabel={selectedCheck.table_label}
                 items={checkItems}
-                paidItemIds={paidItemIds}
+                paidQty={paidQty}
+                selection={paymentSession.selection}
+                onSelectionChange={updatePaySelection}
                 confirmedTotal={confirmedTotal}
                 settledPaidTotal={settledPaidTotal}
                 remaining={remaining}
                 initial={paymentSession.initial}
-                seatGroups={paymentSeatGroups}
                 onRegister={handleRegisterPayment}
                 onClose={closePaymentScreen}
                 errorMessage={receiptError}
@@ -1433,9 +1451,26 @@ function App() {
                 }
               : null
           }
-          paidItemIds={paidItemIds}
+          paySelection={
+            paymentSession
+              ? {
+                  selected: paymentSession.selection,
+                  onTap: (itemId, available) =>
+                    updatePaySelection((current) =>
+                      withSelectedQty(current, itemId, tapUnits(current.get(itemId) ?? 0, available)),
+                    ),
+                  onStep: (itemId, available, delta) =>
+                    updatePaySelection((current) =>
+                      withSelectedQty(current, itemId, stepUnits(current.get(itemId) ?? 0, available, delta)),
+                    ),
+                  onSelectAll: (itemId, available) =>
+                    updatePaySelection((current) => withSelectedQty(current, itemId, available)),
+                }
+              : null
+          }
+          paidQty={paidQty}
           notice={notice}
-          onStartPayment={() => setPaymentSession({ id: Date.now(), initial: null })}
+          onStartPayment={() => setPaymentSession({ id: Date.now(), initial: null, selection: new Map() })}
           paymentActive={paymentSession !== null}
           onRetryPayment={handleRetryPayment}
           onCloseCheck={handleCloseCheck}

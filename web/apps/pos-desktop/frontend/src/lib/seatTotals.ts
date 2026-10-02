@@ -1,37 +1,34 @@
-// Per-seat (kuver) subtotals for the payment screen's "Kişiler" shortcut.
+// Per-seat (kuver) subtotals and selection for the payment screen's "Kişiler"
+// shortcut.
 //
-// The waiter UI assigns order items to guests 1,2,3… (seat_no; 0 = unassigned)
-// and the payment screen offers one tap per guest that prefills the amount
-// field with that guest's outstanding share — an accelerator over the normal
-// partial payment, not a new payment kind: the registered payment is a plain
-// custom-amount installment and the backend knows nothing about seats.
+// The waiter UI assigns order items to guests 1,2,3… (seat_no; 0 = unassigned).
+// On the payment screen a guest chip selects that guest's unpaid units on the
+// receipt rail (docs/plans/2026-10-02-kasa-rapor-programi.md G.1) — an
+// accelerator over the ordinary item payment, not a new payment kind: the
+// backend knows nothing about seats.
 //
-// Pure kuruş arithmetic (quantity × unit_price_amount, the same path
-// pos-core's paymentPlan.itemTotal takes), kept out of the component so it is
-// testable without a DOM.
+// Pure kuruş arithmetic over pos-core's paymentPlan unit helpers, kept out of
+// the component so it is testable without a DOM.
 
-import { formatMoney } from '@onlinemenu/pos-core'
-
-/** Narrow shape this module needs from a confirmed order (main.OrderDTO).
- * Declared locally rather than imported from the generated Wails binding —
- * same rationale as pos-core's paymentPlan.OrderSource. seat_no is optional so
- * an order decoded by an older binding (field absent) reads as unassigned. */
-export type SeatOrderSource = {
-  items: {
-    id: string
-    quantity: number
-    unit_price_amount: number
-    seat_no?: number
-  }[]
-}
+import {
+  formatMoney,
+  itemTotal,
+  selectedUnits,
+  unpaidUnits,
+  withSelectedQty,
+  type PaidQty,
+  type PayableItem,
+  type PaySelection,
+} from '@onlinemenu/pos-core'
 
 export type SeatGroup = {
   /** Guest number; 0 is the shared/unassigned bucket ("Ortak"). */
   seat: number
   /** Everything this guest ordered, in kuruş. */
   total: number
-  /** The part not yet covered by an item payment, in kuruş. Custom-amount or
-   * split payments do not move this — the accepted looseness of a shortcut. */
+  /** The units not yet covered by an item payment, in kuruş. Amount-based
+   * (full/split/custom) payments do not move this — the accepted looseness of
+   * a shortcut. */
   remaining: number
 }
 
@@ -41,21 +38,15 @@ export type SeatGroup = {
  * the shared pot is the leftover. Returns [] when NO item carries a seat, so a
  * shop that never uses kuver never sees the section at all.
  */
-export function seatGroups(orders: readonly SeatOrderSource[], paidItemIds: ReadonlySet<string>): SeatGroup[] {
+export function seatGroups(items: readonly PayableItem[], paid: PaidQty): SeatGroup[] {
   const bySeat = new Map<number, SeatGroup>()
-  let anySeat = false
-  for (const order of orders) {
-    for (const item of order.items) {
-      const seat = item.seat_no && item.seat_no > 0 ? item.seat_no : 0
-      if (seat > 0) anySeat = true
-      const group = bySeat.get(seat) ?? { seat, total: 0, remaining: 0 }
-      const amount = item.quantity * item.unit_price_amount
-      group.total += amount
-      if (!paidItemIds.has(item.id)) group.remaining += amount
-      bySeat.set(seat, group)
-    }
+  for (const item of items) {
+    const group = bySeat.get(item.seat) ?? { seat: item.seat, total: 0, remaining: 0 }
+    group.total += itemTotal(item)
+    group.remaining += unpaidUnits(item, paid) * item.unitPrice
+    bySeat.set(item.seat, group)
   }
-  if (!anySeat) return []
+  if (![...bySeat.keys()].some((seat) => seat > 0)) return []
   return [...bySeat.values()].sort((a, b) => {
     if (a.seat === 0) return 1
     if (b.seat === 0) return -1
@@ -63,11 +54,31 @@ export function seatGroups(orders: readonly SeatOrderSource[], paidItemIds: Read
   })
 }
 
+/** A guest counts as selected while every one of their unpaid units is — so
+ * a cashier who trims a row on the rail sees the chip let go. */
+export function seatSelected(items: readonly PayableItem[], paid: PaidQty, selection: PaySelection, seat: number): boolean {
+  const open = items.filter((item) => item.seat === seat && unpaidUnits(item, paid) > 0)
+  return open.length > 0 && open.every((item) => selectedUnits(item, paid, selection) === unpaidUnits(item, paid))
+}
+
+/** Chip tap: selects all of the guest's unpaid units, or releases them when
+ * the guest is already selected. Other guests' selections stay — several
+ * guests can pay together. */
+export function toggleSeat(items: readonly PayableItem[], paid: PaidQty, selection: PaySelection, seat: number): PaySelection {
+  const release = seatSelected(items, paid, selection, seat)
+  let next = selection
+  for (const item of items) {
+    if (item.seat !== seat) continue
+    next = withSelectedQty(next, item.id, release ? 0 : unpaidUnits(item, paid))
+  }
+  return next
+}
+
 export type SeatChip = {
   seat: number
   /** Chip text as rendered: "2 · 520,00 ₺", "1 · Ödendi", "Ortak · 160,00 ₺". */
   label: string
-  /** remaining 0 — every item of the guest was item-paid; the chip is a badge,
+  /** remaining 0 — every unit of the guest was item-paid; the chip is a badge,
    * not a shortcut, and must not be tappable. */
   settled: boolean
 }

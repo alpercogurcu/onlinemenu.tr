@@ -1,37 +1,41 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   buildPaymentLines,
   cashChange,
   cashReceived,
+  coveredItems,
   dueFor,
   formatMoney,
   formatMoneyInputDisplay,
-  itemTotal,
   kurusToMoneyInput,
   parseMoneyInputToKurus,
+  selectedUnitCount,
+  selectionAllocations,
   selectionTotal,
-  unpaidItems,
   type DueMode,
+  type ItemQty,
+  type PaidQty,
   type PayMethod,
   type PayableItem,
+  type PaySelection,
   type PaymentLine,
 } from '@onlinemenu/pos-core'
-import { seatChip, seatLabel, type SeatGroup } from '../lib/seatTotals'
+import { seatChip, seatGroups, seatLabel, seatSelected, toggleSeat } from '../lib/seatTotals'
 import { ErrorBanner } from './ErrorBanner'
 import { CheckIcon } from './icons'
 import { Numpad } from './Numpad'
 
 // ₺50 / ₺100 / ₺200 / ₺500 in kuruş
 const QUICK_NOTES = [5000, 10000, 20000, 50000]
-/** Under the seat chips — what tapping one does (approved payment design). */
-export const SEAT_TAP_HINT = 'Kişiye dokun — tutarı aşağıya yazar. Kayıt normal kısmi ödemedir.'
+/** Under the seat chips — what tapping one does. */
+export const SEAT_TAP_HINT = 'Kişiye dokun — o kişinin ödenmemiş kalemleri seçilir. Birden çok kişi birlikte seçilebilir.'
+/** Shown while nothing is picked: the receipt rail is the selection surface. */
+export const SELECT_FROM_RECEIPT_HINT = 'Sağdaki adisyondan kalem seçebilirsiniz.'
 /** Permanent line under the Kart action: no ÖKC/card device is integrated
  * until Faz 2, so a card payment here is only a bookkeeping record. Static on
  * purpose — there is no device state to read yet. */
 export const CARD_DEVICE_NOTICE =
   'Kart: cihaz kayıtlı değil — tahsilat harici cihazda yapılır, buraya yalnız kayıt düşer.'
-/** Trailing label of a settled item row — shown in place of the amount. */
-export const PAID_ITEM_LABEL = 'Ödendi'
 
 const SPLIT_OPTIONS: { parts: number; label: string }[] = [
   // Turkish vowel harmony makes the dative suffix on a numeral irregular
@@ -49,8 +53,8 @@ export type PaymentRequest = {
   /** Cash physically handed over (equals `amount` for a card). */
   received: number
   lines: PaymentLine[]
-  /** Order items an item payment covers; empty for full/split/amount payments. */
-  itemIds: string[]
+  /** Units an item payment covers; empty for full/split/amount payments. */
+  items: ItemQty[]
 }
 
 export type PaymentInitial = { due: number; method: PayMethod }
@@ -58,16 +62,17 @@ export type PaymentInitial = { due: number; method: PayMethod }
 type PaymentScreenProps = {
   tableLabel: string
   items: readonly PayableItem[]
-  paidItemIds: ReadonlySet<string>
+  paidQty: PaidQty
+  /** Units picked on the receipt rail; owned by App because the rail is a
+   * sibling of this screen. */
+  selection: PaySelection
+  onSelectionChange: (update: (current: PaySelection) => PaySelection) => void
   confirmedTotal: number
   settledPaidTotal: number
   /** What the customer still owes and the cashier may still collect. */
   remaining: number
   /** Set when the screen opens to retry a failed payment: starts on that amount. */
   initial: PaymentInitial | null
-  /** Per-guest (kuver) subtotals of the check; empty when no item carries a
-   * seat, which hides the "Kişiler" shortcut section entirely. */
-  seatGroups: readonly SeatGroup[]
   onRegister: (request: PaymentRequest) => Promise<void>
   /** Back to the product grid. */
   onClose: () => void
@@ -90,7 +95,9 @@ function modeButtonClass(active: boolean, dashed = false): string {
  * this screen does the taking.
  *
  * One payment settles a "due" amount — all that is left, an equal share, the
- * items the cashier ticked, or a typed amount — by cash or card. The method is
+ * units the cashier picked on the receipt rail, or a typed amount — by cash or
+ * card. Picking on the rail (or a guest chip) switches to the item mode; the
+ * mode buttons drop the pick. The method is
  * the action itself ("Nakit Al" primary, "Kart" secondary — approved payment
  * design): the default (everything, cash, exact) stays two taps, "Ödeme al"
  * then "Nakit Al".
@@ -102,19 +109,19 @@ function modeButtonClass(active: boolean, dashed = false): string {
 export function PaymentScreen({
   tableLabel,
   items,
-  paidItemIds,
+  paidQty,
+  selection,
+  onSelectionChange,
   confirmedTotal,
   settledPaidTotal,
   remaining,
   initial,
-  seatGroups,
   onRegister,
   onClose,
   errorMessage,
 }: PaymentScreenProps) {
   const [mode, setMode] = useState<DueMode>(initial ? 'custom' : 'full')
   const [splitParts, setSplitParts] = useState(2)
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [customDueInput, setCustomDueInput] = useState(initial ? kurusToMoneyInput(initial.due) : '')
   const [receivedInput, setReceivedInput] = useState('')
   const [target, setTarget] = useState<NumpadTarget>(initial ? 'due' : 'received')
@@ -124,12 +131,27 @@ export function PaymentScreen({
   const [submittingMethod, setSubmittingMethod] = useState<PayMethod | null>(null)
   const submitting = submittingMethod !== null
 
+  // A pick on the rail lands here as a new selection: adjusting state during
+  // render (not in an effect) keeps the mode switch and the "Alınan" reset in
+  // the same paint as the new amount.
+  const [seenSelection, setSeenSelection] = useState(selection)
+  if (selection !== seenSelection) {
+    setSeenSelection(selection)
+    setReceivedInput('')
+    if (selection.size > 0) {
+      setMode('items')
+      setTarget('received')
+      setPendingReplace(false)
+    }
+  }
+
   useEffect(() => {
     if (remaining <= 0) onClose()
   }, [remaining, onClose])
 
-  const unpaid = unpaidItems(items, paidItemIds)
-  const selectedTotal = selectionTotal(unpaid, selected)
+  const selectedTotal = selectionTotal(items, paidQty, selection)
+  const selectedCount = selectedUnitCount(items, paidQty, selection)
+  const guests = useMemo(() => seatGroups(items, paidQty), [items, paidQty])
   const due = dueFor({
     mode,
     remaining,
@@ -143,46 +165,31 @@ export function PaymentScreen({
   const canPayCard = due > 0 && !submitting
   const canPayCash = canPayCard && !shortOfCash
 
+  function clearSelection() {
+    if (selection.size > 0) onSelectionChange(() => new Map())
+  }
+
   function chooseMode(next: DueMode) {
     setMode(next)
-    setSelected(new Set())
+    clearSelection()
     setReceivedInput('')
     setPendingReplace(false)
     setTarget('received')
   }
 
-  function toggleItem(id: string) {
-    setMode('items')
-    setReceivedInput('')
-    setTarget('received')
-    setSelected((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   function editDue() {
     if (mode !== 'custom') setCustomDueInput(kurusToMoneyInput(due))
     setMode('custom')
-    setSelected(new Set())
+    clearSelection()
     setTarget('due')
     setPendingReplace(true)
   }
 
-  // Alman usulü shortcut: one tap puts a guest's outstanding share into the
-  // amount field as an ordinary custom partial payment — the cashier can still
-  // round it, change the method, or back out. Nothing seat-specific is sent to
-  // the backend.
-  function applySeatAmount(group: SeatGroup) {
-    if (group.remaining <= 0) return
-    setMode('custom')
-    setSelected(new Set())
-    setCustomDueInput(kurusToMoneyInput(group.remaining))
-    setReceivedInput('')
-    setTarget('due')
-    setPendingReplace(true)
+  // Alman usulü shortcut: a guest chip picks (or releases) that guest's unpaid
+  // units on the rail, where the cashier can still trim them. Nothing
+  // seat-specific is sent to the backend.
+  function toggleGuest(seat: number) {
+    onSelectionChange((current) => toggleSeat(items, paidQty, current, seat))
   }
 
   function applyReceivedPreset(kurus: number) {
@@ -198,13 +205,12 @@ export function PaymentScreen({
   }
 
   async function handleSubmit(payMethod: PayMethod) {
-    const covered = mode === 'items' ? unpaid.filter((item) => selected.has(item.id)) : unpaid.length > 0 ? unpaid : [...items]
     const request: PaymentRequest = {
       method: payMethod,
       amount: due,
       received: payMethod === 'cash' ? received : due,
-      lines: buildPaymentLines(covered, due),
-      itemIds: mode === 'items' ? covered.map((item) => item.id) : [],
+      lines: buildPaymentLines(coveredItems(mode, items, paidQty, selection), due),
+      items: mode === 'items' ? selectionAllocations(items, paidQty, selection) : [],
     }
     setSubmittingMethod(payMethod)
     try {
@@ -218,7 +224,7 @@ export function PaymentScreen({
     setSubmittingMethod(null)
     setReceivedInput('')
     setPendingReplace(false)
-    setSelected(new Set())
+    clearSelection()
     if (due >= remaining) {
       onClose()
       return
@@ -261,7 +267,7 @@ export function PaymentScreen({
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_24rem] gap-4 p-4">
-        <div className="flex min-h-0 flex-col gap-3">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
           <p className="text-sm text-ink-dim">Ne kadar ödenecek?</p>
           <div className="grid grid-cols-4 gap-2">
             <button type="button" aria-pressed={mode === 'full'} onClick={() => chooseMode('full')} className={modeButtonClass(mode === 'full')}>
@@ -283,40 +289,49 @@ export function PaymentScreen({
             ))}
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" aria-pressed={mode === 'items'} onClick={() => chooseMode('items')} className={modeButtonClass(mode === 'items')}>
-              Kalem seç
-            </button>
             <button type="button" aria-pressed={mode === 'custom'} onClick={editDue} className={modeButtonClass(mode === 'custom', true)}>
               ✎ Başka tutar
             </button>
+            <button
+              type="button"
+              disabled={selection.size === 0}
+              onClick={clearSelection}
+              className="min-h-12 rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink disabled:opacity-40"
+            >
+              Seçimi temizle
+            </button>
           </div>
 
-          {seatGroups.length > 0 && (
+          {guests.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-wide text-ink-dim">Kişiler</p>
               <div className="mt-1 flex flex-wrap gap-2">
-                {seatGroups.map((group) => {
+                {guests.map((group) => {
                   const chip = seatChip(group)
+                  const picked = !chip.settled && seatSelected(items, paidQty, selection, group.seat)
                   return (
                     <button
                       key={group.seat}
                       type="button"
                       disabled={chip.settled}
-                      onClick={() => applySeatAmount(group)}
+                      aria-pressed={picked}
+                      onClick={() => toggleGuest(group.seat)}
                       aria-label={
                         chip.settled
                           ? `${seatLabel(group.seat)} ödendi`
-                          : `${seatLabel(group.seat)} — kalan ${formatMoney(group.remaining)} tutarını öde`
+                          : picked
+                            ? `${seatLabel(group.seat)} seçili — bırak`
+                            : `${seatLabel(group.seat)} — kalan ${formatMoney(group.remaining)} kalemlerini seç`
                       }
                       className={`flex min-h-12 items-center gap-1.5 rounded-lg px-3.5 text-sm font-semibold ${
                         chip.settled
                           ? 'border border-teal/40 bg-teal/15 text-teal'
-                          : group.seat > 0
-                            ? 'bg-amber text-amber-ink'
+                          : picked
+                            ? 'border border-amber bg-amber text-amber-ink'
                             : 'border border-line bg-panel text-ink'
                       }`}
                     >
-                      {chip.settled && <CheckIcon size={14} />}
+                      {(chip.settled || picked) && <CheckIcon size={14} />}
                       <span className="money tabular-nums">{chip.label}</span>
                     </button>
                   )
@@ -326,28 +341,26 @@ export function PaymentScreen({
             </div>
           )}
 
-          {mode === 'items' ? (
-            <ItemPicker
-              unpaid={unpaid}
-              paidItemIds={paidItemIds}
-              allItems={items}
-              selected={selected}
-              selectedTotal={selectedTotal}
-              remaining={remaining}
-              onToggle={toggleItem}
-              onSelectAll={() => {
-                setSelected(new Set(unpaid.map((item) => item.id)))
-                setReceivedInput('')
-              }}
-              onClear={() => setSelected(new Set())}
-            />
-          ) : (
-            <p className="rounded-md border border-dashed border-line p-4 text-sm text-ink-dim">
+          <div className="rounded-md border border-line bg-panel px-4 py-3" role="status">
+            <p className="text-base tabular-nums text-ink">
+              Seçilen <span className="money font-semibold">{formatMoney(due)}</span>
+              {' → '}bu ödemeden sonra kalan{' '}
+              <span className="money font-semibold">{formatMoney(Math.max(0, remaining - due))}</span>
+            </p>
+            <p className="mt-1 text-sm text-ink-dim">
               {mode === 'full' && 'Kalanın tamamı tek ödemede alınır.'}
               {mode === 'split' &&
                 `${splitParts} kişi kaldı — kişi başı ${formatMoney(due)}. Her ödemeden sonra kalan kişilere bölünür.`}
               {mode === 'custom' && 'Sağdaki tuş takımıyla ödenecek tutarı yazın.'}
+              {mode === 'items' &&
+                (selectedCount > 0
+                  ? `${selectedCount} birim seçildi — fişe gerçek adet ve fiyatla basılır.`
+                  : 'Henüz kalem seçilmedi.')}
+              {mode === 'items' && selectedTotal > remaining && ' Seçim kalan borçtan fazla — kalan kadarı alınır.'}
             </p>
+          </div>
+          {selectedCount === 0 && (
+            <p className="rounded-md border border-dashed border-line p-4 text-sm text-ink-dim">{SELECT_FROM_RECEIPT_HINT}</p>
           )}
         </div>
 
@@ -460,101 +473,5 @@ export function PaymentScreen({
         </div>
       </div>
     </section>
-  )
-}
-
-type ItemPickerProps = {
-  unpaid: readonly PayableItem[]
-  paidItemIds: ReadonlySet<string>
-  allItems: readonly PayableItem[]
-  selected: ReadonlySet<string>
-  selectedTotal: number
-  remaining: number
-  onToggle: (id: string) => void
-  onSelectAll: () => void
-  onClear: () => void
-}
-
-/**
- * The items of the check as tickable rows. Paid items stay listed (dimmed,
- * with a check and the "Ödendi" label in place of the amount — approved
- * payment design) rather than vanishing, so the cashier can see what is
- * already settled; the "kalan" shown is the money still owed after the ticked
- * items, which is what actually decides whether the check can be closed.
- */
-function ItemPicker({
-  unpaid,
-  paidItemIds,
-  allItems,
-  selected,
-  selectedTotal,
-  remaining,
-  onToggle,
-  onSelectAll,
-  onClear,
-}: ItemPickerProps) {
-  const paid = allItems.filter((item) => paidItemIds.has(item.id))
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm tabular-nums text-ink">
-          Seçilen <span className="money font-semibold">{formatMoney(selectedTotal)}</span> · Kalan{' '}
-          <span className="money font-semibold">{formatMoney(Math.max(0, remaining - selectedTotal))}</span>
-        </p>
-        <div className="flex gap-2">
-          <button type="button" onClick={onSelectAll} className="min-h-12 rounded-md border border-line px-3 text-sm font-semibold text-ink">
-            Hepsini seç
-          </button>
-          <button type="button" onClick={onClear} className="min-h-12 rounded-md border border-line px-3 text-sm text-ink-dim">
-            Temizle
-          </button>
-        </div>
-      </div>
-      <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-        {unpaid.map((item) => {
-          const isSelected = selected.has(item.id)
-          return (
-            <li key={item.id}>
-              <button
-                type="button"
-                aria-pressed={isSelected}
-                onClick={() => onToggle(item.id)}
-                className={`flex min-h-14 w-full items-center gap-3 rounded-md border px-3 py-2 text-left ${
-                  isSelected ? 'border-amber bg-amber/10' : 'border-line bg-panel'
-                }`}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border ${
-                    isSelected ? 'border-amber bg-amber text-amber-ink' : 'border-ink-dim'
-                  }`}
-                >
-                  {isSelected && <CheckIcon size={16} />}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-ink">
-                    {item.quantity}× {item.name}
-                  </span>
-                  {item.note && <span className="block break-words text-xs text-ink-dim">{item.note}</span>}
-                </span>
-                <span className="money tabular-nums text-ink">{formatMoney(itemTotal(item))}</span>
-              </button>
-            </li>
-          )
-        })}
-        {paid.map((item) => (
-          <li
-            key={item.id}
-            className="flex min-h-12 items-center gap-3 rounded-md border border-line/50 px-3 py-2 text-ink-dim"
-          >
-            <CheckIcon size={16} className="shrink-0 text-teal" />
-            <span className="min-w-0 flex-1 truncate">
-              {item.quantity}× {item.name}
-            </span>
-            <span className="text-sm font-semibold text-teal">{PAID_ITEM_LABEL}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
   )
 }

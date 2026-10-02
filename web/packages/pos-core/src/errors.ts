@@ -46,6 +46,7 @@ export type ApiErrorCode =
   | 'invalid_order_line'
   | 'no_cash_session_open'
   | 'payment_exceeds_due'
+  | 'rounding_not_allowed'
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'fiscal_pending',
@@ -64,6 +65,7 @@ const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'invalid_order_line',
   'no_cash_session_open',
   'payment_exceeds_due',
+  'rounding_not_allowed',
 ])
 
 /**
@@ -129,6 +131,11 @@ export function describeError(err: unknown): string {
       // tahsil etti. Kasiyer kalan tutarı yenileyip öyle almalı — aynı tutarı
       // tekrar denemek yine reddedilir.
       return 'Tutar kalan borçtan fazla — adisyon başka bir kasada ödenmiş olabilir, kalan tutarı yenileyip tekrar deneyin.'
+    case 'rounding_not_allowed':
+      // Sunucu yuvarlamayı reddetti (şube ayarı kapatılmış, kalan tutar
+      // değişmiş ya da adisyon başına üst sınır dolmuş). Para alınmadı;
+      // kasiyer yuvarlamayı kaldırıp tam tutarı almalı.
+      return 'Yuvarlama bu ödemede uygulanamaz — yuvarlamayı kaldırıp tam tutarı alın (şube ayarı ya da kalan tutar değişmiş olabilir).'
     case 'session_scoped_principal':
       // ADR-DATA-008 PIN akışı: this principal was itself issued via a
       // PIN-switch, not a fresh Keycloak login — a different situation from

@@ -63,6 +63,8 @@ describe('describeError — check moves', () => {
     { code: 'no_cash_session_open', status: 409, want: 'Bu şubede açık kasa oturumu yok — nakit almak için önce kasayı açın (açılış sayımı).' },
     // İki kasa aynı adisyonu tahsil ederse ikincisi bunu alır: generic "çakışıyor"a düşmemeli.
     { code: 'payment_exceeds_due', status: 409, want: 'Tutar kalan borçtan fazla — adisyon başka bir kasada ödenmiş olabilir, kalan tutarı yenileyip tekrar deneyin.' },
+    // Yuvarlama reddi: para alınmadı, kasiyer tam tutarla yeniden almalı.
+    { code: 'rounding_not_allowed', status: 422, want: 'Yuvarlama bu ödemede uygulanamaz — yuvarlamayı kaldırıp tam tutarı alın (şube ayarı ya da kalan tutar değişmiş olabilir).' },
     { code: 'check_branch_mismatch', status: 409, want: 'Bu adisyon başka bir şubeye ait — bu istasyondan işlem yapılamaz.' },
     { code: 'payments_present', status: 409, want: 'Ödemesi alınmış adisyon birleştirilemez — önce ödemesi olan adisyonu kapatın.' },
     { code: 'item_already_paid', status: 409, want: 'Seçilen kalemler için ödeme alınmış — ödenmiş kalemler taşınamaz.' },
@@ -79,7 +81,7 @@ describe('describeError — check moves', () => {
   })
 
   it('recognises every new code as machine-readable', () => {
-    for (const code of ['check_not_open', 'check_branch_mismatch', 'payments_present', 'item_already_paid', 'same_check', 'order_item_not_found', 'table_not_found', 'no_cash_session_open', 'payment_exceeds_due']) {
+    for (const code of ['check_not_open', 'check_branch_mismatch', 'payments_present', 'item_already_paid', 'same_check', 'order_item_not_found', 'table_not_found', 'no_cash_session_open', 'payment_exceeds_due', 'rounding_not_allowed']) {
       expect(errorCode(conflict(409, code))).toBe(code)
     }
   })

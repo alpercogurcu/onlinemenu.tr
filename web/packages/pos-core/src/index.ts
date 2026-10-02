@@ -6,7 +6,7 @@
 // bindings and no DOM: cart/line building (cart.ts), modifier-group rules
 // (options.ts), numeric-entry state (numpad.ts), money formatting/arithmetic
 // (format.ts, payment.ts), payment-plan/split-payment rules (paymentPlan.ts,
-// paymentLines.ts), table-target rules for taşı/birleştir (checkActions.ts) and
+// paymentLines.ts), cash rounding (rounding.ts), table-target rules for taşı/birleştir (checkActions.ts) and
 // backend error-code → Turkish message mapping (errors.ts).
 //
 // Every module that would otherwise need a generated backend-client type
@@ -25,5 +25,6 @@ export * from './format'
 export * from './payment'
 export * from './paymentLines'
 export * from './paymentPlan'
+export * from './rounding'
 export * from './checkActions'
 export * from './errors'

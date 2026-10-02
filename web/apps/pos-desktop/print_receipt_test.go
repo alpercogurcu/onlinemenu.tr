@@ -79,7 +79,7 @@ func TestPrintReceipt_BuildsAndPrintsExpectedJob(t *testing.T) {
 	}
 
 	const receivedAmount = int64(1500)
-	if err := a.PrintReceipt(checkID, receivedAmount); err != nil {
+	if err := a.PrintReceipt(checkID, receivedAmount, 0); err != nil {
 		t.Fatalf("PrintReceipt: %v", err)
 	}
 
@@ -97,6 +97,7 @@ func TestPrintReceipt_BuildsAndPrintsExpectedJob(t *testing.T) {
 			{ProductName: "Su", Quantity: 1, UnitPriceAmount: 300},
 		},
 		receivedAmount,
+		0,
 	)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("printed job =\n% x\nwant\n% x", got, want)
@@ -133,7 +134,7 @@ func TestPrintReceipt_PrinterFailurePropagatesError(t *testing.T) {
 		receiptConfig: receipt.Config{Width: escpos.Width32},
 	}
 
-	if err := a.PrintReceipt(checkID, 0); err == nil {
+	if err := a.PrintReceipt(checkID, 0, 0); err == nil {
 		t.Fatal("PrintReceipt: want error when the printer is not connected, got nil")
 	}
 }

@@ -45,11 +45,12 @@ type BranchPendingFiscalDTO struct {
 
 // PendingFiscalItemDTO mirrors apiclient.PendingFiscalItem.
 type PendingFiscalItemDTO struct {
-	PaymentID    string `json:"payment_id"`
-	CheckID      string `json:"check_id"`
-	AmountTotal  int64  `json:"amount_total"`
-	RegisteredAt string `json:"registered_at"`
-	AgeSeconds   int64  `json:"age_seconds"`
+	PaymentID      string `json:"payment_id"`
+	CheckID        string `json:"check_id"`
+	AmountTotal    int64  `json:"amount_total"`
+	RoundingAmount int64  `json:"rounding_amount"`
+	RegisteredAt   string `json:"registered_at"`
+	AgeSeconds     int64  `json:"age_seconds"`
 }
 
 // SettledFiscalItemDTO mirrors apiclient.SettledFiscalItem. FailureReason is
@@ -63,9 +64,10 @@ type SettledFiscalItemDTO struct {
 	// AmountTotal is in kuruş. NOT omitempty: the frontend subtracts this from
 	// what the cashier may still collect, so a legitimate 0 must arrive as 0
 	// rather than as an absent key it has to guess about.
-	AmountTotal   int64  `json:"amount_total"`
-	FailureReason string `json:"failure_reason,omitempty"`
-	SettledAt     string `json:"settled_at"`
+	AmountTotal    int64  `json:"amount_total"`
+	RoundingAmount int64  `json:"rounding_amount"`
+	FailureReason  string `json:"failure_reason,omitempty"`
+	SettledAt      string `json:"settled_at"`
 }
 
 // branchFiscalPoller polls the branch-wide pending-fiscal endpoint on a
@@ -195,22 +197,24 @@ func toBranchPendingFiscalDTO(s apiclient.BranchPendingFiscal) BranchPendingFisc
 	pending := make([]PendingFiscalItemDTO, len(s.Pending))
 	for i, item := range s.Pending {
 		pending[i] = PendingFiscalItemDTO{
-			PaymentID:    item.PaymentID,
-			CheckID:      item.CheckID,
-			AmountTotal:  item.AmountTotal,
-			RegisteredAt: item.RegisteredAt.Format(rfc3339Millis),
-			AgeSeconds:   item.AgeSeconds,
+			PaymentID:      item.PaymentID,
+			CheckID:        item.CheckID,
+			AmountTotal:    item.AmountTotal,
+			RoundingAmount: item.RoundingAmount,
+			RegisteredAt:   item.RegisteredAt.Format(rfc3339Millis),
+			AgeSeconds:     item.AgeSeconds,
 		}
 	}
 	settled := make([]SettledFiscalItemDTO, len(s.RecentlySettled))
 	for i, item := range s.RecentlySettled {
 		settled[i] = SettledFiscalItemDTO{
-			PaymentID:     item.PaymentID,
-			CheckID:       item.CheckID,
-			Status:        item.Status,
-			AmountTotal:   item.AmountTotal,
-			FailureReason: item.FailureReason,
-			SettledAt:     item.SettledAt.Format(rfc3339Millis),
+			PaymentID:      item.PaymentID,
+			CheckID:        item.CheckID,
+			Status:         item.Status,
+			AmountTotal:    item.AmountTotal,
+			RoundingAmount: item.RoundingAmount,
+			FailureReason:  item.FailureReason,
+			SettledAt:      item.SettledAt.Format(rfc3339Millis),
 		}
 	}
 	return BranchPendingFiscalDTO{

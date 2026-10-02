@@ -5,7 +5,7 @@
 // own tests.
 import { describe, expect, it } from 'vitest'
 import { PAID_ROW_LABEL } from '../lib/payRow'
-import { CARD_DEVICE_NOTICE, SEAT_TAP_HINT, SELECT_FROM_RECEIPT_HINT } from './PaymentScreen'
+import { CARD_DEVICE_NOTICE, SEAT_TAP_HINT, SELECT_FROM_RECEIPT_HINT, roundingButtonLabel, roundingScopeNote } from './PaymentScreen'
 
 describe('payment screen copy', () => {
   it('keeps the permanent card-device notice under the Kart action', () => {
@@ -26,5 +26,24 @@ describe('payment screen copy', () => {
 
   it('labels a settled item row on the rail', () => {
     expect(PAID_ROW_LABEL).toBe('Ödendi')
+  })
+})
+
+describe('rounding button copy', () => {
+  const offer = { rounded: 43500, rounding: 250 }
+  const on = { cashEnabled: true, cardEnabled: true, stepMinor: 500, maxPerCheckMinor: 1000 }
+
+  it('offers the rounded amount and the concession', () => {
+    expect(roundingButtonLabel(offer, false)).toBe('↓ Yuvarla: ₺435,00 (−₺2,50)')
+  })
+
+  it('reads as undoable once applied', () => {
+    expect(roundingButtonLabel(offer, true)).toBe('✓ Yuvarlandı: ₺435,00 (−₺2,50) — geri al')
+  })
+
+  it('says which method keeps the full amount', () => {
+    expect(roundingScopeNote({ ...on, cardEnabled: false })).toBe('Yuvarlama yalnız nakitte — kartla tam tutar alınır.')
+    expect(roundingScopeNote({ ...on, cashEnabled: false })).toBe('Yuvarlama yalnız kartta — nakitte tam tutar alınır.')
+    expect(roundingScopeNote(on)).toBe('')
   })
 })

@@ -21,15 +21,18 @@ type PaymentLineDTO struct {
 }
 
 // RegisterPaymentInputDTO is one payment the cashier takes. Method is "cash" or
-// "card". AmountTotal is this payment only; Lines, when present, must add up to
-// it (apiclient.RegisterPayment enforces that).
+// "card". AmountTotal is the money taken by this payment; RoundingAmount is the
+// optional rounding concession (beşli yuvarlama) on top of it. Lines, when
+// present, must add up to AmountTotal + RoundingAmount
+// (apiclient.RegisterPayment enforces that).
 type RegisterPaymentInputDTO struct {
-	BranchID    string           `json:"branch_id"`
-	CheckID     string           `json:"check_id"`
-	Method      string           `json:"method"`
-	AmountTotal int64            `json:"amount_total"`
-	Lines       []PaymentLineDTO `json:"lines"`
-	TableLabel  string           `json:"table_label"`
+	BranchID       string           `json:"branch_id"`
+	CheckID        string           `json:"check_id"`
+	Method         string           `json:"method"`
+	AmountTotal    int64            `json:"amount_total"`
+	RoundingAmount int64            `json:"rounding_amount"`
+	Lines          []PaymentLineDTO `json:"lines"`
+	TableLabel     string           `json:"table_label"`
 }
 
 type productMetaSource interface {
@@ -115,25 +118,16 @@ func (a *App) RegisterPayment(in RegisterPaymentInputDTO) (PaymentDTO, error) {
 		return PaymentDTO{}, err
 	}
 	p, err := a.api.RegisterPayment(a.ctx, apiclient.RegisterPaymentInput{
-		BranchID:    in.BranchID,
-		CheckID:     in.CheckID,
-		Method:      method,
-		AmountTotal: in.AmountTotal,
-		Lines:       lines,
-		TableLabel:  in.TableLabel,
+		BranchID:       in.BranchID,
+		CheckID:        in.CheckID,
+		Method:         method,
+		AmountTotal:    in.AmountTotal,
+		RoundingAmount: in.RoundingAmount,
+		Lines:          lines,
+		TableLabel:     in.TableLabel,
 	})
 	if err != nil {
 		return PaymentDTO{}, err
 	}
-	dto := PaymentDTO{
-		ID:          p.ID,
-		Method:      p.Method,
-		Status:      p.Status,
-		AmountTotal: p.AmountTotal,
-		Currency:    p.Currency,
-	}
-	if p.CheckID != nil {
-		dto.CheckID = *p.CheckID
-	}
-	return dto, nil
+	return toPaymentDTO(p), nil
 }

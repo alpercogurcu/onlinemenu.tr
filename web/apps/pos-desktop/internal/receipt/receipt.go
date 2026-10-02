@@ -81,7 +81,13 @@ const (
 // Pass 0 to omit the "ALINAN" / "PARA ÜSTÜ" lines entirely (e.g. a reprint
 // where the original received amount is no longer known) — the totals line
 // alone is still a complete, correct receipt.
-func Build(cfg Config, tableLabel string, openedAt time.Time, items []Item, receivedAmount int64) []byte {
+//
+// roundingAmount is the rounding conceded on the check (beşli yuvarlama). When
+// positive the receipt shows it under TOPLAM together with the amount actually
+// payable, and the change is computed against that amount — otherwise a
+// rounded ₺437,50 paid with ₺500 would print ₺62,50 change while the cashier
+// handed back ₺65,00.
+func Build(cfg Config, tableLabel string, openedAt time.Time, items []Item, receivedAmount, roundingAmount int64) []byte {
 	width := normalizeWidth(cfg.Width)
 	cols := int(width)
 
@@ -124,8 +130,17 @@ func Build(cfg Config, tableLabel string, openedAt time.Time, items []Item, rece
 	b.Line(escpos.Columns(cols, "TOPLAM", formatMoneyTL(subtotal)))
 	b.SetMode(false, false)
 
+	payable := subtotal
+	if roundingAmount > 0 && roundingAmount < subtotal {
+		payable = subtotal - roundingAmount
+		b.Line(escpos.Columns(cols, "YUVARLAMA", "-"+formatMoneyTL(roundingAmount)))
+		b.SetMode(true, false)
+		b.Line(escpos.Columns(cols, "ÖDENECEK", formatMoneyTL(payable)))
+		b.SetMode(false, false)
+	}
+
 	if receivedAmount > 0 {
-		change := receivedAmount - subtotal
+		change := receivedAmount - payable
 		if change < 0 {
 			change = 0
 		}

@@ -4,6 +4,7 @@ import {
   CloseCheck,
   DevLoginEnabled,
   GetCheck,
+  GetRoundingPolicy,
   ListCategories,
   ListCheckOrders,
   ListCheckPayments,
@@ -56,6 +57,7 @@ import {
   parseStatus,
   receivedTotalForPrint,
   remotePendingForCheck,
+  roundingForPrint,
   remoteSettledForCheck,
   settledTotal,
   unreportedRemoteFailures,
@@ -81,6 +83,8 @@ import {
   pendingTotal as sumPendingTotal,
   changePendingQuantity,
   removePendingLine,
+  ROUNDING_OFF,
+  settledAmount,
   stepUnits,
   tapUnits,
   targetPrompt,
@@ -88,6 +92,7 @@ import {
   type LineOptions,
   type PaySelection,
   type PendingLine,
+  type RoundingPolicy,
   type TargetKind,
   withSelectedQty,
 } from '@onlinemenu/pos-core'
@@ -197,6 +202,7 @@ function App() {
   // the right ALINAN/para üstü. Derived from the payments whose fiscal record
   // actually settled — see receivedTotalForPrint.
   const [printReceivedAmount, setPrintReceivedAmount] = useState(0)
+  const [printRoundingAmount, setPrintRoundingAmount] = useState(0)
   const [printError, setPrintError] = useState('')
   const [printRetryCheckId, setPrintRetryCheckId] = useState<string | null>(null)
 
@@ -532,6 +538,7 @@ function App() {
     setZones([])
     setTablesError('')
     setPrintReceivedAmount(0)
+    setPrintRoundingAmount(0)
     setPrintError('')
     setPrintRetryCheckId(null)
     setDismissedFailureIds(new Set())
@@ -624,7 +631,7 @@ function App() {
 
     try {
       const payments = await ListCheckPayments(checkId)
-      apply(new Map(payments.map((p) => [p.id, p.amount_total])))
+      apply(new Map(payments.map((p) => [p.id, settledAmount(p)])))
       return
     } catch (err) {
       console.warn('ListCheckPayments unavailable — falling back to check settlement', err)
@@ -833,6 +840,7 @@ function App() {
           check_id: checkId,
           method: request.method,
           amount_total: request.amount,
+          rounding_amount: request.rounding,
           lines: request.lines,
           table_label: selectedCheck.table_label,
         }),
@@ -842,7 +850,8 @@ function App() {
         {
           id: payment.id,
           checkId,
-          amountTotal: payment.amount_total,
+          amountTotal: settledAmount(payment),
+          roundingAmount: payment.rounding_amount,
           // Trust the server's status verbatim rather than assuming `pending` —
           // a synchronous adapter (or a replayed idempotent POST) may hand back
           // an already-completed payment, which must go straight to green.
@@ -893,6 +902,35 @@ function App() {
 
   const closePaymentScreen = useCallback(() => setPaymentSession(null), [])
 
+  // The branch's rounding policy (beşli yuvarlama), re-read each time the
+  // payment screen opens so an admin change reaches the next payment without
+  // a restart. Fail-closed to "no rounding": the button is only an offer, and
+  // the backend re-checks every rule on the payment anyway.
+  const [roundingPolicy, setRoundingPolicy] = useState<RoundingPolicy>(ROUNDING_OFF)
+  const paymentSessionId = paymentSession?.id
+  const branchId = session?.branch_id
+  useEffect(() => {
+    if (paymentSessionId === undefined || !branchId) return
+    let cancelled = false
+    GetRoundingPolicy(branchId)
+      .then((p) => {
+        if (cancelled) return
+        setRoundingPolicy({
+          cashEnabled: p.cash_enabled,
+          cardEnabled: p.card_enabled,
+          stepMinor: p.step_minor,
+          maxPerCheckMinor: p.max_per_check_minor,
+        })
+      })
+      .catch((err: unknown) => {
+        console.warn('GetRoundingPolicy failed — rounding not offered', err)
+        if (!cancelled) setRoundingPolicy(ROUNDING_OFF)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [paymentSessionId, branchId])
+
   const updatePaySelection = useCallback((update: (current: PaySelection) => PaySelection) => {
     setPaymentSession((session) => (session ? { ...session, selection: update(session.selection) } : session))
   }, [])
@@ -902,9 +940,9 @@ function App() {
   // it only records printError/printRetryCheckId so the header can offer
   // "Fişi yeniden yazdır" without the cashier losing the fact that the
   // check itself is already correctly closed/paid.
-  async function printReceiptFor(checkId: string, receivedAmount: number) {
+  async function printReceiptFor(checkId: string, receivedAmount: number, roundingAmount: number) {
     try {
-      await PrintReceipt(checkId, receivedAmount)
+      await PrintReceipt(checkId, receivedAmount, roundingAmount)
       setPrintError('')
       setPrintRetryCheckId(null)
     } catch (err) {
@@ -915,7 +953,7 @@ function App() {
 
   async function handleReprintReceipt() {
     if (!printRetryCheckId) return
-    await printReceiptFor(printRetryCheckId, printReceivedAmount)
+    await printReceiptFor(printRetryCheckId, printReceivedAmount, printRoundingAmount)
   }
 
   // Kitchen tickets are best-effort like the customer receipt: the order is
@@ -1095,6 +1133,7 @@ function App() {
     setReceiptError('')
     const checkId = selectedCheck.id
     const receivedAmount = receivedTotalForPrint(trackedForSelected, remotePaymentRows.completed)
+    const roundingAmount = roundingForPrint(trackedForSelected)
     try {
       await CloseCheck(checkId)
       setSelectedCheck(null)
@@ -1104,6 +1143,7 @@ function App() {
       serverCompletedForCheck.current = null
       setTrackedPayments((prev) => prev.filter((p) => p.checkId !== checkId))
       setPrintReceivedAmount(receivedAmount)
+      setPrintRoundingAmount(roundingAmount)
       refreshOpenChecks()
       refreshTables(session?.branch_id)
     } catch (err) {
@@ -1112,7 +1152,7 @@ function App() {
     }
     // Printing happens only after CloseCheck has already succeeded — a
     // print failure must never look like the close itself failed.
-    await printReceiptFor(checkId, receivedAmount)
+    await printReceiptFor(checkId, receivedAmount, roundingAmount)
   }
 
   if (!authChecked) {
@@ -1376,6 +1416,7 @@ function App() {
                 settledPaidTotal={settledPaidTotal}
                 remaining={remaining}
                 initial={paymentSession.initial}
+                roundingPolicy={roundingPolicy}
                 onRegister={handleRegisterPayment}
                 onClose={closePaymentScreen}
                 errorMessage={receiptError}

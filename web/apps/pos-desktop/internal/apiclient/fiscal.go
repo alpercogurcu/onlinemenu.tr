@@ -32,11 +32,14 @@ import (
 // payment arrives as "" — which matches no check id anywhere downstream and
 // therefore contributes no dot and blocks no close, exactly as intended.
 type PendingFiscalItem struct {
-	PaymentID    string    `json:"payment_id"`
-	CheckID      string    `json:"check_id"`
-	AmountTotal  int64     `json:"amount_total"`
-	RegisteredAt time.Time `json:"registered_at"`
-	AgeSeconds   int64     `json:"age_seconds"`
+	PaymentID   string `json:"payment_id"`
+	CheckID     string `json:"check_id"`
+	AmountTotal int64  `json:"amount_total"`
+	// RoundingAmount is the rounding concession; the payment settles
+	// AmountTotal + RoundingAmount of its check.
+	RoundingAmount int64     `json:"rounding_amount"`
+	RegisteredAt   time.Time `json:"registered_at"`
+	AgeSeconds     int64     `json:"age_seconds"`
 }
 
 // SettledFiscalItem is one payment that left the pending set recently.
@@ -52,9 +55,10 @@ type SettledFiscalItem struct {
 	// COMPLETED at another station can be credited client-side instead of
 	// snapping back into the collectable balance the moment it leaves the
 	// pending list (see the frontend's remoteCompletedOnly).
-	AmountTotal   int64     `json:"amount_total"`
-	FailureReason string    `json:"failure_reason"`
-	SettledAt     time.Time `json:"settled_at"`
+	AmountTotal    int64     `json:"amount_total"`
+	RoundingAmount int64     `json:"rounding_amount"`
+	FailureReason  string    `json:"failure_reason"`
+	SettledAt      time.Time `json:"settled_at"`
 }
 
 // BranchPendingFiscal mirrors the endpoint's response envelope.
@@ -90,9 +94,13 @@ func (c *Client) ListBranchPendingFiscal(ctx context.Context, branchID string) (
 // payment/http/check_settlement_handler.go) — method, timestamp and fiscal
 // receipt reference belong to payment.payment.read. Do not widen this struct
 // to "match" Payment; the whole point is that a cashier may read it.
+//
+// RoundingAmount is part of the money state, not a new detail: the check's
+// balance drops by AmountTotal + RoundingAmount.
 type CheckSettledPayment struct {
-	PaymentID   string `json:"payment_id"`
-	AmountTotal int64  `json:"amount_total"`
+	PaymentID      string `json:"payment_id"`
+	AmountTotal    int64  `json:"amount_total"`
+	RoundingAmount int64  `json:"rounding_amount"`
 }
 
 // CheckSettlement mirrors the endpoint's response envelope. Completed always

@@ -9,6 +9,13 @@
 
 import type { RemotePendingFiscal, RemoteSettledFiscal } from './fiscalStatus'
 
+// Every amount this module hands on is what a payment SETTLES on its check:
+// amount_total + rounding_amount (beşli yuvarlama). The arithmetic in
+// fiscalStatus.ts dedupes by payment id and compares amounts across sources,
+// so the server feeds and the tracked list must all carry the same gross
+// figure — a rounded final payment read as amount_total alone would leave a
+// phantom "kalan" the server then refuses to collect (payment_exceeds_due).
+
 /** Wire shape of the `fiscal:branch-pending` event — mirrors
  * BranchPendingFiscalDTO in fiscal_poller.go. Declared by hand because this
  * payload travels as an untyped Wails EVENT, not a binding return value, so it
@@ -20,6 +27,8 @@ export type BranchFiscalPendingEvent = {
     payment_id: string
     check_id: string
     amount_total: number
+    /** Rounding conceded by the payment; absent from an older backend. */
+    rounding_amount?: number
     registered_at: string
     age_seconds: number
   }>
@@ -31,6 +40,7 @@ export type BranchFiscalPendingEvent = {
      * completed at another till can be credited here instead of snapping back
      * into "kalan" (see fiscalStatus.ts's remoteCompletedOnly). */
     amount_total: number
+    rounding_amount?: number
     failure_reason?: string
     settled_at: string
   }>
@@ -67,6 +77,12 @@ function toFiniteNumber(raw: unknown): number {
 export type CheckSettledPaymentWire = {
   payment_id: string
   amount_total: number
+  rounding_amount?: number
+}
+
+/** amount_total + rounding_amount, each coerced like every other wire number. */
+function settledWire(item: { amount_total: unknown; rounding_amount?: unknown }): number {
+  return toFiniteNumber(item.amount_total) + toFiniteNumber(item.rounding_amount)
 }
 
 /**
@@ -89,7 +105,7 @@ export function toServerCompletedMap(
   const out = new Map<string, number>()
   for (const item of completed ?? []) {
     if (!item?.payment_id) continue
-    out.set(item.payment_id, toFiniteNumber(item.amount_total))
+    out.set(item.payment_id, settledWire(item))
   }
   return out
 }
@@ -100,7 +116,7 @@ export function parseBranchFiscalEvent(
   const pending: RemotePendingFiscal[] = (evt?.pending ?? []).map((p) => ({
     paymentId: p.payment_id,
     checkId: p.check_id,
-    amountTotal: toFiniteNumber(p.amount_total),
+    amountTotal: settledWire(p),
     ageSeconds: toFiniteNumber(p.age_seconds),
   }))
 
@@ -112,7 +128,7 @@ export function parseBranchFiscalEvent(
       paymentId: s.payment_id,
       checkId: s.check_id,
       status,
-      amountTotal: toFiniteNumber(s.amount_total),
+      amountTotal: settledWire(s),
       failureReason: s.failure_reason || undefined,
     })
   }

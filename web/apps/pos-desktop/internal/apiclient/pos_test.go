@@ -805,6 +805,86 @@ func TestClient_RegisterPayment_RejectsLinesThatDoNotAddUpToTheAmountBeforeCalli
 	}
 }
 
+// TestClient_RegisterPayment_RoundedPayment: a rounded payment's lines add up
+// to amount + rounding (the items at full price), and rounding_amount goes on
+// the wire; an ordinary payment's body carries no rounding key at all.
+func TestClient_RegisterPayment_RoundedPayment(t *testing.T) {
+	tests := []struct {
+		name         string
+		amount       int64
+		rounding     int64
+		lineTotal    int64
+		wantMismatch bool
+		wantKey      bool
+	}{
+		{name: "lines cover amount + rounding", amount: 43500, rounding: 250, lineTotal: 43750, wantKey: true},
+		{name: "lines covering only the amount are refused", amount: 43500, rounding: 250, lineTotal: 43500, wantMismatch: true},
+		{name: "ordinary payment omits the key", amount: 43750, lineTotal: 43750},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var raw map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"pay-1","status":"pending","amount_total":43500,"rounding_amount":250}`))
+			}))
+			defer srv.Close()
+
+			c := New(srv.URL, &memStore{token: "tok", saved: true})
+			p, err := c.RegisterPayment(t.Context(), RegisterPaymentInput{
+				BranchID: "b1", CheckID: "c1", Method: "cash", AmountTotal: tt.amount, RoundingAmount: tt.rounding,
+				Lines: []FiscalLine{{Name: "Burger", UnitPriceMinor: tt.lineTotal, QuantityMilli: 1000}},
+			})
+			if tt.wantMismatch {
+				if !errors.Is(err, ErrLinesTotalMismatch) {
+					t.Fatalf("err = %v, want ErrLinesTotalMismatch", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RegisterPayment: %v", err)
+			}
+			_, hasKey := raw["rounding_amount"]
+			if hasKey != tt.wantKey {
+				t.Fatalf("rounding_amount on the wire = %v, want %v (body %v)", hasKey, tt.wantKey, raw)
+			}
+			if tt.wantKey && raw["rounding_amount"] != float64(tt.rounding) {
+				t.Fatalf("rounding_amount = %v, want %d", raw["rounding_amount"], tt.rounding)
+			}
+			if p.RoundingAmount != 250 {
+				t.Fatalf("decoded rounding_amount = %d, want 250", p.RoundingAmount)
+			}
+		})
+	}
+}
+
+func TestClient_GetBranchSettings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/pos/branch-settings" || r.URL.Query().Get("branch_id") != "b1" {
+			t.Fatalf("unexpected request: %s", r.URL)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"branch_id":"b1","waiter_category_layout":"top","order_flow":"full","rounding_cash_enabled":true,"rounding_card_enabled":false,"rounding_step_minor":500,"rounding_max_per_check_minor":1000}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, &memStore{token: "tok", saved: true})
+	s, err := c.GetBranchSettings(t.Context(), "b1")
+	if err != nil {
+		t.Fatalf("GetBranchSettings: %v", err)
+	}
+	want := BranchSettings{BranchID: "b1", WaiterCategoryLayout: "top", OrderFlow: "full", RoundingCashEnabled: true, RoundingStepMinor: 500, RoundingMaxPerCheckMinor: 1000}
+	if s != want {
+		t.Fatalf("settings = %+v, want %+v", s, want)
+	}
+	if _, err := c.GetBranchSettings(t.Context(), ""); err == nil {
+		t.Fatal("an empty branch id must be refused before any request")
+	}
+}
+
 func TestClient_RegisterPayment_NoLinesIsAllowed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

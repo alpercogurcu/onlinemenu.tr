@@ -158,3 +158,28 @@ describe('toServerCompletedMap', () => {
     expect(toServerCompletedMap([{ payment_id: '', amount_total: 500 }])).toEqual(new Map())
   })
 })
+
+// Every feed reports what a payment SETTLES: amount_total + rounding_amount.
+describe('rounding_amount on the wire', () => {
+  it('adds rounding to pending and settled amounts', () => {
+    const got = parseBranchFiscalEvent(
+      event({
+        pending: [{ payment_id: 'p1', check_id: 'c', amount_total: 43_500, rounding_amount: 250, registered_at: '', age_seconds: 1 }],
+        recently_settled: [
+          { payment_id: 'p2', check_id: 'c', status: 'completed', amount_total: 43_500, rounding_amount: 250, settled_at: '' },
+        ],
+      }),
+    )
+    expect(got.pending[0].amountTotal).toBe(43_750)
+    expect(got.recentlySettled[0].amountTotal).toBe(43_750)
+  })
+
+  it('adds rounding in the settlement map and tolerates its absence', () => {
+    const map = toServerCompletedMap([
+      { payment_id: 'p1', amount_total: 43_500, rounding_amount: 250 },
+      { payment_id: 'p2', amount_total: 1_000 },
+    ])
+    expect(map.get('p1')).toBe(43_750)
+    expect(map.get('p2')).toBe(1_000)
+  })
+})

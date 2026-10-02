@@ -53,8 +53,14 @@ export type FiscalStatus = 'pending' | 'completed' | 'failed' | 'voided' | 'unkn
 export type TrackedPayment = {
   id: string
   checkId: string
-  /** Registered amount in kuruş — what POST /payments accepted. */
+  /** What this payment settles on its check, in kuruş: the registered
+   * amount_total plus any rounding conceded (beşli yuvarlama). Gross on
+   * purpose — every server feed this list is deduped against carries the same
+   * figure (see lib/branchFiscal.ts). */
   amountTotal: number
+  /** Rounding conceded by this payment (kuruş); absent/0 when none. Only the
+   * printed receipt needs it apart (see roundingForPrint). */
+  roundingAmount?: number
   status: FiscalStatus
   /** Raw cash the customer physically handed over for THIS installment (may
    * exceed amountTotal when change is due). Needed for the printed receipt's
@@ -423,6 +429,16 @@ export function receivedTotalForPrint(
   const own = tracked.reduce((sum, p) => (countsAsSettled(p.status) ? sum + p.receivedAmount : sum), 0)
   const remote = remoteCompleted.reduce((sum, r) => sum + r.amountTotal, 0)
   return own + remote
+}
+
+/**
+ * Rounding conceded by this station's settled payments on the check — printed
+ * on the receipt so the change line is counted from what was payable. A
+ * remote payment's rounding is not known separately (its feeds carry only the
+ * settled gross), so a check rounded at another till prints without it.
+ */
+export function roundingForPrint(tracked: readonly TrackedPayment[]): number {
+  return tracked.reduce((sum, p) => (countsAsSettled(p.status) ? sum + (p.roundingAmount ?? 0) : sum), 0)
 }
 
 /** One remote-completed payment as rendered on the receipt rail — see

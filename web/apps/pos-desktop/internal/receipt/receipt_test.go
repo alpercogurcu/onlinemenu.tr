@@ -25,7 +25,7 @@ func TestBuild_GoldenByteSequence_Width48(t *testing.T) {
 		{ProductName: "Kahve", Quantity: 1, UnitPriceAmount: 4500},
 	}
 
-	got := Build(cfg, "Masa 3", opened, items, 6000)
+	got := Build(cfg, "Masa 3", opened, items, 6000, 0)
 
 	want := escpos.NewBuilder(escpos.Width48).Init().
 		Align(escpos.AlignCenter).SetMode(true, true).Line("Test Lokanta").
@@ -56,10 +56,50 @@ func TestBuild_GoldenByteSequence_Width48(t *testing.T) {
 	}
 }
 
+// TestBuild_RoundingLines: a rounded check shows the concession and the
+// payable amount, and the change is counted from what was actually payable.
+func TestBuild_RoundingLines(t *testing.T) {
+	cfg := Config{BusinessName: "Test Lokanta", Width: escpos.Width48}
+	opened := mustTime(t, "2026-07-05T12:30:00Z")
+	items := []Item{{ProductName: "Burger", Quantity: 1, UnitPriceAmount: 43750}}
+
+	got := Build(cfg, "Masa 3", opened, items, 50000, 250)
+
+	want := escpos.NewBuilder(escpos.Width48).Init().
+		Align(escpos.AlignCenter).SetMode(true, true).Line("Test Lokanta").
+		SetMode(false, false).
+		Align(escpos.AlignLeft).
+		Line("Masa 3").
+		Line(opened.Format("02.01.2006 15:04")).
+		Divider().
+		Line(escpos.Columns(48, "1x Burger", "437,50 TL")).
+		Divider().
+		SetMode(true, false).
+		Line(escpos.Columns(48, "TOPLAM", "437,50 TL")).
+		SetMode(false, false).
+		Line(escpos.Columns(48, "YUVARLAMA", "-2,50 TL")).
+		SetMode(true, false).
+		Line(escpos.Columns(48, "ÖDENECEK", "435,00 TL")).
+		SetMode(false, false).
+		Line(escpos.Columns(48, "ALINAN", "500,00 TL")).
+		Line(escpos.Columns(48, "PARA ÜSTÜ", "65,00 TL")).
+		Feed(1).
+		Align(escpos.AlignCenter).
+		Line(footerLine1).
+		Line(footerLine2).
+		Feed(1).
+		Cut(escpos.CutFull, 3).
+		Bytes()
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Build() =\n% x\nwant\n% x", got, want)
+	}
+}
+
 func TestBuild_NoBranchNameOmitsLine(t *testing.T) {
 	cfg := Config{BusinessName: "Test Lokanta", Width: escpos.Width48}
 	opened := mustTime(t, "2026-07-05T12:30:00Z")
-	got := Build(cfg, "Masa 1", opened, nil, 0)
+	got := Build(cfg, "Masa 1", opened, nil, 0, 0)
 
 	want := escpos.NewBuilder(escpos.Width48).Init().
 		Align(escpos.AlignCenter).SetMode(true, true).Line("Test Lokanta").
@@ -90,7 +130,7 @@ func TestBuild_ZeroReceivedAmountOmitsPaymentLines(t *testing.T) {
 	opened := mustTime(t, "2026-01-01T00:00:00Z")
 	items := []Item{{ProductName: "Su", Quantity: 1, UnitPriceAmount: 1000}}
 
-	got := Build(cfg, "Paket servis", opened, items, 0)
+	got := Build(cfg, "Paket servis", opened, items, 0, 0)
 
 	if bytes.Contains(got, []byte("ALINAN")) {
 		t.Fatal("Build() with receivedAmount=0 must omit the ALINAN line (reprint with unknown received amount)")
@@ -105,7 +145,7 @@ func TestBuild_ZeroReceivedAmountOmitsPaymentLines(t *testing.T) {
 
 func TestBuild_EmptyBusinessNameFallsBackToDefault(t *testing.T) {
 	cfg := Config{Width: escpos.Width32}
-	got := Build(cfg, "", time.Now(), nil, 0)
+	got := Build(cfg, "", time.Now(), nil, 0, 0)
 	if !bytes.Contains(got, []byte(defaultBusinessName)) {
 		t.Fatalf("Build() with empty BusinessName must fall back to %q", defaultBusinessName)
 	}
@@ -121,7 +161,7 @@ func TestBuild_LongBusinessNameTruncatedForDoubleWidthLine(t *testing.T) {
 	longName := "Bu Isim Otuz Alti Kolonu Kesinlikle Asar"
 	const width = escpos.Width32
 	cfg := Config{BusinessName: longName, Width: width}
-	got := Build(cfg, "Masa 1", time.Now(), nil, 0)
+	got := Build(cfg, "Masa 1", time.Now(), nil, 0, 0)
 
 	if bytes.Contains(got, escpos.EncodeCP857(longName)) {
 		t.Fatalf("Build() printed the full %d-rune business name untruncated on a double-width line (paper width %d, so max is %d runes there)", len([]rune(longName)), width, int(width)/2)
@@ -134,7 +174,7 @@ func TestBuild_LongBusinessNameTruncatedForDoubleWidthLine(t *testing.T) {
 
 func TestBuild_EmptyTableLabelFallsBackToAdisyon(t *testing.T) {
 	cfg := Config{Width: escpos.Width32}
-	got := Build(cfg, "", time.Now(), nil, 0)
+	got := Build(cfg, "", time.Now(), nil, 0, 0)
 	if !bytes.Contains(got, []byte("Adisyon")) {
 		t.Fatal(`Build() with empty tableLabel must fall back to "Adisyon"`)
 	}
@@ -154,7 +194,7 @@ func TestBuild_MandatoryDisclaimerAlwaysPresent(t *testing.T) {
 	wantPart1 := escpos.EncodeCP857("bilgi fişidir")
 	wantPart2 := escpos.EncodeCP857("mali değeri yoktur")
 	for _, width := range []escpos.Width{escpos.Width32, escpos.Width48} {
-		got := Build(Config{Width: width}, "Masa 1", time.Now(), nil, 0)
+		got := Build(Config{Width: width}, "Masa 1", time.Now(), nil, 0, 0)
 		if !bytes.Contains(got, wantPart1) {
 			t.Fatalf(`width %d: Build() missing mandatory disclaimer wording "bilgi fişidir" (properly accented)`, width)
 		}
@@ -172,7 +212,7 @@ func TestBuild_MandatoryDisclaimerAlwaysPresent(t *testing.T) {
 func TestBuild_TurkishProductNameEncodedCorrectly(t *testing.T) {
 	name := "Çığ Köfte Şalgam"
 	items := []Item{{ProductName: name, Quantity: 3, UnitPriceAmount: 1250}}
-	got := Build(Config{Width: escpos.Width48}, "Masa 5", time.Now(), items, 0)
+	got := Build(Config{Width: escpos.Width48}, "Masa 5", time.Now(), items, 0, 0)
 
 	wantLine := escpos.Columns(48, "3x "+name, "37,50 TL")
 	wantBytes := escpos.EncodeCP857(wantLine)
@@ -190,7 +230,7 @@ func TestBuild_LongProductNameTruncatedNotWrapped(t *testing.T) {
 	items := []Item{{ProductName: longName, Quantity: 1, UnitPriceAmount: 100}}
 
 	for _, width := range []escpos.Width{escpos.Width32, escpos.Width48} {
-		got := Build(Config{Width: width}, "Masa 1", time.Now(), items, 0)
+		got := Build(Config{Width: width}, "Masa 1", time.Now(), items, 0, 0)
 		lines := bytes.Split(got, []byte("\n"))
 		for _, line := range lines {
 			if len(line) > int(width)+8 { // + generous slack for any control bytes sharing the segment

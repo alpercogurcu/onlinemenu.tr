@@ -3,12 +3,14 @@ import {
   buildPaymentLines,
   cashChange,
   cashReceived,
+  chargeFor,
   coveredItems,
   dueFor,
   formatMoney,
   formatMoneyInputDisplay,
   kurusToMoneyInput,
   parseMoneyInputToKurus,
+  roundingOffer,
   selectedUnitCount,
   selectionAllocations,
   selectionTotal,
@@ -19,6 +21,8 @@ import {
   type PayableItem,
   type PaySelection,
   type PaymentLine,
+  type RoundingOffer,
+  type RoundingPolicy,
 } from '@onlinemenu/pos-core'
 import { seatChip, seatGroups, seatLabel, seatSelected, toggleSeat } from '../lib/seatTotals'
 import { ErrorBanner } from './ErrorBanner'
@@ -37,6 +41,22 @@ export const SELECT_FROM_RECEIPT_HINT = 'Sağdaki adisyondan kalem seçebilirsin
 export const CARD_DEVICE_NOTICE =
   'Kart: cihaz kayıtlı değil — tahsilat harici cihazda yapılır, buraya yalnız kayıt düşer.'
 
+/** Rounding button copy. Suffix-free on purpose: the dative suffix of a
+ * spoken amount ("435'e" / "440'a") follows vowel harmony of the last spoken
+ * word, which a template gets wrong half the time. */
+export function roundingButtonLabel(offer: RoundingOffer, applied: boolean): string {
+  if (applied) return `✓ Yuvarlandı: ${formatMoney(offer.rounded)} (−${formatMoney(offer.rounding)}) — geri al`
+  return `↓ Yuvarla: ${formatMoney(offer.rounded)} (−${formatMoney(offer.rounding)})`
+}
+
+/** Under an applied rounding when only one method may round: the other button
+ * still takes the full amount. */
+export function roundingScopeNote(policy: RoundingPolicy): string {
+  if (policy.cashEnabled && !policy.cardEnabled) return 'Yuvarlama yalnız nakitte — kartla tam tutar alınır.'
+  if (!policy.cashEnabled && policy.cardEnabled) return 'Yuvarlama yalnız kartta — nakitte tam tutar alınır.'
+  return ''
+}
+
 const SPLIT_OPTIONS: { parts: number; label: string }[] = [
   // Turkish vowel harmony makes the dative suffix on a numeral irregular
   // (2 -> "2'ye", 3/4 -> "3'e"/"4'e") — spelled out, not templated.
@@ -48,10 +68,15 @@ const SPLIT_OPTIONS: { parts: number; label: string }[] = [
 /** What the parent registers: one payment and the basket it covers. */
 export type PaymentRequest = {
   method: PayMethod
-  /** What this payment settles (never more than what is left). */
+  /** Money this payment takes. amount + rounding is what it settles (never
+   * more than what is left). */
   amount: number
+  /** Rounding conceded (beşli yuvarlama); 0 for an ordinary payment. */
+  rounding: number
   /** Cash physically handed over (equals `amount` for a card). */
   received: number
+  /** Fiscal lines; they add up to amount + rounding — the receipt prints the
+   * items at full price and the backend adds the "Yuvarlama" discount. */
   lines: PaymentLine[]
   /** Units an item payment covers; empty for full/split/amount payments. */
   items: ItemQty[]
@@ -73,6 +98,8 @@ type PaymentScreenProps = {
   remaining: number
   /** Set when the screen opens to retry a failed payment: starts on that amount. */
   initial: PaymentInitial | null
+  /** The branch's rounding permission; the button only shows when it applies. */
+  roundingPolicy: RoundingPolicy
   onRegister: (request: PaymentRequest) => Promise<void>
   /** Back to the product grid. */
   onClose: () => void
@@ -116,6 +143,7 @@ export function PaymentScreen({
   settledPaidTotal,
   remaining,
   initial,
+  roundingPolicy,
   onRegister,
   onClose,
   errorMessage,
@@ -129,6 +157,10 @@ export function PaymentScreen({
   // fresh amount instead of appending to it (see NumpadOptions.pendingReplace).
   const [pendingReplace, setPendingReplace] = useState(Boolean(initial))
   const [submittingMethod, setSubmittingMethod] = useState<PayMethod | null>(null)
+  // The cashier's tap, not the rounding itself: it only takes effect while an
+  // offer exists (the payment closes the remainder), so switching to a split or
+  // a partial selection drops it on its own.
+  const [roundingApplied, setRoundingApplied] = useState(false)
   const submitting = submittingMethod !== null
 
   // A pick on the rail lands here as a new selection: adjusting state during
@@ -138,6 +170,7 @@ export function PaymentScreen({
   if (selection !== seenSelection) {
     setSeenSelection(selection)
     setReceivedInput('')
+    setRoundingApplied(false)
     if (selection.size > 0) {
       setMode('items')
       setTarget('received')
@@ -159,9 +192,17 @@ export function PaymentScreen({
     selectedTotal,
     customDue: parseMoneyInputToKurus(customDueInput),
   })
-  const received = cashReceived(receivedInput, due)
-  const change = cashChange('cash', received, due)
-  const shortOfCash = received < due
+  // Earlier rounding on this check is not tracked client-side (conceded 0):
+  // a check that already used its ceiling is refused by the server with
+  // rounding_not_allowed, whose message tells the cashier to drop it.
+  const offer = roundingOffer({ due, remaining, policy: roundingPolicy, conceded: 0 })
+  const appliedOffer = roundingApplied ? offer : null
+  const cashCharge = chargeFor('cash', due, appliedOffer, roundingPolicy)
+  const cardCharge = chargeFor('card', due, appliedOffer, roundingPolicy)
+  const shownDue = appliedOffer ? appliedOffer.rounded : due
+  const received = cashReceived(receivedInput, cashCharge.amount)
+  const change = cashChange('cash', received, cashCharge.amount)
+  const shortOfCash = received < cashCharge.amount
   const canPayCard = due > 0 && !submitting
   const canPayCash = canPayCard && !shortOfCash
 
@@ -171,6 +212,7 @@ export function PaymentScreen({
 
   function chooseMode(next: DueMode) {
     setMode(next)
+    setRoundingApplied(false)
     clearSelection()
     setReceivedInput('')
     setPendingReplace(false)
@@ -180,6 +222,7 @@ export function PaymentScreen({
   function editDue() {
     if (mode !== 'custom') setCustomDueInput(kurusToMoneyInput(due))
     setMode('custom')
+    setRoundingApplied(false)
     clearSelection()
     setTarget('due')
     setPendingReplace(true)
@@ -205,10 +248,12 @@ export function PaymentScreen({
   }
 
   async function handleSubmit(payMethod: PayMethod) {
+    const charge = payMethod === 'cash' ? cashCharge : cardCharge
     const request: PaymentRequest = {
       method: payMethod,
-      amount: due,
-      received: payMethod === 'cash' ? received : due,
+      amount: charge.amount,
+      rounding: charge.rounding,
+      received: payMethod === 'cash' ? received : charge.amount,
       lines: buildPaymentLines(coveredItems(mode, items, paidQty, selection), due),
       items: mode === 'items' ? selectionAllocations(items, paidQty, selection) : [],
     }
@@ -224,6 +269,7 @@ export function PaymentScreen({
     setSubmittingMethod(null)
     setReceivedInput('')
     setPendingReplace(false)
+    setRoundingApplied(false)
     clearSelection()
     if (due >= remaining) {
       onClose()
@@ -374,10 +420,38 @@ export function PaymentScreen({
             }`}
           >
             <span className="text-sm text-ink-dim">Ödenecek</span>
-            <span className="money font-display text-4xl font-bold tabular-nums text-ink">
-              {target === 'due' && mode === 'custom' ? `${formatMoneyInputDisplay(customDueInput)} ₺` : formatMoney(due)}
+            <span className="flex flex-col items-end">
+              {appliedOffer && (
+                <span className="money text-sm tabular-nums text-ink-dim line-through">{formatMoney(due)}</span>
+              )}
+              <span className="money font-display text-4xl font-bold tabular-nums text-ink">
+                {target === 'due' && mode === 'custom' ? `${formatMoneyInputDisplay(customDueInput)} ₺` : formatMoney(shownDue)}
+              </span>
             </span>
           </button>
+
+          {offer && (
+            <div className="shrink-0">
+              <button
+                type="button"
+                aria-pressed={roundingApplied}
+                disabled={submitting}
+                onClick={() => {
+                  setRoundingApplied((on) => !on)
+                  setReceivedInput('')
+                  setPendingReplace(false)
+                }}
+                className={`min-h-12 w-full rounded-md border px-3 text-sm font-semibold tabular-nums disabled:opacity-40 ${
+                  roundingApplied ? 'border-amber bg-amber/15 text-amber' : 'border-dashed border-amber bg-surface text-amber'
+                }`}
+              >
+                {roundingButtonLabel(offer, roundingApplied)}
+              </button>
+              {roundingApplied && roundingScopeNote(roundingPolicy) && (
+                <p className="mt-1 text-xs text-ink-dim">{roundingScopeNote(roundingPolicy)}</p>
+              )}
+            </div>
+          )}
 
           <button
             type="button"
@@ -393,7 +467,7 @@ export function PaymentScreen({
             <span className="text-sm text-ink-dim">Alınan</span>
             {receivedInput.trim() === '' ? (
               <span className="money text-lg tabular-nums text-ink-dim">
-                {formatMoney(due)} <span className="text-xs">(tam)</span>
+                {formatMoney(cashCharge.amount)} <span className="text-xs">(tam)</span>
               </span>
             ) : (
               <span className="money text-2xl font-semibold tabular-nums text-ink">
@@ -412,7 +486,7 @@ export function PaymentScreen({
           )}
           {shortOfCash && (
             <p className="text-sm text-ink" role="status">
-              Alınan tutar ödenecek tutardan az — eksik {formatMoney(due - received)}.
+              Alınan tutar ödenecek tutardan az — eksik {formatMoney(cashCharge.amount - received)}.
             </p>
           )}
 
@@ -458,7 +532,7 @@ export function PaymentScreen({
               onClick={() => handleSubmit('cash')}
               className="min-h-16 rounded-lg bg-amber px-4 font-display text-lg font-bold text-amber-ink disabled:opacity-40"
             >
-              {submittingMethod === 'cash' ? 'Kaydediliyor…' : 'Nakit Al'}
+              {submittingMethod === 'cash' ? 'Kaydediliyor…' : appliedOffer ? `Nakit Al ${formatMoney(cashCharge.amount)}` : 'Nakit Al'}
             </button>
             <button
               type="button"
@@ -466,7 +540,7 @@ export function PaymentScreen({
               onClick={() => handleSubmit('card')}
               className="min-h-16 rounded-lg border border-line bg-panel px-4 font-display text-lg font-bold text-ink disabled:opacity-40"
             >
-              {submittingMethod === 'card' ? 'Kaydediliyor…' : 'Kart'}
+              {submittingMethod === 'card' ? 'Kaydediliyor…' : appliedOffer ? `Kart ${formatMoney(cardCharge.amount)}` : 'Kart'}
             </button>
           </div>
           <p className="shrink-0 text-xs text-warn">{CARD_DEVICE_NOTICE}</p>

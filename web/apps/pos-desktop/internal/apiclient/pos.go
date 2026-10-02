@@ -400,6 +400,32 @@ func (c *Client) ListTables(ctx context.Context, branchID string) ([]ZonePlan, e
 	return out, nil
 }
 
+// BranchSettings mirrors pos/http branchSettingsResponse. A branch never
+// configured answers the defaults (rounding off).
+type BranchSettings struct {
+	BranchID                 string `json:"branch_id"`
+	WaiterCategoryLayout     string `json:"waiter_category_layout"`
+	OrderFlow                string `json:"order_flow"`
+	RoundingCashEnabled      bool   `json:"rounding_cash_enabled"`
+	RoundingCardEnabled      bool   `json:"rounding_card_enabled"`
+	RoundingStepMinor        int64  `json:"rounding_step_minor"`
+	RoundingMaxPerCheckMinor int64  `json:"rounding_max_per_check_minor"`
+}
+
+// GetBranchSettings calls GET /api/v1/pos/branch-settings?branch_id= (gated on
+// pos.check.read, which every counter role holds).
+func (c *Client) GetBranchSettings(ctx context.Context, branchID string) (BranchSettings, error) {
+	if branchID == "" {
+		return BranchSettings{}, fmt.Errorf("apiclient: get branch settings: branch_id is required")
+	}
+	var out BranchSettings
+	path := "/api/v1/pos/branch-settings?" + url.Values{"branch_id": {branchID}}.Encode()
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return BranchSettings{}, fmt.Errorf("apiclient: get branch settings: %w", err)
+	}
+	return out, nil
+}
+
 // --- Orders ---
 
 // OrderItem mirrors pos/http orderItemResponse.
@@ -515,6 +541,7 @@ type Payment struct {
 	Method          string     `json:"method"`
 	Status          string     `json:"status"`
 	AmountTotal     int64      `json:"amount_total"`
+	RoundingAmount  int64      `json:"rounding_amount"`
 	Currency        string     `json:"currency"`
 	FiscalReceiptID *string    `json:"fiscal_receipt_id"`
 	CreatedAt       time.Time  `json:"created_at"`
@@ -541,13 +568,16 @@ type fiscalMetaRequest struct {
 }
 
 type registerSaleRequest struct {
-	BranchID    string            `json:"branch_id"`
-	CheckID     string            `json:"check_id"`
-	Method      string            `json:"method"`
-	AmountTotal int64             `json:"amount_total"`
-	Currency    string            `json:"currency"`
-	Lines       []FiscalLine      `json:"lines,omitempty"`
-	Meta        fiscalMetaRequest `json:"meta"`
+	BranchID    string `json:"branch_id"`
+	CheckID     string `json:"check_id"`
+	Method      string `json:"method"`
+	AmountTotal int64  `json:"amount_total"`
+	// RoundingAmount is omitted when zero so an ordinary payment's body is
+	// byte-for-byte what it was before rounding existed.
+	RoundingAmount int64             `json:"rounding_amount,omitempty"`
+	Currency       string            `json:"currency"`
+	Lines          []FiscalLine      `json:"lines,omitempty"`
+	Meta           fiscalMetaRequest `json:"meta"`
 }
 
 // ErrLinesTotalMismatch reports fiscal lines that do not add up to the payment
@@ -558,14 +588,16 @@ var ErrLinesTotalMismatch = errors.New("fiscal lines do not add up to the paymen
 
 // RegisterPaymentInput is one payment against a check. Method is the backend's
 // payment method ("cash", "terminal", ...). Lines are optional; when present
-// they must add up to AmountTotal.
+// they must add up to AmountTotal + RoundingAmount: a rounded payment prints
+// the items at full price and the backend adds the "Yuvarlama" discount.
 type RegisterPaymentInput struct {
-	BranchID    string
-	CheckID     string
-	Method      string
-	AmountTotal int64
-	Lines       []FiscalLine
-	TableLabel  string
+	BranchID       string
+	CheckID        string
+	Method         string
+	AmountTotal    int64
+	RoundingAmount int64
+	Lines          []FiscalLine
+	TableLabel     string
 }
 
 func linesTotal(lines []FiscalLine) (int64, bool) {
@@ -605,21 +637,26 @@ func (c *Client) RegisterPayment(ctx context.Context, in RegisterPaymentInput) (
 	if in.AmountTotal <= 0 {
 		return Payment{}, fmt.Errorf("apiclient: register payment: amount_total must be positive")
 	}
+	if in.RoundingAmount < 0 {
+		return Payment{}, fmt.Errorf("apiclient: register payment: rounding_amount must not be negative")
+	}
 	if len(in.Lines) > 0 {
 		total, exact := linesTotal(in.Lines)
-		if !exact || total != in.AmountTotal {
-			return Payment{}, fmt.Errorf("apiclient: register payment: %w (lines %d, amount %d)", ErrLinesTotalMismatch, total, in.AmountTotal)
+		if !exact || total != in.AmountTotal+in.RoundingAmount {
+			return Payment{}, fmt.Errorf("apiclient: register payment: %w (lines %d, amount %d, rounding %d)",
+				ErrLinesTotalMismatch, total, in.AmountTotal, in.RoundingAmount)
 		}
 	}
 	var out Payment
 	req := registerSaleRequest{
-		BranchID:    in.BranchID,
-		CheckID:     in.CheckID,
-		Method:      in.Method,
-		AmountTotal: in.AmountTotal,
-		Currency:    "TRY",
-		Lines:       in.Lines,
-		Meta:        fiscalMetaRequest{TableLabel: in.TableLabel},
+		BranchID:       in.BranchID,
+		CheckID:        in.CheckID,
+		Method:         in.Method,
+		AmountTotal:    in.AmountTotal,
+		RoundingAmount: in.RoundingAmount,
+		Currency:       "TRY",
+		Lines:          in.Lines,
+		Meta:           fiscalMetaRequest{TableLabel: in.TableLabel},
 	}
 	if err := c.doIdempotent(ctx, http.MethodPost, "/api/v1/payments", req, &out); err != nil {
 		return Payment{}, fmt.Errorf("apiclient: register payment: %w", err)

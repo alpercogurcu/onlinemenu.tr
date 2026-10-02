@@ -9,6 +9,7 @@ import {
   remoteCompletedOnly,
   remotePendingOnly,
   reservedTotal,
+  roundingForPrint,
   settledTotal,
   unreportedRemoteFailures,
   type RemotePendingFiscal,
@@ -320,5 +321,26 @@ describe('unreportedRemoteFailures', () => {
       [],
     )
     expect(got).toEqual([])
+  })
+})
+
+// Beşli yuvarlama: a rounded final payment settles amount + rounding. The
+// tracked entry carries that gross, so a check of ₺437,50 paid ₺435,00 + ₺2,50
+// rounding is fully paid with nothing left to collect.
+describe('rounded payments', () => {
+  it('a rounded payment leaves nothing to collect and counts as fully paid', () => {
+    const own = [tracked({ id: 'p1', amountTotal: 43_750, roundingAmount: 250, receivedAmount: 50_000, status: 'completed' })]
+    expect(collectableRemaining(43_750, NO_SERVER_PAYMENTS, own, [], [])).toBe(0)
+    expect(isFullyPaid(43_750, NO_SERVER_PAYMENTS, own, [])).toBe(true)
+  })
+
+  it('prints only the settled rounding of this station', () => {
+    expect(
+      roundingForPrint([
+        tracked({ id: 'p1', status: 'completed', roundingAmount: 250 }),
+        tracked({ id: 'p2', status: 'failed', roundingAmount: 100 }),
+        tracked({ id: 'p3', status: 'completed' }),
+      ]),
+    ).toBe(250)
   })
 })

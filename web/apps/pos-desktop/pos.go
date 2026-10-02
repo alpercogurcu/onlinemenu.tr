@@ -156,7 +156,10 @@ type PaymentDTO struct {
 	Method      string `json:"method"`
 	Status      string `json:"status"`
 	AmountTotal int64  `json:"amount_total"`
-	Currency    string `json:"currency"`
+	// RoundingAmount is the rounding concession; the payment settles
+	// AmountTotal + RoundingAmount of its check. Always present (0 when none).
+	RoundingAmount int64  `json:"rounding_amount"`
+	Currency       string `json:"currency"`
 }
 
 // ListCategories returns the tenant's catalog categories for the category
@@ -235,6 +238,34 @@ func (a *App) ListTables(branchID string) ([]ZonePlanDTO, error) {
 		out[i] = toZonePlanDTO(z)
 	}
 	return out, nil
+}
+
+// RoundingPolicyDTO is the branch's cash-rounding permission (beşli
+// yuvarlama) as the payment screen needs it. The backend re-checks every rule
+// on the payment itself; this only decides whether the button is offered.
+type RoundingPolicyDTO struct {
+	CashEnabled      bool  `json:"cash_enabled"`
+	CardEnabled      bool  `json:"card_enabled"`
+	StepMinor        int64 `json:"step_minor"`
+	MaxPerCheckMinor int64 `json:"max_per_check_minor"`
+}
+
+// GetRoundingPolicy returns the branch's rounding policy for the payment
+// screen.
+func (a *App) GetRoundingPolicy(branchID string) (RoundingPolicyDTO, error) {
+	if branchID == "" {
+		return RoundingPolicyDTO{}, fmt.Errorf("şube seçilmeden yuvarlama ayarı okunamaz")
+	}
+	s, err := a.api.GetBranchSettings(a.ctx, branchID)
+	if err != nil {
+		return RoundingPolicyDTO{}, err
+	}
+	return RoundingPolicyDTO{
+		CashEnabled:      s.RoundingCashEnabled,
+		CardEnabled:      s.RoundingCardEnabled,
+		StepMinor:        s.RoundingStepMinor,
+		MaxPerCheckMinor: s.RoundingMaxPerCheckMinor,
+	}, nil
 }
 
 // SetTableStatus changes a table's floor-plan status. The counter uses it to
@@ -346,17 +377,22 @@ func (a *App) GetPayment(paymentID string) (PaymentDTO, error) {
 	if err != nil {
 		return PaymentDTO{}, err
 	}
+	return toPaymentDTO(p), nil
+}
+
+func toPaymentDTO(p apiclient.Payment) PaymentDTO {
 	dto := PaymentDTO{
-		ID:          p.ID,
-		Method:      p.Method,
-		Status:      p.Status,
-		AmountTotal: p.AmountTotal,
-		Currency:    p.Currency,
+		ID:             p.ID,
+		Method:         p.Method,
+		Status:         p.Status,
+		AmountTotal:    p.AmountTotal,
+		RoundingAmount: p.RoundingAmount,
+		Currency:       p.Currency,
 	}
 	if p.CheckID != nil {
 		dto.CheckID = *p.CheckID
 	}
-	return dto, nil
+	return dto
 }
 
 // ListCheckPayments returns the completed payments already recorded against
@@ -409,16 +445,7 @@ func (a *App) ListCheckPayments(checkID string) ([]PaymentDTO, error) {
 	}
 	out := make([]PaymentDTO, len(payments))
 	for i, p := range payments {
-		out[i] = PaymentDTO{
-			ID:          p.ID,
-			Method:      p.Method,
-			Status:      p.Status,
-			AmountTotal: p.AmountTotal,
-			Currency:    p.Currency,
-		}
-		if p.CheckID != nil {
-			out[i].CheckID = *p.CheckID
-		}
+		out[i] = toPaymentDTO(p)
 	}
 	return out, nil
 }
@@ -431,8 +458,9 @@ func (a *App) ListCheckPayments(checkID string) ([]PaymentDTO, error) {
 // invite someone to "fix" them by widening the backend projection — the exact
 // permission creep the endpoint's design guards against.
 type CheckSettledPaymentDTO struct {
-	PaymentID   string `json:"payment_id"`
-	AmountTotal int64  `json:"amount_total"`
+	PaymentID      string `json:"payment_id"`
+	AmountTotal    int64  `json:"amount_total"`
+	RoundingAmount int64  `json:"rounding_amount"`
 }
 
 // CheckSettlementDTO mirrors apiclient.CheckSettlement.
@@ -477,8 +505,9 @@ func (a *App) CheckSettlement(checkID string) (CheckSettlementDTO, error) {
 	}
 	for _, item := range s.Completed {
 		out.Completed = append(out.Completed, CheckSettledPaymentDTO{
-			PaymentID:   item.PaymentID,
-			AmountTotal: item.AmountTotal,
+			PaymentID:      item.PaymentID,
+			AmountTotal:    item.AmountTotal,
+			RoundingAmount: item.RoundingAmount,
 		})
 	}
 	return out, nil
@@ -547,7 +576,7 @@ func (a *App) PrinterStatus() PrinterStatusDTO {
 // hardware.Printer also emits a StatusError Event in parallel — see
 // hardware.Printer's doc comment) so the frontend can offer "Fişi yeniden
 // yazdır".
-func (a *App) PrintReceipt(checkID string, receivedAmount int64) error {
+func (a *App) PrintReceipt(checkID string, receivedAmount, roundingAmount int64) error {
 	check, err := a.api.GetCheck(a.ctx, checkID)
 	if err != nil {
 		return fmt.Errorf("print receipt: %w", err)
@@ -568,7 +597,7 @@ func (a *App) PrintReceipt(checkID string, receivedAmount int64) error {
 		}
 	}
 
-	job := receipt.Build(a.receiptConfig, check.TableLabel, check.OpenedAt, items, receivedAmount)
+	job := receipt.Build(a.receiptConfig, check.TableLabel, check.OpenedAt, items, receivedAmount, roundingAmount)
 	if err := a.printer.Print(job); err != nil {
 		return fmt.Errorf("print receipt: %w", err)
 	}

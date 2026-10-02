@@ -74,8 +74,9 @@ test.describe("(j) rol ekranları", () => {
     )
     checkId = check.id
     const smash = await productByName(waiter.api, SMASH, branchId)
-    // Waiter orders wait for the counter (pending) — exactly what the kitchen
-    // card and the cashier's accept button are about.
+    // Serdivan basit akışta (order_flow=simple): garson siparişi accepted
+    // DOĞAR — onay adımı yoktur; kart Kabul Edildi kolonuna düşer ve
+    // kasiyer ekranında kabul düğmesi hiç görünmez.
     const res = await waiter.api.postNew("/api/v1/pos/orders", {
       branch_id: branchId,
       check_id: checkId,
@@ -99,13 +100,14 @@ test.describe("(j) rol ekranları", () => {
       const card = page.locator("[data-kds-root] [data-slot=card]").filter({ hasText: ORDER_NOTE }).first()
       await expect(card).toBeVisible()
       await expect(card.getByText(OPTION_NOTE)).toBeVisible()
-      await expect(card.getByText("Kasa onayı bekleniyor")).toBeVisible()
+      // Basit akışta kasa onayı adımı yok — kapı metni hiç basılmamalı.
+      await expect(card.getByText("Kasa onayı bekleniyor")).toHaveCount(0)
     } finally {
       await page.context().close()
     }
   })
 
-  test("kasiyer: masada QR yok, dolu masa adisyona bağlanır; ödenmemiş adisyon kilitli, iptal onaylı, sipariş kabul edilir", async ({
+  test("kasiyer: masada QR yok, dolu masa adisyona bağlanır; ödenmemiş adisyon kilitli, iptal onaylı, sipariş kabul edilmiş doğar", async ({
     browser,
   }) => {
     const page = await openAs(browser, ACCOUNTS.cashierSerdivan())
@@ -129,16 +131,14 @@ test.describe("(j) rol ekranları", () => {
       await dialog.getByRole("button", { name: "Vazgeç" }).click()
       await expect(dialog).toHaveCount(0)
 
-      await page.getByRole("button", { name: "Siparişi kabul et" }).click()
-      await expect
-        .poll(async () => {
-          const orders = await json<{ id: string; status: string }[]>(
-            await cashier.api.get(`/api/v1/pos/checks/${checkId}/orders`),
-            200,
-          )
-          return orders.find((o) => o.id === pendingOrderId)?.status
-        })
-        .toBe("accepted")
+      // Basit akışta sipariş zaten accepted doğduğundan kabul düğmesi
+      // yoktur; durumun doğumda accepted olduğu API'den doğrulanır.
+      await expect(page.getByRole("button", { name: "Siparişi kabul et" })).toHaveCount(0)
+      const orders = await json<{ id: string; status: string }[]>(
+        await cashier.api.get(`/api/v1/pos/checks/${checkId}/orders`),
+        200,
+      )
+      expect(orders.find((o) => o.id === pendingOrderId)?.status).toBe("accepted")
     } finally {
       await page.context().close()
     }

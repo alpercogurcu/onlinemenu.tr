@@ -45,6 +45,7 @@ export type ApiErrorCode =
   | 'price_mismatch'
   | 'invalid_order_line'
   | 'no_cash_session_open'
+  | 'payment_exceeds_due'
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'fiscal_pending',
@@ -62,6 +63,7 @@ const KNOWN_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'price_mismatch',
   'invalid_order_line',
   'no_cash_session_open',
+  'payment_exceeds_due',
 ])
 
 /**
@@ -122,6 +124,11 @@ export function describeError(err: unknown): string {
       // istemezken nakitin reddedilmesi kasiyeri şaşırtır — mesaj çözümü
       // (kasa açılışı) doğrudan söylemeli, "yenileyin" dememeli.
       return 'Bu şubede açık kasa oturumu yok — nakit almak için önce kasayı açın (açılış sayımı).'
+    case 'payment_exceeds_due':
+      // Tipik neden: aynı adisyonu başka bir kasa (POS ya da web) az önce
+      // tahsil etti. Kasiyer kalan tutarı yenileyip öyle almalı — aynı tutarı
+      // tekrar denemek yine reddedilir.
+      return 'Tutar kalan borçtan fazla — adisyon başka bir kasada ödenmiş olabilir, kalan tutarı yenileyip tekrar deneyin.'
     case 'session_scoped_principal':
       // ADR-DATA-008 PIN akışı: this principal was itself issued via a
       // PIN-switch, not a fresh Keycloak login — a different situation from

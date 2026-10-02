@@ -110,9 +110,11 @@ export type DueInput = {
 }
 
 /**
- * What the next payment settles. Never more than `remaining`: the backend has
- * no overpayment guard (see payment.ts's clampToRemaining), so the clamp is
- * the only thing that stops a mistyped or stale amount from over-collecting.
+ * What the next payment settles. Never more than `remaining` (see payment.ts's
+ * clampToRemaining). The backend now refuses an amount above what the check
+ * still owes (409 payment_exceeds_due), but the clamp keeps a mistyped amount
+ * from reaching the server at all; the server guard is what covers a stale
+ * `remaining` when another station paid first.
  */
 export function dueFor(input: DueInput): number {
   switch (input.mode) {

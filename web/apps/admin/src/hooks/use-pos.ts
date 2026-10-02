@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 
 import api from "@/lib/api"
+import { newIdempotencyKey } from "@/lib/pos-order"
 import type { Check, CheckSettlement, Order, OrderStatus, PosTable, PosTableStatus, PosZone, PosZonePlan } from "@/types"
 
 // useTables returns the branch floor plan already grouped by zone — that is
@@ -209,10 +210,20 @@ export function useCreateCheck() {
   })
 }
 
+// POST /pos/checks/{id}/close requires Idempotency-Key (ADR-SEC-003); without
+// it the middleware answers 422 and the button can never close anything. One
+// key per mutate() call, minted inside mutationFn: the admin QueryClient does
+// not retry mutations, and a second press after a lost response is safe even
+// with a fresh key — the check is already closed and the server answers 409
+// invalid_transition with no side effect. newIdempotencyKey, not
+// crypto.randomUUID: the latter is missing on plain-http LAN devices.
 export function useCloseCheck() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post(`/api/v1/pos/checks/${id}/close`),
+    mutationFn: (id: string) =>
+      api.post(`/api/v1/pos/checks/${id}/close`, undefined, {
+        headers: { "Idempotency-Key": newIdempotencyKey() },
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["checks"] })
     },
@@ -223,16 +234,6 @@ export function useCancelCheck() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.post(`/api/v1/pos/checks/${id}/cancel`),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["checks"] })
-    },
-  })
-}
-
-export function useCreateOrder() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (body: Partial<Order>) => api.post<Order>("/api/v1/pos/orders", body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["checks"] })
     },

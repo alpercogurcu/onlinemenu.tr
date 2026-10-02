@@ -18,7 +18,10 @@ type BranchProductOverride struct {
 	ProductID   uuid.UUID
 	IsAvailable bool
 	PriceAmount *int64
-	UpdatedAt   time.Time
+	// CostAmount is the branch's own unit cost (kuruş, excl. VAT); nil = use
+	// the product's cost.
+	CostAmount *int64
+	UpdatedAt  time.Time
 }
 
 // BranchProduct is a product as one branch actually sells it: the catalog row

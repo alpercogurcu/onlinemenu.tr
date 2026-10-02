@@ -83,6 +83,19 @@ func testProduct(name string, unitPrice int64) uuid.UUID {
 	return id
 }
 
+// testProductWithCost is testProduct for a product whose catalog cost
+// (kuruş, KDV hariç) is known; nil keeps it unknown, which pos must persist
+// as NULL rather than 0.
+func testProductWithCost(name string, unitPrice int64, cost *int64) uuid.UUID {
+	id := testProduct(name, unitPrice)
+	testCatalog.mu.Lock()
+	defer testCatalog.mu.Unlock()
+	p := testCatalog.products[id]
+	p.UnitCostAmount = cost
+	testCatalog.products[id] = p
+	return id
+}
+
 func lookupTestProduct(id uuid.UUID) (catalogpub.PricedLine, bool) {
 	testCatalog.mu.Lock()
 	defer testCatalog.mu.Unlock()

@@ -99,10 +99,12 @@ type GuestOrderLine struct {
 	// a line as quantity × unit_price_amount.
 	BasePriceAmount int64
 	UnitPriceAmount int64
-	Currency        string
-	TaxRateBPS      int
-	Quantity        int
-	Note            string
+	// UnitCostAmount is the catalog-resolved unit cost; nil = unknown.
+	UnitCostAmount *int64
+	Currency       string
+	TaxRateBPS     int
+	Quantity       int
+	Note           string
 	// ModifierIDs are the options the diner chose, as re-derived by the
 	// caller's own pricing (never from the cart it received). pos stores them
 	// on the line (pos/000009) so a QR order's options are as answerable as a

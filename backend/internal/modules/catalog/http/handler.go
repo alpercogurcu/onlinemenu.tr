@@ -251,6 +251,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		Name                 string     `json:"name"`
 		Description          string     `json:"description"`
 		PriceAmount          int64      `json:"price_amount"`
+		CostAmount           *int64     `json:"cost_amount"`
 		Currency             string     `json:"currency"`
 		Unit                 string     `json:"unit"`
 		TaxRateBPS           int        `json:"tax_rate_bps"`
@@ -279,6 +280,7 @@ func (h *Handler) createProduct(w http.ResponseWriter, r *http.Request) {
 		Name:                 req.Name,
 		Description:          req.Description,
 		PriceAmount:          req.PriceAmount,
+		CostAmount:           req.CostAmount,
 		Currency:             req.Currency,
 		Unit:                 req.Unit,
 		TaxRateBPS:           req.TaxRateBPS,
@@ -311,6 +313,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		Name                 string     `json:"name"`
 		Description          string     `json:"description"`
 		PriceAmount          int64      `json:"price_amount"`
+		CostAmount           *int64     `json:"cost_amount"`
 		Currency             string     `json:"currency"`
 		Unit                 string     `json:"unit"`
 		TaxRateBPS           int        `json:"tax_rate_bps"`
@@ -331,6 +334,7 @@ func (h *Handler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		Name:                 req.Name,
 		Description:          req.Description,
 		PriceAmount:          req.PriceAmount,
+		CostAmount:           req.CostAmount,
 		Currency:             req.Currency,
 		Unit:                 req.Unit,
 		TaxRateBPS:           req.TaxRateBPS,

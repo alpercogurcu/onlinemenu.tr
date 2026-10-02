@@ -113,10 +113,14 @@ type PricedLine struct {
 	ProductName     string
 	BasePriceAmount int64
 	UnitPriceAmount int64
-	Currency        string
-	TaxRateBPS      int
-	Quantity        int
-	Modifiers       []PricedModifier
+	// UnitCostAmount is the cost (kuruş, excl. VAT) resolved as branch override
+	// -> product -> nil. nil means unknown and must never be coerced to 0.
+	// Modifier deltas are price-only and do not change it.
+	UnitCostAmount *int64
+	Currency       string
+	TaxRateBPS     int
+	Quantity       int
+	Modifiers      []PricedModifier
 }
 
 // StaffCartLine is one line of a staff-placed (POS) order as submitted: what

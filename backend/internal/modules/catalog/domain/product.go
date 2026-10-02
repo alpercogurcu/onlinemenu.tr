@@ -15,6 +15,7 @@ type Product struct {
 	Description          string
 	ImageKey             string
 	PriceAmount          int64  // kuruş (1/100 TL)
+	CostAmount           *int64 // kuruş, excl. VAT; nil = unknown (never 0)
 	Currency             string // ISO 4217, default "TRY"
 	SKU                  string
 	Barcode              string

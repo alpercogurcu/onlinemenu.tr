@@ -285,6 +285,7 @@ func (s *OrderService) repriceItems(ctx context.Context, tenantID, branchID uuid
 		}
 		items[i].ProductName = p.ProductName
 		items[i].ProductPriceAmount = p.BasePriceAmount
+		items[i].UnitCostAmount = p.UnitCostAmount
 		items[i].ProductCurrency = p.Currency
 		items[i].TaxRateBPS = p.TaxRateBPS
 	}
@@ -493,6 +494,7 @@ func guestOrderItems(lines []pub.GuestOrderLine) []domain.OrderItem {
 			TaxRateBPS:         l.TaxRateBPS,
 			Quantity:           l.Quantity,
 			UnitPriceAmount:    l.UnitPriceAmount,
+			UnitCostAmount:     l.UnitCostAmount,
 			Note:               l.Note,
 			ModifierIDs:        l.ModifierIDs,
 		}

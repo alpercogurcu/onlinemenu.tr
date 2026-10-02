@@ -153,6 +153,7 @@ func (s *OrderService) Place(ctx context.Context, guest auth.GuestSession, cart 
 			Name:            p.ProductName,
 			BasePriceAmount: p.BasePriceAmount,
 			UnitPriceAmount: p.UnitPriceAmount,
+			UnitCostAmount:  p.UnitCostAmount,
 			Currency:        p.Currency,
 			TaxRateBPS:      p.TaxRateBPS,
 			Quantity:        p.Quantity,

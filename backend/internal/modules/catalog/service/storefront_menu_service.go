@@ -248,6 +248,7 @@ func (s *StorefrontMenuService) priceLines(
 			ProductName:     product.Name,
 			BasePriceAmount: product.PriceAmount,
 			UnitPriceAmount: product.PriceAmount,
+			UnitCostAmount:  product.CostAmount,
 			Currency:        product.Currency,
 			TaxRateBPS:      product.TaxRateBPS,
 			Quantity:        line.Quantity,

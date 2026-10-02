@@ -23,6 +23,7 @@ type branchOverrideResponse struct {
 	ProductID   uuid.UUID `json:"product_id"`
 	IsAvailable bool      `json:"is_available"`
 	PriceAmount *int64    `json:"price_amount"`
+	CostAmount  *int64    `json:"cost_amount"`
 	UpdatedAt   string    `json:"updated_at"`
 }
 
@@ -32,6 +33,7 @@ func toBranchOverrideResponse(o domain.BranchProductOverride) branchOverrideResp
 		ProductID:   o.ProductID,
 		IsAvailable: o.IsAvailable,
 		PriceAmount: o.PriceAmount,
+		CostAmount:  o.CostAmount,
 		UpdatedAt:   o.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
@@ -99,6 +101,7 @@ func (h *Handler) putBranchOverride(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IsAvailable *bool  `json:"is_available"`
 		PriceAmount *int64 `json:"price_amount"`
+		CostAmount  *int64 `json:"cost_amount"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -114,6 +117,7 @@ func (h *Handler) putBranchOverride(w http.ResponseWriter, r *http.Request) {
 		ProductID:   productID,
 		IsAvailable: available,
 		PriceAmount: req.PriceAmount,
+		CostAmount:  req.CostAmount,
 	})
 	if err != nil {
 		h.error(w, r, err)

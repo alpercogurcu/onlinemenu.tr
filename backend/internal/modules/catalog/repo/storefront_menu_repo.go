@@ -56,8 +56,10 @@ type PricedProduct struct {
 	ID          uuid.UUID
 	Name        string
 	PriceAmount int64
-	Currency    string
-	TaxRateBPS  int
+	// CostAmount is branch override cost, else product cost; nil = unknown.
+	CostAmount *int64
+	Currency   string
+	TaxRateBPS int
 }
 
 // ProductModifier pairs a modifier with a product it is legitimately attached
@@ -105,7 +107,8 @@ const storefrontMenuItemsCTE = `
 	WITH visible_items AS (
 	    SELECT DISTINCT ON (mi.product_id)
 	           mi.product_id,
-	           COALESCE(bpo.price_amount, mi.price_override, p.price_amount) AS price_amount
+	           COALESCE(bpo.price_amount, mi.price_override, p.price_amount) AS price_amount,
+	           COALESCE(bpo.cost_amount, p.cost_amount) AS cost_amount
 	    FROM menu_items mi
 	    JOIN menus    m ON m.id = mi.menu_id
 	    JOIN products p ON p.id = mi.product_id
@@ -239,7 +242,7 @@ func (r *StorefrontMenuRepo) PriceProducts(ctx context.Context, tx pgx.Tx, branc
 	}
 
 	const q = storefrontMenuItemsCTE + `
-		SELECT p.id, p.name, vi.price_amount, p.currency, p.tax_rate_bps
+		SELECT p.id, p.name, vi.price_amount, vi.cost_amount, p.currency, p.tax_rate_bps
 		FROM visible_items vi
 		JOIN products p ON p.id = vi.product_id` +
 		dineInAvailabilityJoin + `
@@ -254,7 +257,7 @@ func (r *StorefrontMenuRepo) PriceProducts(ctx context.Context, tx pgx.Tx, branc
 
 	for rows.Next() {
 		var p PricedProduct
-		if err := rows.Scan(&p.ID, &p.Name, &p.PriceAmount, &p.Currency, &p.TaxRateBPS); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.PriceAmount, &p.CostAmount, &p.Currency, &p.TaxRateBPS); err != nil {
 			return nil, fmt.Errorf("catalog/repo/storefront_menu: price products scan: %w", err)
 		}
 		out[p.ID] = p
@@ -343,6 +346,7 @@ func (r *StorefrontMenuRepo) PriceCatalogProducts(ctx context.Context, tx pgx.Tx
 	const q = `
 		SELECT p.id, p.name,
 		       COALESCE(bpo.price_amount, p.price_amount),
+		       COALESCE(bpo.cost_amount, p.cost_amount),
 		       p.currency, p.tax_rate_bps
 		FROM products p
 		LEFT JOIN branch_product_overrides bpo
@@ -360,7 +364,7 @@ func (r *StorefrontMenuRepo) PriceCatalogProducts(ctx context.Context, tx pgx.Tx
 
 	for rows.Next() {
 		var p PricedProduct
-		if err := rows.Scan(&p.ID, &p.Name, &p.PriceAmount, &p.Currency, &p.TaxRateBPS); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.PriceAmount, &p.CostAmount, &p.Currency, &p.TaxRateBPS); err != nil {
 			return nil, fmt.Errorf("catalog/repo/storefront_menu: price catalog products scan: %w", err)
 		}
 		out[p.ID] = p

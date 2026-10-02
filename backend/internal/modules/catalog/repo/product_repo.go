@@ -23,19 +23,19 @@ func (r *ProductRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Product) (
 	const q = `
 		INSERT INTO products (
 			tenant_id, category_id, name, description, image_key,
-			price_amount, currency, sku, barcode, unit,
+			price_amount, cost_amount, currency, sku, barcode, unit,
 			tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity, sort_order,
 			source_stock_item_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		RETURNING id, tenant_id, category_id, name, COALESCE(description,''), COALESCE(image_key,''),
-		          price_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
+		          price_amount, cost_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
 		          tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		          sort_order, source_stock_item_id, created_at, updated_at`
 
 	row := tx.QueryRow(ctx, q,
 		p.TenantID, p.CategoryID, p.Name,
 		emptyToNil(p.Description), emptyToNil(p.ImageKey),
-		p.PriceAmount, p.Currency,
+		p.PriceAmount, p.CostAmount, p.Currency,
 		emptyToNil(p.SKU), emptyToNil(p.Barcode), p.Unit,
 		p.TaxRateBPS, p.IsActive, p.AutoCloseOnZeroStock, p.StockQuantity, p.SortOrder,
 		p.SourceStockItemID,
@@ -47,7 +47,7 @@ func (r *ProductRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Product) (
 func (r *ProductRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Product, error) {
 	const q = `
 		SELECT id, tenant_id, category_id, name, COALESCE(description,''), COALESCE(image_key,''),
-		       price_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
+		       price_amount, cost_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
 		       tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		       sort_order, source_stock_item_id, created_at, updated_at
 		FROM products WHERE id = $1`
@@ -67,7 +67,7 @@ func (r *ProductRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (dom
 func (r *ProductRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Product, error) {
 	const q = `
 		SELECT id, tenant_id, category_id, name, COALESCE(description,''), COALESCE(image_key,''),
-		       price_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
+		       price_amount, cost_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
 		       tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		       sort_order, source_stock_item_id, created_at, updated_at
 		FROM products
@@ -97,7 +97,7 @@ func (r *ProductRepo) List(ctx context.Context, tx pgx.Tx) ([]domain.Product, er
 func (r *ProductRepo) ListByCategory(ctx context.Context, tx pgx.Tx, categoryID uuid.UUID, includeInactive bool) ([]domain.Product, error) {
 	const q = `
 		SELECT id, tenant_id, category_id, name, COALESCE(description,''), COALESCE(image_key,''),
-		       price_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
+		       price_amount, cost_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
 		       tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		       sort_order, source_stock_item_id, created_at, updated_at
 		FROM products WHERE category_id = $1 AND (is_active OR $2)
@@ -125,19 +125,19 @@ func (r *ProductRepo) Update(ctx context.Context, tx pgx.Tx, p domain.Product) (
 	const q = `
 		UPDATE products SET
 			category_id=$1, name=$2, description=$3, image_key=$4,
-			price_amount=$5, currency=$6, sku=$7, barcode=$8, unit=$9,
-			tax_rate_bps=$10, is_active=$11, auto_close_on_zero_stock=$12,
-			stock_quantity=$13, sort_order=$14, source_stock_item_id=$15, updated_at=NOW()
-		WHERE id=$16
+			price_amount=$5, cost_amount=$6, currency=$7, sku=$8, barcode=$9, unit=$10,
+			tax_rate_bps=$11, is_active=$12, auto_close_on_zero_stock=$13,
+			stock_quantity=$14, sort_order=$15, source_stock_item_id=$16, updated_at=NOW()
+		WHERE id=$17
 		RETURNING id, tenant_id, category_id, name, COALESCE(description,''), COALESCE(image_key,''),
-		          price_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
+		          price_amount, cost_amount, currency, COALESCE(sku,''), COALESCE(barcode,''), unit,
 		          tax_rate_bps, is_active, auto_close_on_zero_stock, stock_quantity,
 		          sort_order, source_stock_item_id, created_at, updated_at`
 
 	row := tx.QueryRow(ctx, q,
 		p.CategoryID, p.Name,
 		emptyToNil(p.Description), emptyToNil(p.ImageKey),
-		p.PriceAmount, p.Currency,
+		p.PriceAmount, p.CostAmount, p.Currency,
 		emptyToNil(p.SKU), emptyToNil(p.Barcode), p.Unit,
 		p.TaxRateBPS, p.IsActive, p.AutoCloseOnZeroStock, p.StockQuantity,
 		p.SortOrder, p.SourceStockItemID, p.ID,
@@ -186,7 +186,7 @@ func scanProduct(row pgx.Row) (domain.Product, error) {
 	err := row.Scan(
 		&p.ID, &p.TenantID, &p.CategoryID,
 		&p.Name, &p.Description, &p.ImageKey,
-		&p.PriceAmount, &p.Currency,
+		&p.PriceAmount, &p.CostAmount, &p.Currency,
 		&p.SKU, &p.Barcode, &p.Unit,
 		&p.TaxRateBPS, &p.IsActive, &p.AutoCloseOnZeroStock, &p.StockQuantity,
 		&p.SortOrder, &p.SourceStockItemID, &createdAt, &updatedAt,

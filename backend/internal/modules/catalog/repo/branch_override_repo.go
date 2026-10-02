@@ -18,7 +18,7 @@ type BranchOverrideRepo struct{}
 // NewBranchOverrideRepo constructs a BranchOverrideRepo for fx injection.
 func NewBranchOverrideRepo() *BranchOverrideRepo { return &BranchOverrideRepo{} }
 
-const branchOverrideColumns = `tenant_id, branch_id, product_id, is_available, price_amount, updated_at`
+const branchOverrideColumns = `tenant_id, branch_id, product_id, is_available, price_amount, cost_amount, updated_at`
 
 // ListByBranch returns every override configured for one branch, newest
 // product order irrelevant — sorted by product id so the response is stable
@@ -38,7 +38,7 @@ func (r *BranchOverrideRepo) ListByBranch(ctx context.Context, tx pgx.Tx, branch
 	var out []domain.BranchProductOverride
 	for rows.Next() {
 		var o domain.BranchProductOverride
-		if err := rows.Scan(&o.TenantID, &o.BranchID, &o.ProductID, &o.IsAvailable, &o.PriceAmount, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.TenantID, &o.BranchID, &o.ProductID, &o.IsAvailable, &o.PriceAmount, &o.CostAmount, &o.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("catalog/repo/branch_override: list by branch scan: %w", err)
 		}
 		out = append(out, o)
@@ -55,17 +55,18 @@ func (r *BranchOverrideRepo) ListByBranch(ctx context.Context, tx pgx.Tx, branch
 // catalog_outbox row written in the same transaction.
 func (r *BranchOverrideRepo) Upsert(ctx context.Context, tx pgx.Tx, o domain.BranchProductOverride) (domain.BranchProductOverride, error) {
 	const q = `
-		INSERT INTO branch_product_overrides (tenant_id, branch_id, product_id, is_available, price_amount, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW())
+		INSERT INTO branch_product_overrides (tenant_id, branch_id, product_id, is_available, price_amount, cost_amount, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW())
 		ON CONFLICT (tenant_id, branch_id, product_id) DO UPDATE
 		SET is_available = EXCLUDED.is_available,
 		    price_amount = EXCLUDED.price_amount,
+		    cost_amount  = EXCLUDED.cost_amount,
 		    updated_at   = NOW()
 		RETURNING ` + branchOverrideColumns
 
-	row := tx.QueryRow(ctx, q, o.TenantID, o.BranchID, o.ProductID, o.IsAvailable, o.PriceAmount)
+	row := tx.QueryRow(ctx, q, o.TenantID, o.BranchID, o.ProductID, o.IsAvailable, o.PriceAmount, o.CostAmount)
 	var saved domain.BranchProductOverride
-	if err := row.Scan(&saved.TenantID, &saved.BranchID, &saved.ProductID, &saved.IsAvailable, &saved.PriceAmount, &saved.UpdatedAt); err != nil {
+	if err := row.Scan(&saved.TenantID, &saved.BranchID, &saved.ProductID, &saved.IsAvailable, &saved.PriceAmount, &saved.CostAmount, &saved.UpdatedAt); err != nil {
 		return domain.BranchProductOverride{}, fmt.Errorf("catalog/repo/branch_override: upsert: %w", err)
 	}
 	return saved, nil
@@ -113,7 +114,7 @@ func (r *BranchOverrideRepo) MapForBranch(ctx context.Context, tx pgx.Tx, branch
 
 	for rows.Next() {
 		var o domain.BranchProductOverride
-		if err := rows.Scan(&o.TenantID, &o.BranchID, &o.ProductID, &o.IsAvailable, &o.PriceAmount, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.TenantID, &o.BranchID, &o.ProductID, &o.IsAvailable, &o.PriceAmount, &o.CostAmount, &o.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("catalog/repo/branch_override: map for branch scan: %w", err)
 		}
 		out[o.ProductID] = o

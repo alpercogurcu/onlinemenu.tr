@@ -152,8 +152,11 @@ type OrderItem struct {
 	TaxRateBPS         int
 	Quantity           int
 	UnitPriceAmount    int64
-	Note               string
-	CreatedAt          time.Time
+	// UnitCostAmount is the cost snapshot (kuruş, excl. VAT) taken at placement;
+	// nil means the cost was unknown then and must never be read as 0.
+	UnitCostAmount *int64
+	Note           string
+	CreatedAt      time.Time
 	// ModifierIDs are the options this line was ordered with
 	// (docs/pos-ux-spec.md §3a). It is both the input OrderService.Place
 	// re-prices the line against — unit_price_amount must equal the product's

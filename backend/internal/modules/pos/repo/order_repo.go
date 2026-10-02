@@ -33,7 +33,7 @@ const orderColumns = `id, tenant_id, branch_id, check_id, order_channel, source,
 // array travels as text both ways and scanOrderItem parses it.
 const orderItemColumns = `id, tenant_id, order_id, product_id, product_name,
 		          product_price_amount, product_currency, tax_rate_bps,
-		          quantity, unit_price_amount, note, seat_no,
+		          quantity, unit_price_amount, unit_cost_amount, note, seat_no,
 		          modifier_ids::text[], created_at`
 
 // uuidStrings renders ids for an `= ANY($n::uuid[])` parameter. They travel
@@ -432,9 +432,9 @@ func (r *OrderRepo) insertItems(ctx context.Context, tx pgx.Tx, orderID, tenantI
 	const q = `
 		INSERT INTO order_items
 		    (tenant_id, order_id, product_id, product_name, product_price_amount,
-		     product_currency, tax_rate_bps, quantity, unit_price_amount, note,
+		     product_currency, tax_rate_bps, quantity, unit_price_amount, unit_cost_amount, note,
 		     seat_no, modifier_ids)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid[])
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::uuid[])
 		RETURNING ` + orderItemColumns
 
 	out := make([]domain.OrderItem, 0, len(items))
@@ -442,7 +442,7 @@ func (r *OrderRepo) insertItems(ctx context.Context, tx pgx.Tx, orderID, tenantI
 		row := tx.QueryRow(ctx, q,
 			tenantID, orderID, item.ProductID, item.ProductName,
 			item.ProductPriceAmount, item.ProductCurrency, item.TaxRateBPS,
-			item.Quantity, item.UnitPriceAmount, item.Note,
+			item.Quantity, item.UnitPriceAmount, item.UnitCostAmount, item.Note,
 			item.SeatNo, uuidStrings(item.ModifierIDs),
 		)
 		oi, err := scanOrderItem(row)
@@ -515,7 +515,7 @@ func scanOrderItem(s interface {
 	if err := s.Scan(
 		&oi.ID, &oi.TenantID, &oi.OrderID, &oi.ProductID,
 		&oi.ProductName, &oi.ProductPriceAmount, &oi.ProductCurrency,
-		&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.Note,
+		&oi.TaxRateBPS, &oi.Quantity, &oi.UnitPriceAmount, &oi.UnitCostAmount, &oi.Note,
 		&oi.SeatNo, &modifierIDs, &oi.CreatedAt,
 	); err != nil {
 		return domain.OrderItem{}, err

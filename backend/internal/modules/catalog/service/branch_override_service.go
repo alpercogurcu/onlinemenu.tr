@@ -83,6 +83,9 @@ func (s *BranchOverrideService) Upsert(ctx context.Context, tenantID uuid.UUID, 
 	if o.PriceAmount != nil && *o.PriceAmount < 0 {
 		return domain.BranchProductOverride{}, &pub.ValidationError{Msg: "price_amount must be >= 0"}
 	}
+	if o.CostAmount != nil && *o.CostAmount < 0 {
+		return domain.BranchProductOverride{}, &pub.ValidationError{Msg: "cost_amount must be >= 0"}
+	}
 	o.TenantID = tenantID
 
 	var saved domain.BranchProductOverride
@@ -136,6 +139,7 @@ func (s *BranchOverrideService) publishChange(ctx context.Context, tx pgx.Tx, o 
 		"product_id":   o.ProductID,
 		"is_available": o.IsAvailable,
 		"price_amount": o.PriceAmount,
+		"cost_amount":  o.CostAmount,
 		"deleted":      deleted,
 	})
 }

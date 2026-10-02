@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"onlinemenu.tr/internal/modules/catalog/domain"
+	pub "onlinemenu.tr/internal/modules/catalog/public"
 	"onlinemenu.tr/internal/modules/catalog/repo"
 	"onlinemenu.tr/internal/platform/db"
 )
@@ -96,6 +97,9 @@ func (s *ProductService) Create(ctx context.Context, tenantID uuid.UUID, p domai
 		return domain.Product{}, err
 	}
 	p.Name = name
+	if p.CostAmount != nil && *p.CostAmount < 0 {
+		return domain.Product{}, &pub.ValidationError{Msg: "cost_amount must be >= 0"}
+	}
 	p.TenantID = tenantID
 	var created domain.Product
 	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -150,6 +154,9 @@ func (s *ProductService) Update(ctx context.Context, tenantID uuid.UUID, p domai
 		return domain.Product{}, err
 	}
 	p.Name = name
+	if p.CostAmount != nil && *p.CostAmount < 0 {
+		return domain.Product{}, &pub.ValidationError{Msg: "cost_amount must be >= 0"}
+	}
 	var updated domain.Product
 	err = s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		existing, err := s.productRepo.GetByID(ctx, tx, p.ID)

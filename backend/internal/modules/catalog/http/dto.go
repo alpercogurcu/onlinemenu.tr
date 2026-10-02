@@ -48,6 +48,7 @@ type productResponse struct {
 	Description       string     `json:"description"`
 	ImageKey          string     `json:"image_key"`
 	PriceAmount       int64      `json:"price_amount"`
+	CostAmount        *int64     `json:"cost_amount"`
 	Currency          string     `json:"currency"`
 	SKU               string     `json:"sku"`
 	Unit              string     `json:"unit"`
@@ -77,6 +78,7 @@ func toProductResponse(p domain.Product) productResponse {
 		Description:       p.Description,
 		ImageKey:          p.ImageKey,
 		PriceAmount:       p.PriceAmount,
+		CostAmount:        p.CostAmount,
 		Currency:          p.Currency,
 		SKU:               p.SKU,
 		Unit:              p.Unit,

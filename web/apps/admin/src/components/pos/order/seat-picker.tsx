@@ -1,6 +1,6 @@
 "use client"
 
-import { Plus } from "lucide-react"
+import { Minus, Plus } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { cn } from "@/lib/utils"
@@ -13,6 +13,11 @@ interface SeatPickerProps {
   active: number
   onSelect: (seat: number) => void
   onAdd: () => void
+  /** "−" en yüksek numaralı kişiyi kaldırır; yalnız o kişi BOŞKEN (sepette
+   * satırı yok, mutfağa gitmiş kaleminde kullanılmamış) izin verilir — dolu
+   * kişiyi silmek satırları sahipsiz bırakırdı. İzin yokken düğme pasiftir. */
+  onRemove: () => void
+  removable: boolean
   className?: string
 }
 
@@ -23,7 +28,7 @@ interface SeatPickerProps {
  * "+" appends the next number and makes it active. 44px touch targets
  * (docs/pos-ux-spec.md); radiogroup so a screen reader announces the choice.
  */
-export function SeatPicker({ count, active, onSelect, onAdd, className }: SeatPickerProps) {
+export function SeatPicker({ count, active, onSelect, onAdd, onRemove, removable, className }: SeatPickerProps) {
   const t = useTranslations("posOrder.seats")
   return (
     <div className={cn("flex items-center gap-3", className)} data-testid="seat-picker">
@@ -53,6 +58,18 @@ export function SeatPicker({ count, active, onSelect, onAdd, className }: SeatPi
             className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-dashed bg-card text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <Plus className="size-5" aria-hidden="true" />
+          </button>
+        )}
+        {count > 1 && (
+          <button
+            type="button"
+            aria-label={t("remove")}
+            disabled={!removable}
+            title={removable ? undefined : t("removeBlocked")}
+            onClick={onRemove}
+            className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-dashed bg-card text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-35"
+          >
+            <Minus className="size-5" aria-hidden="true" />
           </button>
         )}
       </div>

@@ -191,6 +191,24 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
     setActiveSeat(next)
   }
 
+  // "-" yalnız EN YÜKSEK kişiyi ve yalnız boşken kaldırır: sepette o kişiye
+  // yazılmış satır ya da mutfağa gitmiş kalem varsa silmek satırları sahipsiz
+  // bırakırdı (pax da sunucuda o kişiye göre yükselmiş olabilir).
+  const sentMaxSeat = (checkOrdersQuery.data ?? []).reduce(
+    (max, order) => order.items.reduce((m, item) => Math.max(m, item.seat_no ?? 0), max),
+    0,
+  )
+  const topSeatInCart = lines.some((l) => l.seat === seatCount)
+  const seatRemovable = seatCount > 1 && seatCount > sentMaxSeat && !topSeatInCart
+
+  function removeSeat() {
+    if (!seatRemovable) return
+    seatsSeeded.current = true
+    const next = seatCount - 1
+    setSeatCount(next)
+    setActiveSeat((current) => Math.min(current, next))
+  }
+
   function addToCart(product: Product, options?: LineOptions, optionsUnavailable = false) {
     const seat = seatsEnabled ? activeSeat : 0
     editLines((current) =>
@@ -446,7 +464,7 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
           onRetry={() => void send()}
           topRow={
             seatsEnabled ? (
-              <SeatPicker count={seatCount} active={activeSeat} onSelect={selectSeat} onAdd={addSeat} />
+              <SeatPicker count={seatCount} active={activeSeat} onSelect={selectSeat} onAdd={addSeat} onRemove={removeSeat} removable={seatRemovable} />
             ) : undefined
           }
         />
@@ -464,7 +482,7 @@ export function OrderScreen({ branchId, tableId, serviceCheckId, onBackToTables 
         </div>
         {seatsEnabled && (
           <div className="border-b px-4 py-2.5">
-            <SeatPicker count={seatCount} active={activeSeat} onSelect={selectSeat} onAdd={addSeat} />
+            <SeatPicker count={seatCount} active={activeSeat} onSelect={selectSeat} onAdd={addSeat} onRemove={removeSeat} removable={seatRemovable} />
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto px-4">

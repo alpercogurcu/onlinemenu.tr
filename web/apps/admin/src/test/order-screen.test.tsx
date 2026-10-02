@@ -337,6 +337,61 @@ describe("OrderScreen", { timeout: 20_000 }, () => {
     expect(chip(1)).toHaveAttribute("aria-checked", "false")
   })
 
+  const removeSeatBtn = () => screen.queryAllByRole("button", { name: "Kişi çıkar" })[0]
+
+  it("'−' is absent with a single guest; with two it removes the top chip and falls back to guest 1", async () => {
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+    await tile("Ayran")
+    expect(screen.queryAllByRole("button", { name: "Kişi çıkar" })).toHaveLength(0)
+
+    fireEvent.click(addSeatBtn())
+    expect(chip(2)).toHaveAttribute("aria-checked", "true")
+    expect(removeSeatBtn()).toBeEnabled()
+
+    fireEvent.click(removeSeatBtn())
+    expect(screen.queryAllByRole("radio", { name: "Kişi 2" })).toHaveLength(0)
+    expect(chip(1)).toHaveAttribute("aria-checked", "true")
+    expect(screen.queryAllByRole("button", { name: "Kişi çıkar" })).toHaveLength(0)
+  })
+
+  it("'−' is disabled while the top guest has a cart line and re-enables once the line is removed", async () => {
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+    await tile("Ayran")
+    fireEvent.click(addSeatBtn())
+    fireEvent.click(await tile("Ayran"))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("1 kalem"))
+    expect(removeSeatBtn()).toBeDisabled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Ayran satırını sil" }))
+    await waitFor(() => expect(screen.getByTestId("cart-count")).toHaveTextContent("0 kalem"))
+    expect(removeSeatBtn()).toBeEnabled()
+  })
+
+  it("'−' stays disabled for a guest already used by a sent order item (seeded count 3)", async () => {
+    get.mockImplementation((url: string) => {
+      if (url === "/api/v1/pos/tables") {
+        return Promise.resolve({ data: [{ zone_id: "z1", zone_name: "Salon", floor: 0, tables: [{ ...TABLE, status: "occupied", active_check_id: "chk9" }] }] })
+      }
+      if (url === "/api/v1/pos/checks/chk9/orders") {
+        return Promise.resolve({
+          data: [
+            { id: "o1", status: "accepted", items: [
+              { id: "i1", product_id: "ayran", product_name: "Ayran", quantity: 1, unit_price_amount: 4_000, note: "", seat_no: 3 },
+            ] },
+          ],
+        })
+      }
+      return routeGet(url)
+    })
+    render(wrap(<OrderScreen branchId={BRANCH} tableId="t1" onBackToTables={vi.fn()} />))
+    await tile("Ayran")
+
+    await waitFor(() => expect(chip(3)).toHaveAttribute("aria-checked", "true"))
+    expect(removeSeatBtn()).toBeDisabled()
+    fireEvent.click(removeSeatBtn())
+    expect(chip(3)).toBeInTheDocument()
+  })
+
   it("gel al / paket: no guest chips, no badges, items go unassigned (seat_no 0)", async () => {
     post.mockResolvedValue({ data: { id: "o1" } })
     render(wrap(<OrderScreen branchId={BRANCH} serviceCheckId="svc1" onBackToTables={vi.fn()} />))

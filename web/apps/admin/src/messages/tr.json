@@ -732,7 +732,9 @@
     "seats": {
       "label": "Kişi",
       "person": "Kişi {n}",
-      "add": "Kişi ekle"
+      "add": "Kişi ekle",
+      "remove": "Kişi çıkar",
+      "removeBlocked": "Son kişinin kalemleri var — önce taşıyın ya da silin"
     },
     "cart": {
       "title": "Yeni sipariş",

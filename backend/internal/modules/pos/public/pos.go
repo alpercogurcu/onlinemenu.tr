@@ -213,6 +213,26 @@ type CheckWriteGuard interface {
 	CheckTotal(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error)
 }
 
+// RoundingPolicy is a branch's cash-rounding permission (beşli yuvarlama,
+// kasa-rapor-programi G.2) as payment needs it to vet a rounded sale. Plain
+// fields rather than pos/domain's type so the consumer depends on this
+// package alone.
+type RoundingPolicy struct {
+	CashEnabled      bool
+	CardEnabled      bool
+	StepMinor        int64
+	MaxPerCheckMinor int64
+}
+
+// BranchRoundingPolicyReader exposes the branch's rounding policy to payment,
+// which may not read pos_branch_settings itself. A branch with no settings
+// row answers the defaults (rounding off). It is its own interface rather
+// than a CheckWriteGuard method so the sale guard's consumers that never
+// round are not made to implement it.
+type BranchRoundingPolicyReader interface {
+	BranchRoundingPolicy(ctx context.Context, tenantID, branchID uuid.UUID) (RoundingPolicy, error)
+}
+
 // CheckReader allows other modules to read check state without importing POS internals.
 type CheckReader interface {
 	GetByID(ctx context.Context, tenantID, checkID uuid.UUID) (Check, error)

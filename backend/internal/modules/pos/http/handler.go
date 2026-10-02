@@ -760,16 +760,24 @@ func (h *Handler) cancelOrder(w http.ResponseWriter, r *http.Request) {
 // those fields would force the response to distinguish "no row" from
 // "all defaults" — exactly what the lazy-row contract forbids.
 type branchSettingsResponse struct {
-	BranchID             uuid.UUID `json:"branch_id"`
-	WaiterCategoryLayout string    `json:"waiter_category_layout"`
-	OrderFlow            string    `json:"order_flow"`
+	BranchID                 uuid.UUID `json:"branch_id"`
+	WaiterCategoryLayout     string    `json:"waiter_category_layout"`
+	OrderFlow                string    `json:"order_flow"`
+	RoundingCashEnabled      bool      `json:"rounding_cash_enabled"`
+	RoundingCardEnabled      bool      `json:"rounding_card_enabled"`
+	RoundingStepMinor        int64     `json:"rounding_step_minor"`
+	RoundingMaxPerCheckMinor int64     `json:"rounding_max_per_check_minor"`
 }
 
 func toBranchSettingsResponse(s domain.BranchSettings) branchSettingsResponse {
 	return branchSettingsResponse{
-		BranchID:             s.BranchID,
-		WaiterCategoryLayout: string(s.WaiterCategoryLayout),
-		OrderFlow:            string(s.OrderFlow),
+		BranchID:                 s.BranchID,
+		WaiterCategoryLayout:     string(s.WaiterCategoryLayout),
+		OrderFlow:                string(s.OrderFlow),
+		RoundingCashEnabled:      s.Rounding.CashEnabled,
+		RoundingCardEnabled:      s.Rounding.CardEnabled,
+		RoundingStepMinor:        s.Rounding.StepMinor,
+		RoundingMaxPerCheckMinor: s.Rounding.MaxPerCheckMinor,
 	}
 }
 
@@ -806,9 +814,13 @@ func (h *Handler) putBranchSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		BranchID             uuid.UUID `json:"branch_id"`
-		WaiterCategoryLayout *string   `json:"waiter_category_layout"`
-		OrderFlow            *string   `json:"order_flow"`
+		BranchID                 uuid.UUID `json:"branch_id"`
+		WaiterCategoryLayout     *string   `json:"waiter_category_layout"`
+		OrderFlow                *string   `json:"order_flow"`
+		RoundingCashEnabled      *bool     `json:"rounding_cash_enabled"`
+		RoundingCardEnabled      *bool     `json:"rounding_card_enabled"`
+		RoundingStepMinor        *int64    `json:"rounding_step_minor"`
+		RoundingMaxPerCheckMinor *int64    `json:"rounding_max_per_check_minor"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -819,7 +831,14 @@ func (h *Handler) putBranchSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	set := service.SetBranchSettingsRequest{BranchID: req.BranchID, UpdatedBy: p.PersonID}
+	set := service.SetBranchSettingsRequest{
+		BranchID:            req.BranchID,
+		RoundingCashEnabled: req.RoundingCashEnabled,
+		RoundingCardEnabled: req.RoundingCardEnabled,
+		RoundingStepMinor:   req.RoundingStepMinor,
+		RoundingMaxPerCheck: req.RoundingMaxPerCheckMinor,
+		UpdatedBy:           p.PersonID,
+	}
 	if req.WaiterCategoryLayout != nil {
 		layout := domain.WaiterCategoryLayout(*req.WaiterCategoryLayout)
 		set.WaiterCategoryLayout = &layout
@@ -1356,6 +1375,11 @@ func (h *Handler) error(w http.ResponseWriter, _ *http.Request, err error) {
 			"order_flow must be full or simple")
 		return
 	}
+	if errors.Is(err, service.ErrInvalidRounding) {
+		respondError(w, http.StatusUnprocessableEntity, codeInvalidRounding,
+			"rounding_step_minor must be 50, 100, 500 or 1000 and rounding_max_per_check_minor between 0 and 10000")
+		return
+	}
 	if errors.Is(err, service.ErrInvalidServiceType) {
 		respondError(w, http.StatusUnprocessableEntity, codeInvalidServiceType, "invalid service_type")
 		return
@@ -1470,6 +1494,7 @@ const (
 	codeInvalidBranchID       = "invalid_branch_id"
 	codeInvalidCategoryLayout = "invalid_waiter_category_layout"
 	codeInvalidOrderFlow      = "invalid_order_flow"
+	codeInvalidRounding       = "invalid_rounding"
 	codeInvalidRange          = "invalid_range"
 	codeRangeTooLong          = "range_too_long"
 	codeInvalidTimezone       = "invalid_tz"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -19,7 +20,9 @@ type BranchSettingsRepo struct{}
 
 func NewBranchSettingsRepo() *BranchSettingsRepo { return &BranchSettingsRepo{} }
 
-const branchSettingsColumns = `tenant_id, branch_id, waiter_category_layout, order_flow, updated_by, created_at, updated_at`
+const branchSettingsColumns = `tenant_id, branch_id, waiter_category_layout, order_flow,
+	rounding_cash_enabled, rounding_card_enabled, rounding_step_minor, rounding_max_per_check_minor,
+	updated_by, created_at, updated_at`
 
 // GetByBranch returns the branch's settings row, or ErrNotFound when none
 // exists yet. Callers translate ErrNotFound into the defaults.
@@ -55,6 +58,22 @@ func (r *BranchSettingsRepo) OrderFlowByBranch(ctx context.Context, tx pgx.Tx, b
 	return domain.OrderFlow(flow), nil
 }
 
+// RoundingPolicyByBranch is the narrow read payment's sale guard takes
+// (pos/public.BranchRoundingPolicyReader). A branch without a row answers the
+// defaults — rounding off — so "row missing" can never read as permission.
+func (r *BranchSettingsRepo) RoundingPolicyByBranch(ctx context.Context, tx pgx.Tx, branchID uuid.UUID) (domain.RoundingPolicy, error) {
+	const q = `SELECT rounding_cash_enabled, rounding_card_enabled, rounding_step_minor, rounding_max_per_check_minor
+		FROM pos_branch_settings WHERE branch_id = $1`
+	var p domain.RoundingPolicy
+	if err := tx.QueryRow(ctx, q, branchID).Scan(&p.CashEnabled, &p.CardEnabled, &p.StepMinor, &p.MaxPerCheckMinor); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.DefaultRoundingPolicy(), nil
+		}
+		return domain.RoundingPolicy{}, fmt.Errorf("pos/repo/branch_settings: rounding policy by branch: %w", err)
+	}
+	return p, nil
+}
+
 // BranchSettingsPatch is Upsert's input: nil means "field not supplied, keep
 // the row's current value — or the default when the upsert creates the row",
 // matching ZonePatch/TablePatch's pointer-field convention.
@@ -63,6 +82,10 @@ type BranchSettingsPatch struct {
 	BranchID             uuid.UUID
 	WaiterCategoryLayout *domain.WaiterCategoryLayout
 	OrderFlow            *domain.OrderFlow
+	RoundingCashEnabled  *bool
+	RoundingCardEnabled  *bool
+	RoundingStepMinor    *int64
+	RoundingMaxPerCheck  *int64
 	UpdatedBy            uuid.UUID
 }
 
@@ -78,20 +101,30 @@ type BranchSettingsPatch struct {
 func (r *BranchSettingsRepo) Upsert(ctx context.Context, tx pgx.Tx, p BranchSettingsPatch) (domain.BranchSettings, error) {
 	defaults := domain.DefaultBranchSettings(p.TenantID, p.BranchID)
 	q := `
-		INSERT INTO pos_branch_settings (tenant_id, branch_id, waiter_category_layout, order_flow, updated_by)
+		INSERT INTO pos_branch_settings (tenant_id, branch_id, waiter_category_layout, order_flow,
+		        rounding_cash_enabled, rounding_card_enabled, rounding_step_minor, rounding_max_per_check_minor,
+		        updated_by)
 		VALUES ($1, $2,
 		        COALESCE($3, '` + string(defaults.WaiterCategoryLayout) + `'),
 		        COALESCE($4, '` + string(defaults.OrderFlow) + `'),
+		        COALESCE($6::boolean, ` + strconv.FormatBool(defaults.Rounding.CashEnabled) + `),
+		        COALESCE($7::boolean, ` + strconv.FormatBool(defaults.Rounding.CardEnabled) + `),
+		        COALESCE($8::int, ` + strconv.FormatInt(defaults.Rounding.StepMinor, 10) + `),
+		        COALESCE($9::int, ` + strconv.FormatInt(defaults.Rounding.MaxPerCheckMinor, 10) + `),
 		        $5)
 		ON CONFLICT (branch_id) DO UPDATE
-		SET waiter_category_layout = COALESCE($3, pos_branch_settings.waiter_category_layout),
-		    order_flow             = COALESCE($4, pos_branch_settings.order_flow),
-		    updated_by             = $5,
-		    updated_at             = NOW()
+		SET waiter_category_layout       = COALESCE($3, pos_branch_settings.waiter_category_layout),
+		    order_flow                   = COALESCE($4, pos_branch_settings.order_flow),
+		    rounding_cash_enabled        = COALESCE($6::boolean, pos_branch_settings.rounding_cash_enabled),
+		    rounding_card_enabled        = COALESCE($7::boolean, pos_branch_settings.rounding_card_enabled),
+		    rounding_step_minor          = COALESCE($8::int, pos_branch_settings.rounding_step_minor),
+		    rounding_max_per_check_minor = COALESCE($9::int, pos_branch_settings.rounding_max_per_check_minor),
+		    updated_by                   = $5,
+		    updated_at                   = NOW()
 		RETURNING ` + branchSettingsColumns
-
 	saved, err := scanBranchSettings(tx.QueryRow(ctx, q,
 		p.TenantID, p.BranchID, layoutParam(p.WaiterCategoryLayout), flowParam(p.OrderFlow), p.UpdatedBy,
+		p.RoundingCashEnabled, p.RoundingCardEnabled, p.RoundingStepMinor, p.RoundingMaxPerCheck,
 	))
 	if err != nil {
 		return domain.BranchSettings{}, fmt.Errorf("pos/repo/branch_settings: upsert: %w", err)
@@ -126,7 +159,9 @@ func scanBranchSettings(s interface {
 	var out domain.BranchSettings
 	var layout, flow string
 	if err := s.Scan(
-		&out.TenantID, &out.BranchID, &layout, &flow, &out.UpdatedBy, &out.CreatedAt, &out.UpdatedAt,
+		&out.TenantID, &out.BranchID, &layout, &flow,
+		&out.Rounding.CashEnabled, &out.Rounding.CardEnabled, &out.Rounding.StepMinor, &out.Rounding.MaxPerCheckMinor,
+		&out.UpdatedBy, &out.CreatedAt, &out.UpdatedAt,
 	); err != nil {
 		return domain.BranchSettings{}, err
 	}

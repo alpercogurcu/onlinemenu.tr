@@ -38,7 +38,8 @@ var Module = fx.Module("pos",
 		// comment).
 		fx.Annotate(service.NewCheckReadService,
 			fx.As(new(pub.CheckReader)),
-			fx.As(new(pub.CheckWriteGuard))),
+			fx.As(new(pub.CheckWriteGuard)),
+			fx.As(new(pub.BranchRoundingPolicyReader))),
 		// Guest (QR) entry points — ADR-ARCH-006 §8. Three narrow interfaces
 		// instead of one wide one: the storefront's session guard needs only
 		// the table read, its polling endpoint only the order read, and only

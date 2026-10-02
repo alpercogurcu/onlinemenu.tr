@@ -60,6 +60,7 @@ type BranchSettings struct {
 	BranchID             uuid.UUID
 	WaiterCategoryLayout WaiterCategoryLayout
 	OrderFlow            OrderFlow
+	Rounding             RoundingPolicy
 	UpdatedBy            uuid.UUID
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
@@ -75,5 +76,37 @@ func DefaultBranchSettings(tenantID, branchID uuid.UUID) BranchSettings {
 		BranchID:             branchID,
 		WaiterCategoryLayout: WaiterCategoryLayoutTop,
 		OrderFlow:            OrderFlowFull,
+		Rounding:             DefaultRoundingPolicy(),
 	}
+}
+
+// RoundingStepsMinor are the rounding steps a branch may pick, in kuruş
+// (₺0,50 / ₺1 / ₺5 / ₺10). Mirrors the pos_branch_settings CHECK constraint.
+var RoundingStepsMinor = []int64{50, 100, 500, 1000}
+
+// ValidRoundingStep reports whether step is one of RoundingStepsMinor.
+func ValidRoundingStep(step int64) bool {
+	for _, s := range RoundingStepsMinor {
+		if s == step {
+			return true
+		}
+	}
+	return false
+}
+
+// RoundingPolicy is the branch's permission for cash rounding (beşli
+// yuvarlama): which payment methods may round the final remainder down, to
+// which step, and how much a single check may be conceded in total. The
+// cashier applies it per payment; nothing rounds automatically.
+type RoundingPolicy struct {
+	CashEnabled      bool
+	CardEnabled      bool
+	StepMinor        int64
+	MaxPerCheckMinor int64
+}
+
+// DefaultRoundingPolicy is rounding switched off, matching the column
+// defaults of pos/000014.
+func DefaultRoundingPolicy() RoundingPolicy {
+	return RoundingPolicy{StepMinor: 500, MaxPerCheckMinor: 1000}
 }

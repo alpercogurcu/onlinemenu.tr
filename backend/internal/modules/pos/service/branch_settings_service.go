@@ -24,6 +24,16 @@ var ErrInvalidWaiterCategoryLayout = errors.New("pos/service/branch_settings: in
 // is present but not one of full/simple. HTTP maps it to 422.
 var ErrInvalidOrderFlow = errors.New("pos/service/branch_settings: invalid order_flow")
 
+// ErrInvalidRounding is returned by BranchSettingsService.Set when a rounding
+// field is present but out of range (a step outside 50/100/500/1000 kuruş, or
+// a negative per-check ceiling). HTTP maps it to 422.
+var ErrInvalidRounding = errors.New("pos/service/branch_settings: invalid rounding setting")
+
+// maxRoundingPerCheckMinor caps the per-check rounding ceiling at ₺100. The
+// column is an INT, and rounding is a kuruş-level courtesy: a ceiling above
+// this is a typo, not a policy.
+const maxRoundingPerCheckMinor = 10000
+
 // BranchSettingsService owns per-branch POS preferences (pos_branch_settings).
 //
 // The settings row is created lazily: Get never writes, so a branch that was
@@ -84,6 +94,10 @@ type SetBranchSettingsRequest struct {
 	BranchID             uuid.UUID
 	WaiterCategoryLayout *domain.WaiterCategoryLayout
 	OrderFlow            *domain.OrderFlow
+	RoundingCashEnabled  *bool
+	RoundingCardEnabled  *bool
+	RoundingStepMinor    *int64
+	RoundingMaxPerCheck  *int64
 	UpdatedBy            uuid.UUID
 }
 
@@ -101,6 +115,12 @@ func (s *BranchSettingsService) Set(ctx context.Context, tenantID uuid.UUID, pri
 	if req.OrderFlow != nil && !req.OrderFlow.Valid() {
 		return domain.BranchSettings{}, fmt.Errorf("%q: %w", *req.OrderFlow, ErrInvalidOrderFlow)
 	}
+	if req.RoundingStepMinor != nil && !domain.ValidRoundingStep(*req.RoundingStepMinor) {
+		return domain.BranchSettings{}, fmt.Errorf("rounding_step_minor %d: %w", *req.RoundingStepMinor, ErrInvalidRounding)
+	}
+	if req.RoundingMaxPerCheck != nil && (*req.RoundingMaxPerCheck < 0 || *req.RoundingMaxPerCheck > maxRoundingPerCheckMinor) {
+		return domain.BranchSettings{}, fmt.Errorf("rounding_max_per_check_minor %d: %w", *req.RoundingMaxPerCheck, ErrInvalidRounding)
+	}
 
 	var saved domain.BranchSettings
 	err := s.db.WithTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -110,6 +130,10 @@ func (s *BranchSettingsService) Set(ctx context.Context, tenantID uuid.UUID, pri
 			BranchID:             req.BranchID,
 			WaiterCategoryLayout: req.WaiterCategoryLayout,
 			OrderFlow:            req.OrderFlow,
+			RoundingCashEnabled:  req.RoundingCashEnabled,
+			RoundingCardEnabled:  req.RoundingCardEnabled,
+			RoundingStepMinor:    req.RoundingStepMinor,
+			RoundingMaxPerCheck:  req.RoundingMaxPerCheck,
 			UpdatedBy:            req.UpdatedBy,
 		})
 		return err

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,6 +29,7 @@ import (
 type CheckReadService struct {
 	db        *db.Pool
 	checkRepo *repo.CheckRepo
+	settings  *repo.BranchSettingsRepo
 }
 
 // CheckReadParams groups fx-injected dependencies.
@@ -36,10 +38,17 @@ type CheckReadParams struct {
 
 	DB        *db.Pool
 	CheckRepo *repo.CheckRepo
+	// Optional so test literals that predate the rounding policy keep
+	// compiling; the repo is stateless, so a fresh one is equivalent.
+	Settings *repo.BranchSettingsRepo `optional:"true"`
 }
 
 func NewCheckReadService(p CheckReadParams) *CheckReadService {
-	return &CheckReadService{db: p.DB, checkRepo: p.CheckRepo}
+	settings := p.Settings
+	if settings == nil {
+		settings = repo.NewBranchSettingsRepo()
+	}
+	return &CheckReadService{db: p.DB, checkRepo: p.CheckRepo, settings: settings}
 }
 
 // GetByID returns a cross-module projection of a check (pub.CheckReader).
@@ -103,9 +112,31 @@ func (s *CheckReadService) CheckTotal(ctx context.Context, tenantID, checkID uui
 	return total, nil
 }
 
+// BranchRoundingPolicy implements pub.BranchRoundingPolicyReader. It lives
+// on this type for the same fx-cycle reason as the guard: payment consumes
+// it, and this service depends on nothing that depends on payment.
+func (s *CheckReadService) BranchRoundingPolicy(ctx context.Context, tenantID, branchID uuid.UUID) (pub.RoundingPolicy, error) {
+	var p domain.RoundingPolicy
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		p, err = s.settings.RoundingPolicyByBranch(ctx, tx, branchID)
+		return err
+	})
+	if err != nil {
+		return pub.RoundingPolicy{}, fmt.Errorf("pos/service/check-read: branch rounding policy: %w", err)
+	}
+	return pub.RoundingPolicy{
+		CashEnabled:      p.CashEnabled,
+		CardEnabled:      p.CardEnabled,
+		StepMinor:        p.StepMinor,
+		MaxPerCheckMinor: p.MaxPerCheckMinor,
+	}, nil
+}
+
 var (
-	_ pub.CheckReader     = (*CheckReadService)(nil)
-	_ pub.CheckWriteGuard = (*CheckReadService)(nil)
+	_ pub.CheckReader                = (*CheckReadService)(nil)
+	_ pub.CheckWriteGuard            = (*CheckReadService)(nil)
+	_ pub.BranchRoundingPolicyReader = (*CheckReadService)(nil)
 )
 
 // assertCheckWritable decides whether anything may still be attached to c.

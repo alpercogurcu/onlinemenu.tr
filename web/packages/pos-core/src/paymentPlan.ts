@@ -19,6 +19,8 @@ export type PayableItem = {
   quantity: number
   /** Option-inclusive unit price (see options.ts's unitPriceWith). */
   unitPrice: number
+  /** Guest (kuver) number; 0 = unassigned / shared. */
+  seat: number
 }
 
 /** Narrow shape this module needs from an order — declared locally rather than
@@ -32,6 +34,8 @@ export type OrderSource = {
     quantity: number
     unit_price_amount: number
     note: string
+    /** Optional so an order decoded by an older binding reads as unassigned. */
+    seat_no?: number
   }[]
 }
 
@@ -53,12 +57,22 @@ export function payableItems(orders: readonly OrderSource[]): PayableItem[] {
       note: it.note,
       quantity: it.quantity,
       unitPrice: it.unit_price_amount,
+      seat: it.seat_no && it.seat_no > 0 ? it.seat_no : 0,
     })),
   )
 }
 
+/** Units of one order item a payment covers. */
+export type ItemQty = { id: string; qty: number }
+
+/** Units selected for the next payment, per order-item id. Absent = none. */
+export type PaySelection = ReadonlyMap<string, number>
+
+/** Units already paid by an item payment, per order-item id. */
+export type PaidQty = ReadonlyMap<string, number>
+
 /**
- * Narrow shape itemsPaidBy needs from a tracked payment. Declared locally so
+ * Narrow shape paidQtyBy needs from a tracked payment. Declared locally so
  * this package does not depend on any one app's fuller fiscal-tracking model
  * (e.g. pos-desktop's lib/fiscalStatus.ts, which additionally models the
  * async fiscal-registration lifecycle — pending/completed/failed/voided/
@@ -67,38 +81,117 @@ export function payableItems(orders: readonly OrderSource[]): PayableItem[] {
  */
 export type PaymentStatusSource = {
   status: string
-  itemIds?: string[]
+  items?: readonly ItemQty[]
 }
 
 /**
- * Items already covered by an item payment made from this station. Only
- * payments that still hold or have settled money count: a failed or voided one
- * releases its items, exactly as it releases its amount (see the caller's
- * fiscal-status module).
+ * Units covered by item payments made from this station. Only payments that
+ * still hold or have settled money count: a failed or voided one releases its
+ * units, exactly as it releases its amount (see the caller's fiscal-status
+ * module).
  *
  * This lives in memory only. After an app restart every item reads as unpaid
  * again while the money balance stays right (it is derived from the server) —
- * the accepted residual risk of docs/pos-ux-spec.md §3b; a server-side
- * per-item paid amount is the Faz-2 answer.
+ * the accepted residual risk of docs/pos-ux-spec.md §3b; server-side item
+ * allocations are the Faz-2 answer (docs/plans/2026-10-02-kasa-rapor-programi.md G.1).
  */
-export function itemsPaidBy(tracked: readonly PaymentStatusSource[]): Set<string> {
-  const paid = new Set<string>()
+export function paidQtyBy(tracked: readonly PaymentStatusSource[]): Map<string, number> {
+  const paid = new Map<string, number>()
   for (const payment of tracked) {
     if (payment.status === 'failed' || payment.status === 'voided') continue
-    for (const id of payment.itemIds ?? []) paid.add(id)
+    for (const { id, qty } of payment.items ?? []) {
+      if (qty > 0) paid.set(id, (paid.get(id) ?? 0) + qty)
+    }
   }
   return paid
 }
 
-export function unpaidItems(items: readonly PayableItem[], paid: ReadonlySet<string>): PayableItem[] {
-  return items.filter((item) => !paid.has(item.id))
+export function paidUnits(item: PayableItem, paid: PaidQty): number {
+  return Math.min(item.quantity, paid.get(item.id) ?? 0)
 }
 
-export function selectionTotal(items: readonly PayableItem[], selected: ReadonlySet<string>): number {
-  return items.reduce((sum, item) => (selected.has(item.id) ? sum + itemTotal(item) : sum), 0)
+/** Units of the item still open for an item payment. */
+export function unpaidUnits(item: PayableItem, paid: PaidQty): number {
+  return Math.max(0, item.quantity - (paid.get(item.id) ?? 0))
+}
+
+/** Selected units of the item, never more than are still unpaid — a stale
+ * entry (a unit a just-registered payment took, an order refetch) must not be
+ * charged twice. */
+export function selectedUnits(item: PayableItem, paid: PaidQty, selection: PaySelection): number {
+  return Math.max(0, Math.min(selection.get(item.id) ?? 0, unpaidUnits(item, paid)))
+}
+
+/** Every item reduced to its unpaid units; fully paid ones dropped. */
+export function unpaidItems(items: readonly PayableItem[], paid: PaidQty): PayableItem[] {
+  return withQuantities(items, (item) => unpaidUnits(item, paid))
+}
+
+/** The selection as items carrying only the selected units — what an item
+ * payment covers and the fiscal lines are built from. */
+export function selectedItems(items: readonly PayableItem[], paid: PaidQty, selection: PaySelection): PayableItem[] {
+  return withQuantities(items, (item) => selectedUnits(item, paid, selection))
+}
+
+function withQuantities(items: readonly PayableItem[], quantityOf: (item: PayableItem) => number): PayableItem[] {
+  return items.flatMap((item) => {
+    const quantity = quantityOf(item)
+    return quantity > 0 ? [{ ...item, quantity }] : []
+  })
+}
+
+export function selectionTotal(items: readonly PayableItem[], paid: PaidQty, selection: PaySelection): number {
+  return selectedItems(items, paid, selection).reduce((sum, item) => sum + itemTotal(item), 0)
+}
+
+/** What the request records as paid by an item payment. */
+export function selectionAllocations(items: readonly PayableItem[], paid: PaidQty, selection: PaySelection): ItemQty[] {
+  return selectedItems(items, paid, selection).map((item) => ({ id: item.id, qty: item.quantity }))
+}
+
+export function selectedUnitCount(items: readonly PayableItem[], paid: PaidQty, selection: PaySelection): number {
+  return selectedItems(items, paid, selection).reduce((sum, item) => sum + item.quantity, 0)
+}
+
+/** The selection with one item set to `qty` units (0 removes it). */
+export function withSelectedQty(selection: PaySelection, id: string, qty: number): PaySelection {
+  const next = new Map(selection)
+  if (qty > 0) next.set(id, qty)
+  else next.delete(id)
+  return next
+}
+
+/** A tap on a row adds one unit; past the last unpaid one it wraps to none
+ * (1/2 → 2/2 → 0). A single-unit row therefore just toggles. */
+export function tapUnits(current: number, available: number): number {
+  if (available <= 0) return 0
+  return current >= available ? 0 : current + 1
+}
+
+/** The row stepper: ±1 within 0..available. */
+export function stepUnits(current: number, available: number, delta: number): number {
+  return Math.max(0, Math.min(available, current + delta))
 }
 
 export type DueMode = 'full' | 'split' | 'items' | 'custom'
+
+/**
+ * The items one payment's fiscal lines are built from. An item payment covers
+ * exactly the selected units, so its total equals the amount and the lines go
+ * out as they are; an amount-based payment (full/split/custom) covers the
+ * still-unpaid units — or every item when this station tracked none — and
+ * paymentLines.ts shares the amount across them.
+ */
+export function coveredItems(
+  mode: DueMode,
+  items: readonly PayableItem[],
+  paid: PaidQty,
+  selection: PaySelection,
+): PayableItem[] {
+  if (mode === 'items') return selectedItems(items, paid, selection)
+  const unpaid = unpaidItems(items, paid)
+  return unpaid.length > 0 ? unpaid : [...items]
+}
 
 export type DueInput = {
   mode: DueMode

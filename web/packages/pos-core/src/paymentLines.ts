@@ -7,8 +7,10 @@
 // items selected for a separate payment — cannot simply send every item.
 //
 // - Amount equals the items' total: the items go as they are (real quantity
-//   and unit price).
-// - Anything else: the amount is shared across the items in proportion to what
+//   and unit price). An item payment lands here — it covers the selected
+//   units, whose total is the amount (paymentPlan.ts coveredItems).
+// - Anything else (an amount-based payment, or a selection capped at what the
+//   check still owes): the amount is shared across the items in proportion to what
 //   they cost (largest-remainder, so not a kuruş is lost) and each item goes as
 //   one unit at its allocated price. The receipt then shows "Lahmacun 1 × ₺45"
 //   rather than "2 × ₺65"; the fiscal total is right, which is what the device

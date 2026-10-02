@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { buildPaymentLines, lineTotal, type PaymentLine } from './paymentLines'
-import type { PayableItem } from './paymentPlan'
+import { coveredItems, dueFor, selectionTotal, type PayableItem } from './paymentPlan'
 
 function item(id: string, name: string, quantity: number, unitPrice: number): PayableItem {
-  return { id, productId: `p-${id}`, name, note: '', quantity, unitPrice }
+  return { id, productId: `p-${id}`, name, note: '', quantity, unitPrice, seat: 0 }
 }
 
 const lahmacun = item('1', 'Lahmacun', 2, 6500) // 13000
@@ -61,5 +61,72 @@ describe('buildPaymentLines', () => {
     const items = [lahmacun, cay]
     buildPaymentLines(items, 5000)
     expect(items[0].unitPrice).toBe(6500)
+  })
+})
+
+describe('buildPaymentLines from the payment screen', () => {
+  const items = [lahmacun, cay, ayran] // 13000 + 1500 + 4500 = 19000
+  const none = new Map<string, number>()
+
+  function linesFor(
+    mode: 'full' | 'items' | 'custom',
+    remaining: number,
+    selection: Map<string, number>,
+    paid: Map<string, number> = none,
+    customDue = 0,
+  ) {
+    const selectedTotal = selectionTotal(items, paid, selection)
+    const due = dueFor({ mode, remaining, splitParts: 2, selectedTotal, customDue })
+    return { due, lines: buildPaymentLines(coveredItems(mode, items, paid, selection), due) }
+  }
+
+  it.each([
+    {
+      name: 'one of two lahmacun',
+      selection: [['1', 1]] as [string, number][],
+      expected: [{ product_id: 'p-1', name: 'Lahmacun', unit_price_minor: 6500, quantity_milli: 1000 }],
+    },
+    {
+      name: 'both lahmacun and two of three ayran',
+      selection: [['1', 2], ['3', 2]] as [string, number][],
+      expected: [
+        { product_id: 'p-1', name: 'Lahmacun', unit_price_minor: 6500, quantity_milli: 2000 },
+        { product_id: 'p-3', name: 'Ayran', unit_price_minor: 1500, quantity_milli: 2000 },
+      ],
+    },
+  ])('an item selection goes out with real names, units and unit prices: $name', ({ selection, expected }) => {
+    const { due, lines } = linesFor('items', 19000, new Map(selection))
+    expect(lines).toEqual(expected)
+    expect(sum(lines)).toBe(due)
+  })
+
+  it('the remaining unit of a partly paid row is charged at its real unit price', () => {
+    const { lines } = linesFor('items', 6500 + 1500 + 4500, new Map([['1', 2]]), new Map([['1', 1]]))
+    expect(lines).toEqual([{ product_id: 'p-1', name: 'Lahmacun', unit_price_minor: 6500, quantity_milli: 1000 }])
+  })
+
+  it('a selection above what the check still owes is capped and only then shared out proportionally', () => {
+    // An earlier amount payment this station did not tie to items left 10000 owed.
+    const { due, lines } = linesFor('items', 10000, new Map([['1', 2]]))
+    expect(due).toBe(10000)
+    expect(lines).toEqual([{ product_id: 'p-1', name: 'Lahmacun', unit_price_minor: 10000, quantity_milli: 1000 }])
+  })
+
+  it('an amount-based payment is still shared across the unpaid units', () => {
+    const { due, lines } = linesFor('custom', 19000, none, new Map([['1', 2]]), 3000)
+    expect(due).toBe(3000)
+    expect(lines.map((l) => l.product_id)).toEqual(['p-2', 'p-3'])
+    expect(lines.every((l) => l.quantity_milli === 1000)).toBe(true)
+    expect(sum(lines)).toBe(3000)
+  })
+
+  it('"Tümü" after a partial item payment covers exactly the unpaid units, unsplit', () => {
+    const { due, lines } = linesFor('full', 6500 + 1500 + 4500, none, new Map([['1', 1]]))
+    expect(due).toBe(12500)
+    expect(lines).toEqual([
+      { product_id: 'p-1', name: 'Lahmacun', unit_price_minor: 6500, quantity_milli: 1000 },
+      { product_id: 'p-2', name: 'Çay', unit_price_minor: 1500, quantity_milli: 1000 },
+      { product_id: 'p-3', name: 'Ayran', unit_price_minor: 1500, quantity_milli: 3000 },
+    ])
   })
 })

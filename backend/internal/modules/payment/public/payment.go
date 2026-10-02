@@ -73,6 +73,15 @@ var ErrCheckNotFound = errors.New("payment: check not found")
 // full. Callers map it to HTTP 409 with code "payment_exceeds_due".
 var ErrPaymentExceedsDue = errors.New("payment: amount exceeds what the check still owes")
 
+// ErrRoundingNotAllowed is returned by PaymentService.RegisterSale when a
+// sale asks for a rounding concession (beşli yuvarlama) the branch's policy
+// or the check's state does not allow: rounding off for the method, a
+// concession not below the step, an amount that is not a step multiple, a
+// payment that does not exactly close the remainder, the per-check ceiling
+// exceeded, no check, or a fiscal adapter whose discount handling is not yet
+// confirmed. Callers map it to HTTP 422 with code "rounding_not_allowed".
+var ErrRoundingNotAllowed = errors.New("payment: rounding not allowed for this payment")
+
 // ErrCashSessionClosed is returned by CashSessionPinService.Join/Switch when
 // the target session is not open (ADR-DATA-008 PIN akışı §4: participation
 // and switching only make sense against an open drawer). Callers map it to

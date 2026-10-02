@@ -28,6 +28,7 @@ type PaymentService struct {
 	statusRepo     *repo.FiscalStatusRepo
 	sessionRepo    *repo.CashSessionRepo
 	checks         pospub.CheckWriteGuard
+	rounding       pospub.BranchRoundingPolicyReader
 	fiscal         domain.FiscalDeviceAdapter
 	adapterType    string
 	logger         *zap.Logger
@@ -49,8 +50,13 @@ type Params struct {
 	// it nil, in which case a sale naming a check_id is refused rather than
 	// silently unguarded — see RegisterSale.
 	Checks pospub.CheckWriteGuard
-	Fiscal domain.FiscalDeviceAdapter
-	Logger *zap.Logger
+	// Rounding reads the branch's cash-rounding policy from pos (beşli
+	// yuvarlama). Required in the fx graph so a wiring miss fails at startup;
+	// tests that build Params by hand and never round may leave it nil — a
+	// rounded sale then fails closed as a server fault, never unvetted.
+	Rounding pospub.BranchRoundingPolicyReader
+	Fiscal   domain.FiscalDeviceAdapter
+	Logger   *zap.Logger
 }
 
 func NewPaymentService(p Params) *PaymentService {
@@ -61,6 +67,7 @@ func NewPaymentService(p Params) *PaymentService {
 		statusRepo:     p.StatusRepo,
 		sessionRepo:    p.SessionRepo,
 		checks:         p.Checks,
+		rounding:       p.Rounding,
 		fiscal:         p.Fiscal,
 		adapterType:    adapterTypeOf(p.Fiscal),
 		logger:         p.Logger,
@@ -94,6 +101,10 @@ type RegisterSaleRequest struct {
 	IdempotencyKey string
 	Method         domain.PaymentMethod
 	AmountTotal    int64
+	// RoundingAmount is the cash-rounding concession (beşli yuvarlama): the
+	// check is settled by AmountTotal + RoundingAmount while AmountTotal is
+	// what the customer pays. Zero for an ordinary payment.
+	RoundingAmount int64
 	Currency       string
 	Lines          []domain.FiscalLine
 	Meta           domain.FiscalMeta
@@ -138,6 +149,9 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 	if req.AmountTotal <= 0 {
 		return domain.Payment{}, fmt.Errorf("%w: amount_total must be positive", pub.ErrInvalidInput)
 	}
+	if req.RoundingAmount < 0 {
+		return domain.Payment{}, fmt.Errorf("%w: rounding_amount must not be negative", pub.ErrInvalidInput)
+	}
 	if req.Currency == "" {
 		req.Currency = "TRY"
 	}
@@ -163,6 +177,13 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 	// overpayment through. The double charge this guards against is still
 	// closed, because two racing stations read the same total and the lock
 	// makes the second one count the first one's payment.
+	// Same read-outside, apply-inside split as the check verdict: a replay of
+	// a rounded payment must keep returning it even after an admin switched
+	// rounding off.
+	roundingVerdict, roundingPolicy, err := s.roundingVerdictFor(ctx, req)
+	if err != nil {
+		return domain.Payment{}, err
+	}
 	var checkTotal int64
 	if checkVerdict == nil && hasCheck(req) {
 		if checkTotal, err = s.checks.CheckTotal(ctx, req.TenantID, *req.CheckID); err != nil {
@@ -185,9 +206,12 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 		if checkVerdict != nil {
 			return checkVerdict
 		}
+		if roundingVerdict != nil {
+			return roundingVerdict
+		}
 
 		if hasCheck(req) {
-			replay, err := s.guardAgainstOverpayment(ctx, tx, req, checkTotal)
+			replay, err := s.guardAgainstOverpayment(ctx, tx, req, checkTotal, roundingPolicy)
 			if err != nil {
 				return err
 			}
@@ -220,6 +244,7 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 			IdempotencyKey: req.IdempotencyKey,
 			Method:         req.Method,
 			AmountTotal:    req.AmountTotal,
+			RoundingAmount: req.RoundingAmount,
 			Currency:       req.Currency,
 		})
 		if err != nil {
@@ -282,7 +307,14 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 // a concurrent request with the same key committed while this one waited, and
 // counting that payment against the total would turn a harmless retry into a
 // 409.
-func (s *PaymentService) guardAgainstOverpayment(ctx context.Context, tx pgx.Tx, req RegisterSaleRequest, checkTotal int64) (*domain.Payment, error) {
+//
+// A rounded sale is also checked here, under the same lock, because both of
+// its remaining rules depend on what the check already holds: the payment
+// must close the remainder exactly (rounding is only ever granted on the last
+// collection), and the check's total concession must stay within the
+// branch's ceiling — summed under the lock so two racing rounded sales cannot
+// both fit.
+func (s *PaymentService) guardAgainstOverpayment(ctx context.Context, tx pgx.Tx, req RegisterSaleRequest, checkTotal int64, policy pospub.RoundingPolicy) (*domain.Payment, error) {
 	checkID := *req.CheckID
 	if err := s.paymentRepo.LockCheckForPayment(ctx, tx, checkID); err != nil {
 		return nil, fmt.Errorf("payment/service: %w", err)
@@ -302,10 +334,82 @@ func (s *PaymentService) guardAgainstOverpayment(ctx context.Context, tx pgx.Tx,
 	if err != nil {
 		return nil, fmt.Errorf("payment/service: %w", err)
 	}
-	if req.AmountTotal > checkTotal-paid-pending {
+	due := checkTotal - paid - pending
+	settles := req.AmountTotal + req.RoundingAmount
+	if settles > due {
 		return nil, pub.ErrPaymentExceedsDue
 	}
+	if req.RoundingAmount == 0 {
+		return nil, nil
+	}
+	if settles != due {
+		return nil, fmt.Errorf("%w: payment settles %d but the check owes %d — rounding only closes the remainder", pub.ErrRoundingNotAllowed, settles, due)
+	}
+	conceded, err := s.paymentRepo.RoundingTotalForCheck(ctx, tx, req.TenantID, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: %w", err)
+	}
+	if conceded+req.RoundingAmount > policy.MaxPerCheckMinor {
+		return nil, fmt.Errorf("%w: check rounding %d + %d exceeds the branch ceiling %d", pub.ErrRoundingNotAllowed, conceded, req.RoundingAmount, policy.MaxPerCheckMinor)
+	}
 	return nil, nil
+}
+
+// roundingVerdictFor vets a rounded sale against everything that does not
+// depend on the check's current payments: the branch policy (method enabled,
+// concession below the step, amount a step multiple), the presence of a
+// check, and the fiscal adapter.
+//
+// Like checkVerdictFor it returns (verdict, policy, nil) — the verdict is
+// applied after the idempotency fast path — and (nil, _, err) when the policy
+// could not be read at all, which is a 500, not a refusal.
+//
+// The adapter rule implements kasa-rapor-programi G.2: how a real ÖKC
+// (Token) spreads a sale-level discount across VAT rates is not confirmed
+// yet, so rounding stays limited to the mock adapter until it is. The
+// adapter is process-wide, so the rule needs no per-branch lookup.
+func (s *PaymentService) roundingVerdictFor(ctx context.Context, req RegisterSaleRequest) (verdict error, policy pospub.RoundingPolicy, failure error) {
+	if req.RoundingAmount == 0 {
+		return nil, pospub.RoundingPolicy{}, nil
+	}
+	if !hasCheck(req) {
+		return fmt.Errorf("%w: rounding needs a check", pub.ErrRoundingNotAllowed), pospub.RoundingPolicy{}, nil
+	}
+	if s.adapterType != "mock" {
+		return fmt.Errorf("%w: fiscal adapter %q does not support rounding yet", pub.ErrRoundingNotAllowed, s.adapterType), pospub.RoundingPolicy{}, nil
+	}
+	if s.rounding == nil {
+		// Fail closed, as checkVerdictFor does for a nil guard.
+		return nil, pospub.RoundingPolicy{}, fmt.Errorf("payment/service: rounding policy reader not wired")
+	}
+	policy, err := s.rounding.BranchRoundingPolicy(ctx, req.TenantID, req.BranchID)
+	if err != nil {
+		return nil, pospub.RoundingPolicy{}, fmt.Errorf("payment/service: read rounding policy: %w", err)
+	}
+	if !roundingEnabledFor(policy, req.Method) {
+		return fmt.Errorf("%w: rounding is off for %s at this branch", pub.ErrRoundingNotAllowed, req.Method), policy, nil
+	}
+	if policy.StepMinor <= 0 || req.RoundingAmount >= policy.StepMinor {
+		return fmt.Errorf("%w: rounding %d is not below the step %d", pub.ErrRoundingNotAllowed, req.RoundingAmount, policy.StepMinor), policy, nil
+	}
+	if req.AmountTotal%policy.StepMinor != 0 {
+		return fmt.Errorf("%w: amount %d is not a multiple of the step %d", pub.ErrRoundingNotAllowed, req.AmountTotal, policy.StepMinor), policy, nil
+	}
+	return nil, policy, nil
+}
+
+// roundingEnabledFor maps a payment method to the branch switch that governs
+// it. Only cash and card (terminal) can round; every other method is refused
+// rather than defaulted, so a future method needs an explicit decision here.
+func roundingEnabledFor(policy pospub.RoundingPolicy, method domain.PaymentMethod) bool {
+	switch method {
+	case domain.PaymentMethodCash:
+		return policy.CashEnabled
+	case domain.PaymentMethodTerminal:
+		return policy.CardEnabled
+	default:
+		return false
+	}
 }
 
 func hasCheck(req RegisterSaleRequest) bool {
@@ -358,17 +462,31 @@ func (s *PaymentService) fetchExistingByIdempotencyKey(ctx context.Context, tena
 // full amount so the mock/dev flow keeps working. Real devices demand a
 // per-item basket with device-section and tax mapping (ADR-FISCAL-002 §2) and
 // their adapters are expected to reject this synthetic line.
+//
+// A rounded sale prints the covered items at their full price and the
+// concession as a sale-level "Yuvarlama" discount, so the receipt total is
+// the money actually taken: lines add up to AmountTotal + RoundingAmount,
+// TotalMinor and the payment stay AmountTotal.
 func buildFiscalSale(submissionID uuid.UUID, payment domain.Payment, req RegisterSaleRequest) domain.FiscalSale {
 	lines := req.Lines
 	if len(lines) == 0 {
 		lines = []domain.FiscalLine{{
 			Name:             "Satis",
-			UnitPriceMinor:   req.AmountTotal,
+			UnitPriceMinor:   req.AmountTotal + req.RoundingAmount,
 			QuantityMilli:    1000,
 			TaxRatePermyriad: 0,
 			CategoryID:       uuid.Nil,
 			Unit:             "C62",
 		}}
+	}
+	var discount *domain.FiscalAdjust
+	if req.RoundingAmount > 0 {
+		discount = &domain.FiscalAdjust{
+			Description: "Yuvarlama",
+			Kind:        domain.FiscalAdjustDiscount,
+			Mode:        domain.FiscalAdjustAmount,
+			Value:       req.RoundingAmount,
+		}
 	}
 	return domain.FiscalSale{
 		SubmissionID: submissionID,
@@ -383,7 +501,8 @@ func buildFiscalSale(submissionID uuid.UUID, payment domain.Payment, req Registe
 			Method:      req.Method,
 			AmountMinor: req.AmountTotal,
 		}},
-		Meta: req.Meta,
+		Discount: discount,
+		Meta:     req.Meta,
 	}
 }
 

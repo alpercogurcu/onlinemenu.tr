@@ -49,7 +49,7 @@ func TestToPaymentResponse_SerializesSnakeCase(t *testing.T) {
 	// Expected snake_case keys must be present.
 	for _, key := range []string{
 		"id", "tenant_id", "branch_id", "check_id", "method", "status",
-		"amount_total", "currency", "fiscal_receipt_id", "created_at", "completed_at",
+		"amount_total", "rounding_amount", "currency", "fiscal_receipt_id", "created_at", "completed_at",
 	} {
 		_, ok := asMap[key]
 		assert.Truef(t, ok, "expected snake_case key %q in response body: %s", key, body)
@@ -179,4 +179,12 @@ func TestRegisterSaleRequest_OmittedBasketIsNil(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"method":"cash","amount_total":100}`), &req))
 	assert.Nil(t, toFiscalLines(req.Lines))
 	assert.Equal(t, domain.FiscalMeta{}, req.Meta.toDomain())
+	assert.Zero(t, req.RoundingAmount, "an omitted rounding_amount is an ordinary payment")
+}
+
+func TestRegisterSaleRequest_DecodesRoundingAmount(t *testing.T) {
+	var req registerSaleRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"method":"cash","amount_total":43500,"rounding_amount":250}`), &req))
+	assert.Equal(t, int64(43500), req.AmountTotal)
+	assert.Equal(t, int64(250), req.RoundingAmount)
 }

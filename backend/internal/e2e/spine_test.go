@@ -261,6 +261,7 @@ func buildServices() (*possvc.CheckService, *possvc.OrderService, *paymentsvc.Pa
 		PaymentRepo: payRepo,
 		SessionRepo: paymentrepo.NewCashSessionRepo(),
 		Checks:      checkGuard,
+		Rounding:    checkGuard,
 		Fiscal:      paymentdomain.MockFiscalAdapter{},
 		Logger:      log,
 	})
@@ -405,6 +406,68 @@ func TestPOSSpine_OpenOrderPayClose(t *testing.T) {
 	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
 	assert.NotNil(t, closed.ClosedBy)
 	assert.Equal(t, staffID, *closed.ClosedBy)
+}
+
+// TestPOSSpine_RoundedPaymentCloses: the branch allows cash rounding, the
+// cashier rounds ₺437,50 down to ₺435,00 and the check closes — the real pos
+// policy read and the real Close agree with payment's rounded sums.
+func TestPOSSpine_RoundedPaymentCloses(t *testing.T) {
+	ctx := context.Background()
+	checkSvc, orderSvc, paySvc := buildServices()
+
+	settings := possvc.NewBranchSettingsService(possvc.BranchSettingsParams{
+		DB: sharedPool, Settings: posrepo.NewBranchSettingsRepo(), Logger: zap.NewNop(),
+	})
+	on := true
+	_, err := settings.Set(ctx, tenantID, staffPrincipal(), possvc.SetBranchSettingsRequest{
+		BranchID: branchID, RoundingCashEnabled: &on, UpdatedBy: staffID,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		off := false
+		_, _ = settings.Set(context.Background(), tenantID, staffPrincipal(), possvc.SetBranchSettingsRequest{
+			BranchID: branchID, RoundingCashEnabled: &off, UpdatedBy: staffID,
+		})
+	})
+
+	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
+		BranchID: branchID, TableLabel: "T-yuvarlama", OpenedBy: &staffID,
+	})
+	require.NoError(t, err)
+	_, err = orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
+		BranchID:     branchID,
+		CheckID:      &check.ID,
+		OrderChannel: posdomain.OrderChannelDineIn,
+		Items: []posdomain.OrderItem{{
+			ProductID: spineProduct(43750, 1000), ProductName: "Burger Menü", ProductPriceAmount: 43750,
+			ProductCurrency: "TRY", TaxRateBPS: 1000, Quantity: 1, UnitPriceAmount: 43750,
+		}},
+	})
+	require.NoError(t, err)
+
+	payment, err := paySvc.RegisterSale(ctx, paymentsvc.RegisterSaleRequest{
+		TenantID:       tenantID,
+		BranchID:       branchID,
+		CheckID:        &check.ID,
+		IdempotencyKey: "spine-test-rounded-001",
+		Method:         paymentdomain.PaymentMethodCash,
+		AmountTotal:    43500,
+		RoundingAmount: 250,
+		Currency:       "TRY",
+		Lines: []paymentdomain.FiscalLine{{
+			Name: "Burger Menü", UnitPriceMinor: 43750, QuantityMilli: 1000, TaxRatePermyriad: 1000, Unit: "C62",
+		}},
+	})
+	require.NoError(t, err)
+	drainFiscal(t, paySvc)
+
+	settled, err := paySvc.GetByID(ctx, tenantID, payment.ID)
+	require.NoError(t, err)
+	assert.Equal(t, paymentdomain.PaymentStatusCompleted, settled.Status)
+
+	closed, err := checkSvc.Close(ctx, tenantID, staffPrincipal(), check.ID, staffID)
+	require.NoError(t, err, "amount + rounding covers the check")
+	assert.Equal(t, posdomain.CheckStatusClosed, closed.Status)
 }
 
 // TestPOSSpine_SettledCheckRejectsOrderAndPayment is the regression for the

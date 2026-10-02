@@ -3,6 +3,8 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -95,6 +97,53 @@ type FiscalSale struct {
 	Discount     *FiscalAdjust
 	Customer     *FiscalCustomer
 	Meta         FiscalMeta
+}
+
+// ErrFiscalTotalMismatch is returned by FiscalSale.ValidateTotal when the
+// lines, net of the sale-level adjustment, do not add up to TotalMinor.
+var ErrFiscalTotalMismatch = errors.New("payment/domain: fiscal sale total does not match its lines")
+
+// LineTotalMinor is one line's amount: unit price × quantity, with the
+// thousandths quantity rounded half-up to the kuruş — the same rounding the
+// POS uses when it builds the lines (pos-core paymentLines.lineTotal).
+func LineTotalMinor(l FiscalLine) int64 {
+	return roundDiv(l.UnitPriceMinor*l.QuantityMilli, 1000)
+}
+
+// ValidateTotal checks the invariant every device enforces: Σ line − discount
+// (+ surcharge) == TotalMinor. A mismatching basket would be rejected by the
+// device only after the money is recorded, or — worse — printed with a total
+// the payment does not carry; adapters therefore refuse it before sending.
+// A percent adjustment is taken on the line subtotal, rounded half-up.
+func (s FiscalSale) ValidateTotal() error {
+	var subtotal int64
+	for _, l := range s.Lines {
+		subtotal += LineTotalMinor(l)
+	}
+	net := subtotal
+	if a := s.Discount; a != nil {
+		adjust := a.Value
+		if a.Mode == FiscalAdjustPercent {
+			adjust = roundDiv(subtotal*a.Value, 10000)
+		}
+		if a.Kind == FiscalAdjustSurcharge {
+			net += adjust
+		} else {
+			net -= adjust
+		}
+	}
+	if net != s.TotalMinor {
+		return fmt.Errorf("%w: lines %d, adjusted %d, total %d", ErrFiscalTotalMismatch, subtotal, net, s.TotalMinor)
+	}
+	return nil
+}
+
+// roundDiv divides rounding half away from zero.
+func roundDiv(n, d int64) int64 {
+	if n < 0 {
+		return -((-n + d/2) / d)
+	}
+	return (n + d/2) / d
 }
 
 // FiscalSubmissionRef identifies a previously submitted sale for voiding.

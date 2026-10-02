@@ -154,6 +154,7 @@ type paymentResponse struct {
 	Method          string     `json:"method"`
 	Status          string     `json:"status"`
 	AmountTotal     int64      `json:"amount_total"`
+	RoundingAmount  int64      `json:"rounding_amount"`
 	Currency        string     `json:"currency"`
 	FiscalReceiptID *uuid.UUID `json:"fiscal_receipt_id"`
 	CreatedAt       string     `json:"created_at"`
@@ -164,10 +165,15 @@ type paymentResponse struct {
 // optional: when lines are omitted the service synthesizes a single-line basket
 // for the total, which keeps the mock/dev flow working (ADR-FISCAL-002 §2).
 type registerSaleRequest struct {
-	BranchID       uuid.UUID           `json:"branch_id"`
-	CheckID        *uuid.UUID          `json:"check_id"`
-	Method         string              `json:"method"`
-	AmountTotal    int64               `json:"amount_total"`
+	BranchID    uuid.UUID  `json:"branch_id"`
+	CheckID     *uuid.UUID `json:"check_id"`
+	Method      string     `json:"method"`
+	AmountTotal int64      `json:"amount_total"`
+	// RoundingAmount is the optional cash-rounding concession (kuruş): the
+	// check is settled by amount_total + rounding_amount. When lines are
+	// sent they add up to that sum; the receipt prints the concession as a
+	// "Yuvarlama" discount.
+	RoundingAmount int64               `json:"rounding_amount"`
 	Currency       string              `json:"currency"`
 	Lines          []fiscalLineRequest `json:"lines"`
 	Meta           fiscalMetaRequest   `json:"meta"`
@@ -226,6 +232,7 @@ func toPaymentResponse(p domain.Payment) paymentResponse {
 		Method:          string(p.Method),
 		Status:          string(p.Status),
 		AmountTotal:     p.AmountTotal,
+		RoundingAmount:  p.RoundingAmount,
 		Currency:        p.Currency,
 		FiscalReceiptID: p.FiscalReceiptID,
 		CreatedAt:       p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -353,6 +360,7 @@ func (h *Handler) registerSale(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey: idempKey,
 		Method:         domain.PaymentMethod(req.Method),
 		AmountTotal:    req.AmountTotal,
+		RoundingAmount: req.RoundingAmount,
 		Currency:       req.Currency,
 		Lines:          toFiscalLines(req.Lines),
 		Meta:           req.Meta.toDomain(),
@@ -402,6 +410,11 @@ func (h *Handler) registerSaleError(w http.ResponseWriter, err error) {
 		// Usually another station settled (part of) the same adisyon a moment
 		// earlier; the cashier needs to refresh the balance, not retry blindly.
 		respondError(w, http.StatusConflict, codePaymentExceedsDue, "tutar adisyonun kalan borcunu aşıyor")
+	case errors.Is(err, pub.ErrRoundingNotAllowed):
+		// 422 with a code: the request is well-formed but asks for a
+		// concession the branch policy or the check's state does not grant.
+		// The station should drop the rounding and show the full amount.
+		respondError(w, http.StatusUnprocessableEntity, codeRoundingNotAllowed, "bu ödemede yuvarlama uygulanamaz")
 	case errors.Is(err, pub.ErrInvalidInput):
 		// 422, not 500. Until now this endpoint had no sentinel mapping at
 		// all, so an unknown payment method or a non-positive amount was
@@ -424,6 +437,7 @@ const (
 	codeCheckNotFound       = "check_not_found"
 	codeNoCashSessionOpen   = "no_cash_session_open"
 	codePaymentExceedsDue   = "payment_exceeds_due"
+	codeRoundingNotAllowed  = "rounding_not_allowed"
 )
 
 type errorResponse struct {

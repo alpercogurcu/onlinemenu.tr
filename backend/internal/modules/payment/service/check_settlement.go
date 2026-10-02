@@ -26,9 +26,13 @@ type CheckSettlement struct {
 // the sum includes the payment it just took locally or a different one of equal
 // value, which is exactly how a split bill gets charged twice. With the id the
 // station dedupes exactly.
+//
+// RoundingAmount is the rounding concession the payment granted; it settles
+// the check together with AmountTotal.
 type CheckSettledPayment struct {
-	PaymentID   uuid.UUID
-	AmountTotal int64
+	PaymentID      uuid.UUID
+	AmountTotal    int64
+	RoundingAmount int64
 }
 
 // CheckSettlementFor answers "how much of this check is actually paid" for a
@@ -76,8 +80,9 @@ func (s *PaymentService) CheckSettlementFor(
 		}
 		for _, row := range completed {
 			settlement.Completed = append(settlement.Completed, CheckSettledPayment{
-				PaymentID:   row.PaymentID,
-				AmountTotal: row.AmountTotal,
+				PaymentID:      row.PaymentID,
+				AmountTotal:    row.AmountTotal,
+				RoundingAmount: row.RoundingAmount,
 			})
 		}
 

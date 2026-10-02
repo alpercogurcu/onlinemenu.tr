@@ -29,11 +29,12 @@ type FiscalBranchStatus struct {
 
 // FiscalPendingItem is one in-flight registration with its server-computed age.
 type FiscalPendingItem struct {
-	PaymentID    uuid.UUID
-	CheckID      *uuid.UUID
-	AmountTotal  int64
-	RegisteredAt time.Time
-	AgeSeconds   int64
+	PaymentID      uuid.UUID
+	CheckID        *uuid.UUID
+	AmountTotal    int64
+	RoundingAmount int64
+	RegisteredAt   time.Time
+	AgeSeconds     int64
 }
 
 // FiscalSettledItem is one registration that reached a terminal state inside
@@ -45,12 +46,13 @@ type FiscalPendingItem struct {
 // deducting a settled payment's amount for as long as it stays in the window,
 // so a payment that just left Pending does not read as collectable again.
 type FiscalSettledItem struct {
-	PaymentID     uuid.UUID
-	CheckID       *uuid.UUID
-	AmountTotal   int64
-	Status        string
-	FailureReason *string
-	SettledAt     time.Time
+	PaymentID      uuid.UUID
+	CheckID        *uuid.UUID
+	AmountTotal    int64
+	RoundingAmount int64
+	Status         string
+	FailureReason  *string
+	SettledAt      time.Time
 }
 
 // FiscalBranchStatusFor answers the multi-station poll: which fiscal
@@ -99,11 +101,12 @@ func (s *PaymentService) FiscalBranchStatusFor(
 				age = 0 // clock skew between the insert and this read must not surface as a negative age
 			}
 			status.Pending = append(status.Pending, FiscalPendingItem{
-				PaymentID:    row.PaymentID,
-				CheckID:      row.CheckID,
-				AmountTotal:  row.AmountTotal,
-				RegisteredAt: row.RegisteredAt,
-				AgeSeconds:   int64(age.Seconds()),
+				PaymentID:      row.PaymentID,
+				CheckID:        row.CheckID,
+				AmountTotal:    row.AmountTotal,
+				RoundingAmount: row.RoundingAmount,
+				RegisteredAt:   row.RegisteredAt,
+				AgeSeconds:     int64(age.Seconds()),
 			})
 		}
 
@@ -113,12 +116,13 @@ func (s *PaymentService) FiscalBranchStatusFor(
 		}
 		for _, row := range settled {
 			status.RecentlySettled = append(status.RecentlySettled, FiscalSettledItem{
-				PaymentID:     row.PaymentID,
-				CheckID:       row.CheckID,
-				AmountTotal:   row.AmountTotal,
-				Status:        row.Status,
-				FailureReason: row.FailureReason,
-				SettledAt:     row.SettledAt,
+				PaymentID:      row.PaymentID,
+				CheckID:        row.CheckID,
+				AmountTotal:    row.AmountTotal,
+				RoundingAmount: row.RoundingAmount,
+				Status:         row.Status,
+				FailureReason:  row.FailureReason,
+				SettledAt:      row.SettledAt,
 			})
 		}
 		return nil

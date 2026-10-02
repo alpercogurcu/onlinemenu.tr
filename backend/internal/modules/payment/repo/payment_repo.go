@@ -34,10 +34,10 @@ func (r *PaymentRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Payment) (
 	_, err := tx.Exec(ctx, `
 		INSERT INTO payments
 			(id, tenant_id, branch_id, check_id, idempotency_key, method, status,
-			 amount_total, currency, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			 amount_total, rounding_amount, currency, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 	`, p.ID, p.TenantID, p.BranchID, p.CheckID, p.IdempotencyKey,
-		string(p.Method), string(p.Status), p.AmountTotal, p.Currency, p.CreatedAt)
+		string(p.Method), string(p.Status), p.AmountTotal, p.RoundingAmount, p.Currency, p.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return domain.Payment{}, ErrDuplicateIdempotencyKey
@@ -51,7 +51,7 @@ func (r *PaymentRepo) Create(ctx context.Context, tx pgx.Tx, p domain.Payment) (
 func (r *PaymentRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (domain.Payment, error) {
 	row := tx.QueryRow(ctx, `
 		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
-		       method, status, amount_total, currency, fiscal_receipt_id,
+		       method, status, amount_total, rounding_amount, currency, fiscal_receipt_id,
 		       created_at, completed_at
 		FROM payments WHERE id = $1
 	`, id)
@@ -66,7 +66,7 @@ func (r *PaymentRepo) GetByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (dom
 func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, key string) (domain.Payment, error) {
 	row := tx.QueryRow(ctx, `
 		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
-		       method, status, amount_total, currency, fiscal_receipt_id,
+		       method, status, amount_total, rounding_amount, currency, fiscal_receipt_id,
 		       created_at, completed_at
 		FROM payments WHERE tenant_id = $1 AND idempotency_key = $2
 	`, tenantID, key)
@@ -161,7 +161,7 @@ func (r *PaymentRepo) InsertFiscalReceipt(ctx context.Context, tx pgx.Tx, rec do
 func (r *PaymentRepo) ListByTenant(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, branchID *uuid.UUID, limit, offset int) ([]domain.Payment, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
-		       method, status, amount_total, currency, fiscal_receipt_id,
+		       method, status, amount_total, rounding_amount, currency, fiscal_receipt_id,
 		       created_at, completed_at
 		FROM payments
 		WHERE tenant_id = $1
@@ -193,7 +193,7 @@ func (r *PaymentRepo) ListByTenant(ctx context.Context, tx pgx.Tx, tenantID uuid
 func (r *PaymentRepo) ListByCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) ([]domain.Payment, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, tenant_id, branch_id, check_id, idempotency_key,
-		       method, status, amount_total, currency, fiscal_receipt_id,
+		       method, status, amount_total, rounding_amount, currency, fiscal_receipt_id,
 		       created_at, completed_at
 		FROM payments
 		WHERE tenant_id = $1 AND check_id = $2 AND status = 'completed'
@@ -215,11 +215,19 @@ func (r *PaymentRepo) ListByCheck(ctx context.Context, tx pgx.Tx, tenantID, chec
 	return payments, rows.Err()
 }
 
-// TotalPaidForCheck returns the sum of completed payments for a check.
+// TotalPaidForCheck returns what completed payments have settled on a check.
+//
+// It sums amount_total + rounding_amount: a rounded payment settles more of
+// the check than the cash it took (beşli yuvarlama). This and
+// PendingTotalForCheck are the single place that rule lives — Close's
+// paid-in-full check, RegisterSale's overpayment guard and the remaining
+// balance all read these two, so none of them needs a formula of its own.
+// CashSessionRepo.SumCompletedCashPayments deliberately does NOT add rounding:
+// the drawer holds the money taken, not the money conceded.
 func (r *PaymentRepo) TotalPaidForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
 	var total int64
 	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(amount_total), 0)
+		SELECT COALESCE(SUM(amount_total + rounding_amount), 0)
 		FROM payments
 		WHERE tenant_id = $1 AND check_id = $2 AND status = 'completed'
 	`, tenantID, checkID).Scan(&total)
@@ -239,15 +247,34 @@ func (r *PaymentRepo) TotalPaidForCheck(ctx context.Context, tx pgx.Tx, tenantID
 // fiscal_submissions could therefore only ever disagree when the worker left a
 // payment stranded — a bug to fix at its source rather than to mask in a read
 // that other modules depend on.
+//
+// Like TotalPaidForCheck it sums amount_total + rounding_amount.
 func (r *PaymentRepo) PendingTotalForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
 	var total int64
 	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(amount_total), 0)
+		SELECT COALESCE(SUM(amount_total + rounding_amount), 0)
 		FROM payments
 		WHERE tenant_id = $1 AND check_id = $2 AND status = 'pending'
 	`, tenantID, checkID).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("payment/repo: pending total for check: %w", err)
+	}
+	return total, nil
+}
+
+// RoundingTotalForCheck returns the rounding already conceded on a check by
+// payments that still carry money (pending or completed); a failed or voided
+// payment's rounding is released with it. Read under LockCheckForPayment so
+// two racing rounded sales cannot both fit under the branch's ceiling.
+func (r *PaymentRepo) RoundingTotalForCheck(ctx context.Context, tx pgx.Tx, tenantID, checkID uuid.UUID) (int64, error) {
+	var total int64
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(rounding_amount), 0)
+		FROM payments
+		WHERE tenant_id = $1 AND check_id = $2 AND status IN ('pending', 'completed')
+	`, tenantID, checkID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("payment/repo: rounding total for check: %w", err)
 	}
 	return total, nil
 }
@@ -325,7 +352,7 @@ func scanPayment(row pgx.Row) (domain.Payment, error) {
 	var method, status string
 	err := row.Scan(
 		&p.ID, &p.TenantID, &p.BranchID, &p.CheckID, &p.IdempotencyKey,
-		&method, &status, &p.AmountTotal, &p.Currency, &p.FiscalReceiptID,
+		&method, &status, &p.AmountTotal, &p.RoundingAmount, &p.Currency, &p.FiscalReceiptID,
 		&p.CreatedAt, &p.CompletedAt,
 	)
 	if err != nil {

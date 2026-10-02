@@ -58,16 +58,23 @@ type MethodTotal struct {
 
 // Payment is the aggregate root for a single payment transaction.
 type Payment struct {
-	ID              uuid.UUID
-	TenantID        uuid.UUID
-	BranchID        uuid.UUID
-	CheckID         *uuid.UUID // nil for delivery orders with no check
-	IdempotencyKey  string
-	Method          PaymentMethod
-	Status          PaymentStatus
-	AmountTotal     int64 // in smallest currency unit (kuruş for TRY)
+	ID             uuid.UUID
+	TenantID       uuid.UUID
+	BranchID       uuid.UUID
+	CheckID        *uuid.UUID // nil for delivery orders with no check
+	IdempotencyKey string
+	Method         PaymentMethod
+	Status         PaymentStatus
+	AmountTotal    int64 // in smallest currency unit (kuruş for TRY)
+	// RoundingAmount is the cash-rounding concession (beşli yuvarlama) this
+	// payment grants on its check: the check is settled by AmountTotal +
+	// RoundingAmount, while AmountTotal alone is the money actually taken.
+	RoundingAmount  int64
 	Currency        string
 	FiscalReceiptID *uuid.UUID
 	CreatedAt       time.Time
 	CompletedAt     *time.Time
 }
+
+// SettledAmount is what this payment takes off its check's balance.
+func (p Payment) SettledAmount() int64 { return p.AmountTotal + p.RoundingAmount }

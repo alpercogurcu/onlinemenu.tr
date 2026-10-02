@@ -72,6 +72,15 @@ func (stubCheckWriteGuard) CheckTotal(context.Context, uuid.UUID, uuid.UUID) (in
 	return 0, nil
 }
 
+// stubRoundingPolicyReader satisfies pos's rounding policy read for graph
+// resolution only; in the real app pos.Module provides it from
+// CheckReadService.
+type stubRoundingPolicyReader struct{}
+
+func (stubRoundingPolicyReader) BranchRoundingPolicy(context.Context, uuid.UUID, uuid.UUID) (pospub.RoundingPolicy, error) {
+	return pospub.RoundingPolicy{}, nil
+}
+
 // supplyExternals provides the dependencies cmd/api/main.go injects into this
 // module. ValidateApp only resolves the graph — no constructor runs and no hook
 // fires — so the nil pointers (and the stub interface impls above) are never
@@ -98,6 +107,7 @@ func supplyExternals(cfg FiscalConfig) fx.Option {
 		fx.Annotate(stubMembershipResolver{}, fx.As(new(identitypub.MembershipResolver))),
 		fx.Annotate(stubPersonReader{}, fx.As(new(identitypub.PersonReader))),
 		fx.Annotate(stubCheckWriteGuard{}, fx.As(new(pospub.CheckWriteGuard))),
+		fx.Annotate(stubRoundingPolicyReader{}, fx.As(new(pospub.BranchRoundingPolicyReader))),
 	)
 }
 

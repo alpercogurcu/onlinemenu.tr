@@ -50,7 +50,7 @@ func TestToCheckSettlementResponse_WireShape(t *testing.T) {
 		AsOf: time.Date(2026, 7, 19, 13, 30, 0, 0, time.FixedZone("+03", 3*60*60)),
 		Completed: []service.CheckSettledPayment{
 			{PaymentID: paymentA, AmountTotal: 12500},
-			{PaymentID: paymentB, AmountTotal: 3000},
+			{PaymentID: paymentB, AmountTotal: 3000, RoundingAmount: 250},
 		},
 		PendingTotal: 2500,
 	}))
@@ -60,15 +60,17 @@ func TestToCheckSettlementResponse_WireShape(t *testing.T) {
 		"check_id": "11111111-1111-1111-1111-111111111111",
 		"as_of": "2026-07-19T10:30:00Z",
 		"completed": [
-			{"payment_id": "22222222-2222-2222-2222-222222222222", "amount_total": 12500},
-			{"payment_id": "33333333-3333-3333-3333-333333333333", "amount_total": 3000}
+			{"payment_id": "22222222-2222-2222-2222-222222222222", "amount_total": 12500, "rounding_amount": 0},
+			{"payment_id": "33333333-3333-3333-3333-333333333333", "amount_total": 3000, "rounding_amount": 250}
 		],
 		"pending_total": 2500
 	}`, string(body))
 }
 
 // TestCheckSettledPayment_ExposesOnlyIDAndAmount is a projection guard, not a
-// formatting test (ADR-AUTH-001 layer 4).
+// formatting test (ADR-AUTH-001 layer 4). rounding_amount is part of the
+// amount (the check is settled by amount_total + rounding_amount), not a new
+// kind of detail, so it belongs to the allowed set.
 //
 // This DTO is visible to cashiers, who hold no payment.payment.read. Method,
 // timestamps and fiscal receipt references are reconciliation data and must not
@@ -86,6 +88,6 @@ func TestCheckSettledPayment_ExposesOnlyIDAndAmount(t *testing.T) {
 	for k := range decoded {
 		keys = append(keys, k)
 	}
-	assert.ElementsMatch(t, []string{"payment_id", "amount_total"}, keys,
+	assert.ElementsMatch(t, []string{"payment_id", "amount_total", "rounding_amount"}, keys,
 		"cashier-visible projection: adding a field here widens counter staff's view of money with no permission change")
 }

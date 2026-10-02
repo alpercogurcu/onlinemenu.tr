@@ -49,6 +49,7 @@ func TestBuildBasket(t *testing.T) {
 			CategoryID:       uuid.New(),
 			Unit:             "", // falls back to C62
 		})
+		sale.TotalMinor += 6250
 
 		basket, err := buildBasket(context.Background(), sale, staticSections(3, 1000), false)
 		require.NoError(t, err)
@@ -141,26 +142,31 @@ func TestBuildBasketAdjust(t *testing.T) {
 	tests := []struct {
 		name   string
 		adjust domain.FiscalAdjust
+		total  int64 // the 15000 line net of the adjustment
 		want   Adjust
 	}{
 		{
 			name:   "amount discount",
 			adjust: domain.FiscalAdjust{Description: "Kupon", Kind: domain.FiscalAdjustDiscount, Mode: domain.FiscalAdjustAmount, Value: 500},
+			total:  14500,
 			want:   Adjust{Description: "Kupon", DiscountOrSurcharge: 0, Type: 0, Value: 500},
 		},
 		{
 			name:   "percent discount",
 			adjust: domain.FiscalAdjust{Description: "%10", Kind: domain.FiscalAdjustDiscount, Mode: domain.FiscalAdjustPercent, Value: 1000},
+			total:  13500,
 			want:   Adjust{Description: "%10", DiscountOrSurcharge: 0, Type: 1, Value: 1000},
 		},
 		{
 			name:   "amount surcharge",
 			adjust: domain.FiscalAdjust{Description: "Servis", Kind: domain.FiscalAdjustSurcharge, Mode: domain.FiscalAdjustAmount, Value: 1500},
+			total:  16500,
 			want:   Adjust{Description: "Servis", DiscountOrSurcharge: 1, Type: 0, Value: 1500},
 		},
 		{
 			name:   "percent surcharge",
 			adjust: domain.FiscalAdjust{Description: "Servis", Kind: domain.FiscalAdjustSurcharge, Mode: domain.FiscalAdjustPercent, Value: 500},
+			total:  15750,
 			want:   Adjust{Description: "Servis", DiscountOrSurcharge: 1, Type: 1, Value: 500},
 		},
 	}
@@ -170,10 +176,56 @@ func TestBuildBasketAdjust(t *testing.T) {
 			t.Parallel()
 			sale := testSale()
 			sale.Discount = &tc.adjust
+			sale.TotalMinor = tc.total
 			basket, err := buildBasket(context.Background(), sale, staticSections(1, 1000), false)
 			require.NoError(t, err)
 			require.NotNil(t, basket.Adjust)
 			assert.Equal(t, tc.want, *basket.Adjust)
+		})
+	}
+}
+
+// TestBuildBasketRejectsTotalMismatch: the basket is refused before it is
+// sent when Σ line − adjustment differs from the sale total, the invariant
+// the device itself enforces.
+func TestBuildBasketRejectsTotalMismatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		mutate   func(*domain.FiscalSale)
+		wantFail bool
+	}{
+		{name: "matching total", mutate: func(*domain.FiscalSale) {}},
+		{name: "total above lines", mutate: func(s *domain.FiscalSale) { s.TotalMinor = 15001 }, wantFail: true},
+		{name: "total below lines without discount", mutate: func(s *domain.FiscalSale) { s.TotalMinor = 14750 }, wantFail: true},
+		{
+			name: "rounding discount closes the gap",
+			mutate: func(s *domain.FiscalSale) {
+				s.TotalMinor = 14750
+				s.Discount = &domain.FiscalAdjust{Description: "Yuvarlama", Kind: domain.FiscalAdjustDiscount, Mode: domain.FiscalAdjustAmount, Value: 250}
+			},
+		},
+		{
+			name: "discount larger than the gap",
+			mutate: func(s *domain.FiscalSale) {
+				s.TotalMinor = 14750
+				s.Discount = &domain.FiscalAdjust{Description: "Yuvarlama", Kind: domain.FiscalAdjustDiscount, Mode: domain.FiscalAdjustAmount, Value: 300}
+			},
+			wantFail: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sale := testSale()
+			tc.mutate(&sale)
+			_, err := buildBasket(context.Background(), sale, staticSections(1, 1000), false)
+			if tc.wantFail {
+				require.ErrorIs(t, err, domain.ErrFiscalTotalMismatch)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }

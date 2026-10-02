@@ -352,6 +352,10 @@ func (r *CashSessionRepo) SumMovementsNet(ctx context.Context, tx pgx.Tx, tenant
 // fiscal registration after the session closes permanently fall outside every
 // window (Odoo's _compute_cash_balance note this repo's audit read: the
 // formula must stop moving once the session is closed).
+//
+// It sums amount_total only, never rounding_amount: rounding (beşli
+// yuvarlama) is money conceded, not money in the drawer, so the expected
+// close must not count it.
 func (r *CashSessionRepo) SumCompletedCashPayments(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID, since time.Time, until *time.Time) (int64, error) {
 	var total int64
 	var err error

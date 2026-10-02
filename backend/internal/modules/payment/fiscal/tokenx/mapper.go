@@ -61,6 +61,9 @@ func buildBasket(ctx context.Context, sale domain.FiscalSale, sections SectionRe
 	if len(sale.Lines) == 0 {
 		return Basket{}, ErrNoLines
 	}
+	if err := sale.ValidateTotal(); err != nil {
+		return Basket{}, err
+	}
 	// The basket JSON has no currency field: every amount is assumed to be TRY.
 	// Refuse a foreign-currency sale instead of registering it at face value.
 	if sale.Currency != "" && !strings.EqualFold(sale.Currency, currencyTRY) {

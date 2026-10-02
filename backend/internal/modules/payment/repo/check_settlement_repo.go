@@ -17,8 +17,9 @@ import (
 // cashier holds no payment.payment.read. Widening this struct silently widens
 // what counter staff can see, so it stays at id+amount.
 type CheckSettledRow struct {
-	PaymentID   uuid.UUID
-	AmountTotal int64
+	PaymentID      uuid.UUID
+	AmountTotal    int64
+	RoundingAmount int64
 }
 
 // branchFilter renders the scope predicate shared by both queries below.
@@ -48,7 +49,7 @@ func (r *PaymentRepo) ListCompletedByCheck(
 	branchID *uuid.UUID,
 ) ([]CheckSettledRow, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, amount_total
+		SELECT id, amount_total, rounding_amount
 		FROM payments
 		WHERE tenant_id = $1 AND check_id = $2 AND status = 'completed'`+branchFilter+`
 		ORDER BY id
@@ -61,7 +62,7 @@ func (r *PaymentRepo) ListCompletedByCheck(
 	out := make([]CheckSettledRow, 0)
 	for rows.Next() {
 		var row CheckSettledRow
-		if err := rows.Scan(&row.PaymentID, &row.AmountTotal); err != nil {
+		if err := rows.Scan(&row.PaymentID, &row.AmountTotal, &row.RoundingAmount); err != nil {
 			return nil, fmt.Errorf("payment/repo: scan completed payment for check: %w", err)
 		}
 		out = append(out, row)
@@ -87,7 +88,7 @@ func (r *PaymentRepo) PendingTotalForCheckInBranch(
 ) (int64, error) {
 	var total int64
 	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(amount_total), 0)
+		SELECT COALESCE(SUM(amount_total + rounding_amount), 0)
 		FROM payments
 		WHERE tenant_id = $1 AND check_id = $2 AND status = 'pending'`+branchFilter, tenantID, checkID, branchID).Scan(&total)
 	if err != nil {

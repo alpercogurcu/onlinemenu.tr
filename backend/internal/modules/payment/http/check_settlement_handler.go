@@ -16,9 +16,15 @@ import (
 // cashier-visible projection and those fields belong to payment.payment.read
 // (ADR-AUTH-001 layer 4). Adding a field here widens counter staff's view
 // without any permission change to signal it.
+//
+// rounding_amount is the rounding concession (beşli yuvarlama) granted by the
+// payment: the check's balance drops by amount_total + rounding_amount. It is
+// part of the money state, not a new kind of detail, so it does not widen the
+// projection in the sense above.
 type checkSettledPayment struct {
-	PaymentID   uuid.UUID `json:"payment_id"`
-	AmountTotal int64     `json:"amount_total"`
+	PaymentID      uuid.UUID `json:"payment_id"`
+	AmountTotal    int64     `json:"amount_total"`
+	RoundingAmount int64     `json:"rounding_amount"`
 }
 
 type checkSettlementResponse struct {
@@ -77,8 +83,9 @@ func toCheckSettlementResponse(s service.CheckSettlement) checkSettlementRespons
 	}
 	for _, item := range s.Completed {
 		resp.Completed = append(resp.Completed, checkSettledPayment{
-			PaymentID:   item.PaymentID,
-			AmountTotal: item.AmountTotal,
+			PaymentID:      item.PaymentID,
+			AmountTotal:    item.AmountTotal,
+			RoundingAmount: item.RoundingAmount,
 		})
 	}
 	return resp

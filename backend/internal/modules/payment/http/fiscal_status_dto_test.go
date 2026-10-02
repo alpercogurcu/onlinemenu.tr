@@ -56,12 +56,13 @@ func TestToFiscalStatusResponse_WireShape(t *testing.T) {
 			AgeSeconds:   13,
 		}},
 		RecentlySettled: []service.FiscalSettledItem{{
-			PaymentID:     settledPaymentID,
-			CheckID:       nil,
-			AmountTotal:   7350,
-			Status:        "failed",
-			FailureReason: &reason,
-			SettledAt:     asOf.Add(-time.Minute),
+			PaymentID:      settledPaymentID,
+			CheckID:        nil,
+			AmountTotal:    7350,
+			RoundingAmount: 150,
+			Status:         "failed",
+			FailureReason:  &reason,
+			SettledAt:      asOf.Add(-time.Minute),
 		}},
 	})
 
@@ -81,6 +82,10 @@ func TestToFiscalStatusResponse_WireShape(t *testing.T) {
 	assert.Contains(t, out, `"amount_total":7350`)
 	require.Len(t, resp.RecentlySettled, 1)
 	assert.Equal(t, int64(7350), resp.RecentlySettled[0].AmountTotal)
+	// rounding_amount is always on the wire (0 when none): the station
+	// reserves amount_total + rounding_amount against the check.
+	assert.Contains(t, out, `"rounding_amount":0`)
+	assert.Contains(t, out, `"rounding_amount":150`)
 	// Raw device text passes through untranslated: the client owns the wording.
 	assert.Contains(t, out, `"failure_reason":"E-1234: kagit yok"`)
 	assert.Contains(t, out, `"settled_at":"2026-07-19T10:29:13Z"`)

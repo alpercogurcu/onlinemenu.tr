@@ -13,7 +13,12 @@ import (
 // submission worker finalizes the payment without any async round-trip.
 type MockFiscalAdapter struct{}
 
+// SubmitSale validates the sale total the way a real device does, so a
+// basket that would be refused in production fails in dev and CI as well.
 func (MockFiscalAdapter) SubmitSale(_ context.Context, sale FiscalSale) (*FiscalResult, error) {
+	if err := sale.ValidateTotal(); err != nil {
+		return nil, fmt.Errorf("mock fiscal: %w", err)
+	}
 	return &FiscalResult{
 		SubmissionID: sale.SubmissionID,
 		TenantID:     sale.TenantID,

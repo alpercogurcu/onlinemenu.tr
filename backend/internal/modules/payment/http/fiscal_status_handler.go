@@ -16,11 +16,14 @@ import (
 // computed server-side against the same clock as AsOf so stations with drifted
 // local clocks still agree on how long a sale has been waiting.
 type fiscalPendingItem struct {
-	PaymentID    uuid.UUID  `json:"payment_id"`
-	CheckID      *uuid.UUID `json:"check_id"`
-	AmountTotal  int64      `json:"amount_total"`
-	RegisteredAt string     `json:"registered_at"`
-	AgeSeconds   int64      `json:"age_seconds"`
+	PaymentID   uuid.UUID  `json:"payment_id"`
+	CheckID     *uuid.UUID `json:"check_id"`
+	AmountTotal int64      `json:"amount_total"`
+	// RoundingAmount is the rounding concession (kuruş); the check is
+	// settled by amount_total + rounding_amount. Always present, 0 when none.
+	RoundingAmount int64  `json:"rounding_amount"`
+	RegisteredAt   string `json:"registered_at"`
+	AgeSeconds     int64  `json:"age_seconds"`
 }
 
 // fiscalSettledItem is one registration that reached a terminal state inside
@@ -33,12 +36,13 @@ type fiscalPendingItem struct {
 // any other way (listing payments is manager-only), so without it a completed
 // remote payment would look uncollected and be charged twice.
 type fiscalSettledItem struct {
-	PaymentID     uuid.UUID  `json:"payment_id"`
-	CheckID       *uuid.UUID `json:"check_id"`
-	AmountTotal   int64      `json:"amount_total"`
-	Status        string     `json:"status"`
-	FailureReason *string    `json:"failure_reason"`
-	SettledAt     string     `json:"settled_at"`
+	PaymentID      uuid.UUID  `json:"payment_id"`
+	CheckID        *uuid.UUID `json:"check_id"`
+	AmountTotal    int64      `json:"amount_total"`
+	RoundingAmount int64      `json:"rounding_amount"`
+	Status         string     `json:"status"`
+	FailureReason  *string    `json:"failure_reason"`
+	SettledAt      string     `json:"settled_at"`
 }
 
 type fiscalStatusResponse struct {
@@ -104,21 +108,23 @@ func toFiscalStatusResponse(s service.FiscalBranchStatus) fiscalStatusResponse {
 	}
 	for _, item := range s.Pending {
 		resp.Pending = append(resp.Pending, fiscalPendingItem{
-			PaymentID:    item.PaymentID,
-			CheckID:      item.CheckID,
-			AmountTotal:  item.AmountTotal,
-			RegisteredAt: item.RegisteredAt.UTC().Format(time.RFC3339),
-			AgeSeconds:   item.AgeSeconds,
+			PaymentID:      item.PaymentID,
+			CheckID:        item.CheckID,
+			AmountTotal:    item.AmountTotal,
+			RoundingAmount: item.RoundingAmount,
+			RegisteredAt:   item.RegisteredAt.UTC().Format(time.RFC3339),
+			AgeSeconds:     item.AgeSeconds,
 		})
 	}
 	for _, item := range s.RecentlySettled {
 		resp.RecentlySettled = append(resp.RecentlySettled, fiscalSettledItem{
-			PaymentID:     item.PaymentID,
-			CheckID:       item.CheckID,
-			AmountTotal:   item.AmountTotal,
-			Status:        item.Status,
-			FailureReason: item.FailureReason,
-			SettledAt:     item.SettledAt.UTC().Format(time.RFC3339),
+			PaymentID:      item.PaymentID,
+			CheckID:        item.CheckID,
+			AmountTotal:    item.AmountTotal,
+			RoundingAmount: item.RoundingAmount,
+			Status:         item.Status,
+			FailureReason:  item.FailureReason,
+			SettledAt:      item.SettledAt.UTC().Format(time.RFC3339),
 		})
 	}
 	return resp

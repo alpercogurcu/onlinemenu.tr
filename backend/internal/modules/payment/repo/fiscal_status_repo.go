@@ -14,10 +14,13 @@ import (
 // some POS station has taken money for but whose fiscal receipt has not been
 // confirmed yet.
 type FiscalPendingRow struct {
-	PaymentID    uuid.UUID
-	CheckID      *uuid.UUID
-	AmountTotal  int64
-	RegisteredAt time.Time
+	PaymentID   uuid.UUID
+	CheckID     *uuid.UUID
+	AmountTotal int64
+	// RoundingAmount is the rounding concession on the payment; the station
+	// reserves AmountTotal + RoundingAmount against the check.
+	RoundingAmount int64
+	RegisteredAt   time.Time
 }
 
 // FiscalSettledRow is one fiscal registration that reached a terminal state
@@ -34,12 +37,13 @@ type FiscalPendingRow struct {
 // deducting it while the settled entry is visible, and the remaining balance
 // would look collectable again — the same money taken twice.
 type FiscalSettledRow struct {
-	PaymentID     uuid.UUID
-	CheckID       *uuid.UUID
-	AmountTotal   int64
-	Status        string
-	FailureReason *string
-	SettledAt     time.Time
+	PaymentID      uuid.UUID
+	CheckID        *uuid.UUID
+	AmountTotal    int64
+	RoundingAmount int64
+	Status         string
+	FailureReason  *string
+	SettledAt      time.Time
 }
 
 // FiscalStatusRepo answers the branch-scoped fiscal status poll.
@@ -61,7 +65,7 @@ func NewFiscalStatusRepo() *FiscalStatusRepo { return &FiscalStatusRepo{} }
 // check.
 func (r *FiscalStatusRepo) ListPendingByBranch(ctx context.Context, tx pgx.Tx, tenantID, branchID uuid.UUID) ([]FiscalPendingRow, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT s.payment_id, p.check_id, p.amount_total, s.created_at
+		SELECT s.payment_id, p.check_id, p.amount_total, p.rounding_amount, s.created_at
 		FROM fiscal_submissions s
 		JOIN payments p ON p.id = s.payment_id
 		WHERE s.tenant_id = $1
@@ -77,7 +81,7 @@ func (r *FiscalStatusRepo) ListPendingByBranch(ctx context.Context, tx pgx.Tx, t
 	out := make([]FiscalPendingRow, 0)
 	for rows.Next() {
 		var row FiscalPendingRow
-		if err := rows.Scan(&row.PaymentID, &row.CheckID, &row.AmountTotal, &row.RegisteredAt); err != nil {
+		if err := rows.Scan(&row.PaymentID, &row.CheckID, &row.AmountTotal, &row.RoundingAmount, &row.RegisteredAt); err != nil {
 			return nil, fmt.Errorf("payment/repo: scan pending fiscal submission: %w", err)
 		}
 		out = append(out, row)
@@ -110,7 +114,7 @@ func (r *FiscalStatusRepo) ListRecentlySettledByBranch(
 ) ([]FiscalSettledRow, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT DISTINCT ON (s.payment_id)
-		       s.payment_id, p.check_id, p.amount_total, p.status, s.last_error, s.completed_at
+		       s.payment_id, p.check_id, p.amount_total, p.rounding_amount, p.status, s.last_error, s.completed_at
 		FROM fiscal_submissions s
 		JOIN payments p ON p.id = s.payment_id
 		WHERE s.tenant_id = $1
@@ -128,7 +132,7 @@ func (r *FiscalStatusRepo) ListRecentlySettledByBranch(
 	out := make([]FiscalSettledRow, 0)
 	for rows.Next() {
 		var row FiscalSettledRow
-		if err := rows.Scan(&row.PaymentID, &row.CheckID, &row.AmountTotal, &row.Status, &row.FailureReason, &row.SettledAt); err != nil {
+		if err := rows.Scan(&row.PaymentID, &row.CheckID, &row.AmountTotal, &row.RoundingAmount, &row.Status, &row.FailureReason, &row.SettledAt); err != nil {
 			return nil, fmt.Errorf("payment/repo: scan settled fiscal submission: %w", err)
 		}
 		out = append(out, row)

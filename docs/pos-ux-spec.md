@@ -90,28 +90,40 @@ Seçenekli ürüne dokununca **ortada merkezî dialog** (drawer değil — sağ 
 ### 3b. Ödeme
 
 **Yerleşim kararı:** ödeme, 384px'lik sağ rafa sığmaz (≥56px tuşlu keypad + tutar + para üstü). Ödeme kipi **orta paneli devralır** — ProductGrid/TablePlan yerine tam genişlikte ödeme ekranı açılır, sağ raf adisyon dökümü olarak kalır (kalem seçimi orada yapılır). Mevcut `Receipt.tsx`'teki "cashMode rafı yerinde genişletir" deseni terk edilir. Vazgeç → orta panel ProductGrid'e döner.
-**Dokunuş sayısı:** tam nakit ödeme 3 (Ödeme al → Tam → Ödemeyi al). Para üstlü ödeme 4-6 (tutar keypad'de). Kalem bazlı 4+n (n = seçilen kalem).
+**Dokunuş sayısı:** tam nakit ödeme 2 (Ödeme al → Nakit Al; yöntem düğmenin kendisidir). Para üstlü ödeme 3-5 (alınan tutar keypad'de ya da hızlı banknot). Kalem bazlı 2+n (n = sağdaki adisyonda seçilen birim). Yuvarlamalı tam ödeme +1 (Yuvarla).
 
 ```
-┌ Ödeme — Masa 7 ───────────────────────────────────────┐
-│ Toplam ₺240   Ödenen ₺0          KALAN  ₺240          │
-│ [ Tümü ]  [ 2'ye böl ] [ 3'e böl ] [ Kalem seç ]      │
-│ Yöntem:  [● Nakit ]  [ Kart ]                         │
-│ ┌ Alınan ──────────┐  ┌ 7 8 9 ┐   Para üstü          │
-│ │      200,00      │  │ 4 5 6 │      ₺60,00          │
-│ └──────────────────┘  │ 1 2 3 │                      │
-│ [₺50][₺100][₺200] [Tam]│ 0 00 ⌫│   [ Ödemeyi al ]     │
-└───────────────────────┴───────┴───────────────────────┘
+┌ Ödeme — Masa 7 ──────────────────────────────── KALAN ₺437,50 ┐   ┌ Adisyon (seçim yüzeyi) ─────┐
+│ Toplam ₺437,50 · Ödenen ₺0                                     │   │ 2× Burger  [−] 1/2 [+] ₺350 │
+│ [ Tümü ] [2'ye böl] [3'e böl] [4'e böl]   ┌ Ödenecek ─────────┐│   │ 1× Ayran   ☑         ₺ 50   │
+│ [ ✎ Başka tutar ] [ Seçimi temizle ]      │ ~~437,50~~ ₺435,00│   │ 1× Çay     ☐         ₺37,50 │
+│ Kişiler: [K1 ₺200] [K2 ₺237,50]           ├───────────────────┤│   │ "2× Burger — 1 ödendi,       │
+│ Seçilen ₺437,50 → bu ödemeden sonra ₺0    │ ✓ Yuvarlandı:     ││   │   1 kalan" (yalnız kalan)    │
+│                                           │ ₺435,00 (−₺2,50)  ││   └──────────────────────────────┘
+│                                           │ — geri al         ││
+│                                           │ Alınan  ₺500,00   ││
+│                                           │ Para üstü ₺65,00  ││
+│                                           │ [50][100][200][500][Tam]
+│                                           │ 7 8 9 / 4 5 6 / 1 2 3 / 0 00 ⌫
+│                                           │ [Nakit Al ₺435,00] [Kart ₺435,00]
+└────────────────────────────────────────────────────────────────┘
 ```
 
 - Tuş takımı **her zaman görünür** — tutar alanına dokunmak gerekmez (kioskta klavye yok).
-- "Kalem seç" → adisyon satırlarında seçim kipi; seçilenlerin toplamı tutar alanına düşer, kalan liste ekranda kalır:
+- **Seçim yüzeyi sağdaki adisyondur** (eski soldaki "Kalem seç"/ItemPicker kalktı; karar: `docs/plans/2026-10-02-kasa-rapor-programi.md` G.1). Ödeme ekranı açıkken adisyon satırları seçim kipindedir:
+  - Seçim **birim bazlıdır**. Adedi 1 olan satıra dokunuş seç/bırak; adedi >1 olan satırda her dokunuş +1 birim, satır içi stepper `[−] 1/2 [+]` (≥56px), uzun basış = tüm kalan birimler.
+  - Kısmen ödenmiş satır "2× Burger — 1 ödendi, 1 kalan" diye görünür; yalnız kalan birimler seçilebilir, ödenmiş satır "Ödendi" etiketi taşır.
+  - Seçim yapılınca kip kendiliğinden "kalem"e geçer, seçimin toplamı Ödenecek'e düşer. Seçim toplamı tutara eşit olduğundan fişe **gerçek ad/adet/birim fiyat** basılır; seçim kalan borçtan fazlaysa kalan kadarı alınır ("kalan kadarı alınır" notu) ve yalnız o durumda satırlar orantılanır.
+  - Kip düğmeleri (Tümü / Böl / Başka tutar) seçimi bırakır; "Seçimi temizle" yalnız seçimi siler.
+- **Kişi çipleri** (seat atanmış adisyonda): çipe dokunmak o kişinin ödenmemiş birimlerini adisyonda seçer, tekrar dokunmak bırakır; birden çok çip birlikte seçilebilir (alman usulü). Ödenmiş kişi teal "ödendi" çipiyle kapanır. Seat backend'e gönderilmez — yalnız seçim kısayoludur.
+- **Yöntem düğmenin kendisidir:** "Nakit Al" (amber, birincil) ve "Kart" (ikincil). Nakit düğmesi alınan tutar ödenecekten azken kapalıdır ve eksik tutar yazılır; kartın altında kalıcı "cihaz kayıtlı değil" notu durur.
 
-```
- ☑ 2× Lahmacun (acılı)   ₺180     Seçilen: ₺195
- ☑ 1× Çay                ₺ 15     Kalan  : ₺ 45
- ☐ 3× Ayran              ₺ 45     [ Seçileni öde ]
-```
+**Beşli yuvarlama (G.2).** Şube Ayarları → POS Tercihleri'nde nakit ve/veya kart için açılır (adım ₺0,50/₺1/₺5/₺10, adisyon başına üst sınır; varsayılan kapalı, ₺5, ₺10). Otomatik uygulanmaz; kasiyerin tek dokunuşudur:
+- Düğme **Ödenecek kutusunun hemen altında** durur: `↓ Yuvarla: ₺435,00 (−₺2,50)`. Yalnız şu durumda görünür: şubede en az bir yöntem için yuvarlama açık, ödeme **kalan borcun tamamını kapatıyor** (Tümü kipi ya da kalanın tamamını tutan seçim/tutar), aşağı yuvarlama farkı > 0 ve üst sınırın altında. Bölüştürme ya da kısmi tutar seçilince düğme kaybolur ve uygulanmış yuvarlama kendiliğinden düşer.
+- Dokununca **amber vurgulu** "✓ Yuvarlandı: ₺435,00 (−₺2,50) — geri al" olur (toggle; ikinci dokunuş geri alır). Kırmızı kullanılmaz — kırmızı iptal/silme için rezervdir. Ödenecek tutar yuvarlanmış haliyle büyük, eski tutar üstü çizili küçük gösterilir; "Nakit Al ₺435,00" / "Kart ₺435,00" düğmeleri tahsil edilecek tutarı yazar. Yuvarlama yalnız bir yöntemde açıksa diğer düğme tam tutarı gösterir ve altta "Yuvarlama yalnız nakitte — kartla tam tutar alınır." notu çıkar.
+- Para üstü ve "eksik" yuvarlanmış tutara göre hesaplanır. Etiket ek almaz ("435,00'e" yerine "Yuvarla: ₺435,00"): tutarın okunuşuna göre değişen yönelme eki şablonla doğru üretilemez.
+- İstek: `amount_total` = fiilen alınan (₺435,00), `rounding_amount` = ₺2,50; mali satırlar kalemlerin **tam fiyatıyla** (₺437,50) gider, sunucu fişe "Yuvarlama" indirimi ekler. Sunucu her kuralı yeniden denetler (yöntem açık, fark < adım, tutar adımın katı, kalanın tamamı, adisyon başına toplam ≤ sınır, adisyon zorunlu, mali cihaz yalnız mock — Token'ın indirimi KDV'ye dağıtımı teyit edilene kadar) ve ihlali `422 rounding_not_allowed` ile reddeder; kasiyere "yuvarlamayı kaldırıp tam tutarı alın" denir, para alınmamıştır.
+- Adisyon kapanışı, fazla ödeme koruması ve kalan borç `amount_total + rounding_amount` üzerinden hesaplanır; kasa beklenen nakdi yalnız fiilen alınanı sayar. Bilgi fişine "YUVARLAMA −₺2,50 / ÖDENECEK ₺435,00" satırları basılır.
 
 **Kalem bazlı ödemede backend kararı — istemci tarafı seçim + mevcut `lines` alanı.**
 Gerekçe: `fiscalLineRequest`'te `order_item_id` yok, `CheckSettlement` yalnız id+tutar döner, kapanış guard'ı (`TotalPaidForCheck`) tutar bazlıdır. Sunucuya kalem başına `paid_amount` eklemek şema + RLS + settlement + kapanış guard'ı zincirini açar; tek kasalı pilotta karşılığı yok. Buna karşılık seçilen kalemler **zaten var olan `lines` dizisine doldurulur** — bu hem kalem bazlı ödemeyi mali fişe doğru yansıtır hem de bulgu #4'ü (sentetik "Satis" satırı, gerçek ÖKC reddi) kapatır. **Tek taşla iki kuş: bu iş paketi zaten yapılmak zorunda.**

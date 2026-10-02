@@ -185,6 +185,18 @@ nedeni de buldu: `buildPaymentLines` tutar seçimden saparsa orantılayıp HER k
 Her faz: implementasyon alt agent'ta, tam regresyon (backend `-p 1`, vitest, lint,
 arch-lint) + deploy + canlı doğrulama + etkilenen e2e-prod spec'leri.
 
+## Açık takip işleri
+
+- **Maliyet görünürlüğü (güvenlik):** `cost_amount` katalog okuma izni olan TÜM rollere
+  dönüyor (garson/kasiyer dahil); şube maliyeti franchise transfer fiyatı olabilir.
+  AUTH-001 katman 4 (DTO projeksiyonu) ile role göre kısılmalı — Faz 3 raporlarıyla
+  birlikte ele alınacak. Maliyetler girilmeye başlanmadan önce kapatılmalı.
+- Ürün/override PUT'ları tam-değiştirme: `cost_amount` göndermeyen istemci maliyeti
+  siler; admin gönderiyor, başka istemci bu PUT'ları kullanırsa alanı eklemeli.
+- `catalog.branch_override.changed.v1` payload'una `cost_amount` eklendi (tüketici yok, bilgi).
+- `docs/pos-ux-spec.md` §3b eski "Kalem seç" akışını anlatıyor — G.2 yuvarlama işiyle
+  birlikte güncellenecek.
+
 ## Mali müşavir / ürün teyidi bekleyenler (varsayılanla ilerleniyor)
 
 | Soru | Varsayılan |

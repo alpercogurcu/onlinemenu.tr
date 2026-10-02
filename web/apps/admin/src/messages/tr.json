@@ -212,7 +212,8 @@
       "accept": "Siparişi kabul et",
       "accepted": "Sipariş kabul edildi, mutfağa düştü",
       "acceptFailed": "Sipariş kabul edilemedi",
-      "closeNeedsPayment": "Kalan {amount} ödenmeden kapatılamaz. Ödemeyi kasadaki POS uygulamasından alın."
+      "closeNeedsPayment": "Kalan {amount} ödenmeden kapatılamaz. Ödemeyi kasadaki POS uygulamasından alın.",
+      "roundingNote": "+ {amount} yuvarlama"
     }
   },
   "catalogMenus": {
@@ -813,6 +814,19 @@
     "flowHint": "Yoğun şubelerde basit akış garsonu hızlandırır: sipariş fişle mutfağa düşer, ekranda adım takibi yapılmaz.",
     "flowWarning": "Basit akışta mutfak ekranı ve sipariş durum takibi devre dışı kalır.",
     "saved": "POS tercihleri kaydedildi",
-    "saveFailed": "POS tercihleri kaydedilemedi"
+    "saveFailed": "POS tercihleri kaydedilemedi",
+    "roundingTitle": "Nakit yuvarlama (beşli yuvarlama)",
+    "roundingHint": "Kasiyer ödeme ekranında kalan tutarı tek dokunuşla aşağı yuvarlayabilir; otomatik uygulanmaz. Yuvarlama yalnız adisyonun kalanını kapatan ödemede kullanılabilir.",
+    "roundingCash": "Nakit ödemede yuvarlamaya izin ver",
+    "roundingCard": "Kartlı ödemede yuvarlamaya izin ver",
+    "roundingStepTitle": "Yuvarlama adımı",
+    "roundingStep50": "₺0,50",
+    "roundingStep100": "₺1",
+    "roundingStep500": "₺5",
+    "roundingStep1000": "₺10",
+    "roundingMaxTitle": "Adisyon başına en fazla yuvarlama (₺)",
+    "roundingMaxHint": "0 ile 100 ₺ arası. Bir adisyonda verilen yuvarlamaların toplamı bu tutarı aşamaz.",
+    "roundingMaxInvalid": "0 ile 100 ₺ arasında bir tutar girin",
+    "roundingDeviceWarning": "Mali cihaz (ÖKC) bağlı şubelerde yuvarlama, cihaz üreticisinin indirim teyidi gelene kadar sunucu tarafından reddedilir."
   }
 }

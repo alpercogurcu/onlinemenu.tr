@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import api from "@/lib/api"
-import type { PosBranchSettings, PosOrderFlow, WaiterCategoryLayout } from "@/types"
+import type { PosBranchSettings, PosOrderFlow, RoundingStepMinor, WaiterCategoryLayout } from "@/types"
 
 const SETTINGS_KEY = "pos-branch-settings"
 const SETTINGS_PATH = "/api/v1/pos/branch-settings"
@@ -31,6 +31,10 @@ export interface PosBranchSettingsInput {
   branch_id: string
   waiter_category_layout?: WaiterCategoryLayout
   order_flow?: PosOrderFlow
+  rounding_cash_enabled?: boolean
+  rounding_card_enabled?: boolean
+  rounding_step_minor?: RoundingStepMinor
+  rounding_max_per_check_minor?: number
 }
 
 export function useUpdatePosBranchSettings() {

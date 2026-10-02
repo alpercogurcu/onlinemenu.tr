@@ -179,6 +179,57 @@ describe("BranchesPage POS preferences", () => {
     expect(screen.getByText(/POS Tercihleri — Adapazarı/)).toBeInTheDocument()
   })
 
+  it("reads rounding as off when the branch has no row", async () => {
+    renderPage()
+
+    const cash = await screen.findByRole("switch", { name: "Nakit ödemede yuvarlamaya izin ver" })
+    await waitFor(() => expect(cash).not.toBeDisabled())
+    expect(cash).not.toBeChecked()
+    expect(screen.getByRole("switch", { name: "Kartlı ödemede yuvarlamaya izin ver" })).not.toBeChecked()
+    expect(screen.getByRole("radio", { name: "₺5" })).toBeChecked()
+    expect(screen.getByRole("textbox", { name: "Adisyon başına en fazla yuvarlama (₺)" })).toHaveValue("10,00")
+  })
+
+  it("PUTs only the rounding field that changed", async () => {
+    renderPage()
+
+    const cash = await screen.findByRole("switch", { name: "Nakit ödemede yuvarlamaya izin ver" })
+    await waitFor(() => expect(cash).not.toBeDisabled())
+    fireEvent.click(cash)
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/api/v1/pos/branch-settings", { branch_id: "b1", rounding_cash_enabled: true }),
+    )
+    await waitFor(() => expect(cash).toBeChecked())
+
+    const step = screen.getByRole("radio", { name: "₺1" })
+    await waitFor(() => expect(step).not.toBeDisabled())
+    fireEvent.click(step)
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/api/v1/pos/branch-settings", { branch_id: "b1", rounding_step_minor: 100 }),
+    )
+  })
+
+  it("saves the per-check ceiling on blur, in kuruş, and refuses an out-of-range value", async () => {
+    renderPage()
+
+    const max = await screen.findByRole("textbox", { name: "Adisyon başına en fazla yuvarlama (₺)" })
+    await waitFor(() => expect(max).not.toBeDisabled())
+
+    fireEvent.change(max, { target: { value: "150" } })
+    fireEvent.blur(max)
+    expect(screen.getByText("0 ile 100 ₺ arasında bir tutar girin")).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+
+    fireEvent.change(max, { target: { value: "7,50" } })
+    fireEvent.blur(max)
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/api/v1/pos/branch-settings", {
+        branch_id: "b1",
+        rounding_max_per_check_minor: 750,
+      }),
+    )
+  })
+
   it("renders no card and fires no GET without pos.table.manage", async () => {
     granted = new Set<string>()
     renderPage()

@@ -193,7 +193,9 @@ export interface Order {
 export interface CheckSettlement {
   check_id: string
   as_of: string
-  completed: { payment_id: string; amount_total: number }[]
+  // rounding_amount: the rounding conceded by the payment (beşli yuvarlama);
+  // the check's balance drops by amount_total + rounding_amount.
+  completed: { payment_id: string; amount_total: number; rounding_amount?: number }[]
   pending_total: number
 }
 
@@ -568,10 +570,20 @@ export interface StorefrontSettings {
 export type WaiterCategoryLayout = "top" | "side"
 export type PosOrderFlow = "full" | "simple"
 
+// Cash-rounding step in kuruş (₺0,50 / ₺1 / ₺5 / ₺10) — mirrors the
+// pos_branch_settings CHECK constraint.
+export type RoundingStepMinor = 50 | 100 | 500 | 1000
+
 export interface PosBranchSettings {
   branch_id: string
   waiter_category_layout: WaiterCategoryLayout
   order_flow: PosOrderFlow
+  // Optional on the type so a response from a backend that predates rounding
+  // reads as "off" instead of crashing the card.
+  rounding_cash_enabled?: boolean
+  rounding_card_enabled?: boolean
+  rounding_step_minor?: RoundingStepMinor
+  rounding_max_per_check_minor?: number
 }
 
 // Sales report — GET /api/v1/pos/reports/sale-details response

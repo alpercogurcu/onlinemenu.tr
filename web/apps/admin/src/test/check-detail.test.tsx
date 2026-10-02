@@ -89,6 +89,20 @@ describe("CheckDetail", () => {
     expect(screen.queryByText(/POS uygulamasından/)).not.toBeInTheDocument()
   })
 
+  // Beşli yuvarlama: ₺937,50 conceded down to ₺935,00 is fully paid — the
+  // rounding must not reappear as "kalan" and lock the close.
+  it("counts a payment's rounding toward the check", () => {
+    settlement = {
+      check_id: "c1",
+      as_of: "",
+      completed: [{ payment_id: "p", amount_total: 93_750, rounding_amount: 250 }],
+      pending_total: 0,
+    }
+    renderDetail()
+    expect(screen.getByRole("button", { name: "Kapat" })).toBeEnabled()
+    expect(screen.getByText(/2,50 yuvarlama/)).toBeInTheDocument()
+  })
+
   it("asks before cancelling", async () => {
     cancelMutate.mockResolvedValue({})
     renderDetail()

@@ -152,8 +152,14 @@ function OrderCard({ order, canAccept }: { order: Order; canAccept: boolean }) {
 // Same rule as the POS till (pos-desktop lib/fiscalStatus collectableRemaining):
 // money in flight is already reserved, so it is NOT still owed — showing it
 // as "kalan" is exactly the misreading that led to double collection.
+// A payment settles amount_total + rounding_amount (beşli yuvarlama): the
+// rounding is conceded, not owed, so it must not reappear as "kalan".
+function settledByPayments(settlement: CheckSettlement | undefined): number {
+  return (settlement?.completed ?? []).reduce((sum, p) => sum + p.amount_total + (p.rounding_amount ?? 0), 0)
+}
+
 function unpaidAmount(check: Check, settlement: CheckSettlement | undefined): number {
-  const paid = (settlement?.completed ?? []).reduce((sum, p) => sum + p.amount_total, 0)
+  const paid = settledByPayments(settlement)
   const pending = settlement?.pending_total ?? 0
   return Math.max((check.total ?? 0) - paid - pending, 0)
 }
@@ -168,7 +174,7 @@ function Summary({
   settlementState: "hidden" | "loading" | "error" | "ready"
 }) {
   const t = useTranslations("posChecks")
-  const paid = (settlement?.completed ?? []).reduce((sum, p) => sum + p.amount_total, 0)
+  const paid = settledByPayments(settlement)
   const pending = settlement?.pending_total ?? 0
   const remaining = unpaidAmount(check, settlement)
 
@@ -214,7 +220,14 @@ function Summary({
                       <span className="font-mono text-xs text-muted-foreground">
                         {p.payment_id.slice(0, 8)}
                       </span>
-                      <span className="tabular-nums">{formatKurus(p.amount_total)}</span>
+                      <span className="tabular-nums">
+                        {formatKurus(p.amount_total)}
+                        {(p.rounding_amount ?? 0) > 0 && (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {t("detail.roundingNote", { amount: formatKurus(p.rounding_amount) })}
+                          </span>
+                        )}
+                      </span>
                     </li>
                   ))}
                 </ul>

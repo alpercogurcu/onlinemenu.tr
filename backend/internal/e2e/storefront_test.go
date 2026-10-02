@@ -150,6 +150,11 @@ func newStorefrontStack(t *testing.T) storefrontStack {
 	signer, err := auth.NewGuestTokenSigner([]byte(guestTokenSecret))
 	require.NoError(t, err)
 
+	// The real settings service is the production OrderingGate; a nil gate
+	// would panic on the menu read and on order placement.
+	gate := storefrontsvc.NewBranchSettingsService(storefrontsvc.BranchSettingsParams{
+		DB: sharedPool, Settings: storefrontrepo.NewBranchSettingsRepo(), Logger: log,
+	})
 	qrService := storefrontsvc.NewQRService(storefrontsvc.QRParams{
 		DB: sharedPool, QRRepo: storefrontrepo.NewQRCodeRepo(), Logger: log,
 	})
@@ -168,8 +173,10 @@ func newStorefrontStack(t *testing.T) storefrontStack {
 			Placer:      guestPos,
 			Orders:      guestPos,
 			GuestOrders: storefrontrepo.NewGuestOrderRepo(),
+			Gate:        gate,
 			Logger:      log,
 		}),
+		Gate:   gate,
 		Signer: signer,
 		Cache:  cache,
 		Logger: log,

@@ -1,6 +1,6 @@
 // (c) Serdivan'da tam kasa günü — canlı prod akışının uçtan uca provası:
 // kasa aç → adisyon → seçeneksiz + seçenekli sipariş → mutfak (KDS arayüzü,
-// mutfak hesabı) kabul/ilerlet → kalem bazlı + kalan nakit ödeme (mock ÖKC
+// mutfak hesabı) accepted'dan ilerlet (basit akış: pending yok) → kalem bazlı + kalan nakit ödeme (mock ÖKC
 // fişi) → adisyon kapat → masayı kasiyer temizler → kasa sayımı (fark) →
 // kasa kapat → şube bazlı gün sonu raporu.
 //
@@ -166,17 +166,13 @@ test.describe("(c) Serdivan kasa günü", () => {
   })
 
   test("mutfak ekranında (KDS arayüzü) bilet ilerletilir", async ({ page }) => {
-    // Kabul kasa kararıdır (pos.order.accept): mutfak ekranında "Kabul Et"
-    // düğmesi yoktur, kasiyer API'den kabul eder. Her iki sipariş de kabul
-    // edilir, aksi hâlde aynı masanın panoda hem bekleyen hem kabul edilmiş
-    // kartı olur ve seçim belirsizleşir.
-    const pending = (await json<Order[]>(await cashier.api.get(`/api/v1/pos/checks/${checkId}/orders`), 200)).filter(
-      (o) => o.status === "pending",
-    )
-    expect(pending.length).toBeGreaterThan(0)
-    for (const order of pending) {
-      await expectStatus(await cashier.api.post(`/api/v1/pos/orders/${order.id}/accept`), 200)
-    }
+    // Serdivan basit akışta (pos_branch_settings order_flow=simple): kasa
+    // onayı adımı yoktur, siparişler accepted doğar ve pending hiç oluşmaz.
+    // Mutfak ekranı doğrudan accepted kartından ("Hazırlamaya Başla") devam eder.
+    const orders = await json<Order[]>(await cashier.api.get(`/api/v1/pos/checks/${checkId}/orders`), 200)
+    expect(orders.length).toBeGreaterThan(0)
+    expect(orders.filter((o) => o.status === "pending")).toHaveLength(0)
+    for (const order of orders) expect(order.status).toBe("accepted")
 
     await loginAdmin(page, ACCOUNTS.kitchenSerdivan())
     await gotoSpa(page, "/pos/kitchen")

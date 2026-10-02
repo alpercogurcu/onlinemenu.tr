@@ -49,7 +49,9 @@ const CASES: RoleCase[] = [
     // sayfası bilinçli olarak adisyonlar kaldı (ROLE_HOMES: kasiyer güne
     // raporla değil adisyonla başlar).
     home: "/pos/checks",
-    menu: ["/", "/pos/tables", "/pos/checks", "/pos/kitchen"],
+    // Serdivan runs the simple order flow, so the KDS link is hidden from the
+    // menu (the route itself stays reachable).
+    menu: ["/", "/pos/tables", "/pos/checks"],
     forbidden: ["/catalog/products", "/catalog/branch-pricing", "/settings/branches", "/payment/payments"],
   },
   {
@@ -103,9 +105,9 @@ test.describe("(h) rol bazlı görünürlük", () => {
       try {
         await page.waitForURL((url) => url.pathname === c.home, { timeout: 30_000 })
 
-        const links = await sidebarLinks(page)
-        if (c.menu) expect(links).toEqual(c.menu)
-        else expect(links.length).toBeGreaterThan(0)
+        // Polled: the KDS link is filtered once the branch settings arrive.
+        if (c.menu) await expect.poll(() => sidebarLinks(page)).toEqual(c.menu)
+        else expect((await sidebarLinks(page)).length).toBeGreaterThan(0)
 
         for (const path of c.forbidden) {
           if (path === "/") {

@@ -34,6 +34,24 @@ vi.mock("@/hooks/use-tenant", () => ({
   }),
 }))
 
+// The sidebar reads the selected branch's POS settings to hide the KDS link on
+// the simple flow; both hooks are stubbed so no QueryClient is needed.
+const posSettings = vi.hoisted(() => ({
+  data: undefined as { order_flow: "full" | "simple" } | undefined,
+  isError: false,
+  lastOpts: undefined as { enabled?: boolean } | undefined,
+  branchId: "branch-1",
+}))
+vi.mock("@/hooks/use-selected-branch", () => ({
+  useSelectedBranch: () => ({ branchId: posSettings.branchId }),
+}))
+vi.mock("@/hooks/use-pos-branch-settings", () => ({
+  usePosBranchSettings: (_branchId: string, opts?: { enabled?: boolean }) => {
+    posSettings.lastOpts = opts
+    return { data: posSettings.data, isError: posSettings.isError }
+  },
+}))
+
 // shadcn's SidebarProvider reads window.matchMedia through useIsMobile; jsdom
 // has no implementation.
 vi.stubGlobal(
@@ -72,6 +90,13 @@ describe("resolveEnabledModules", () => {
     expect(resolveEnabledModules(["pos", "party", "hr", "billing"])).toEqual(["pos"])
     expect(resolveEnabledModules([])).toEqual([])
   })
+})
+
+beforeEach(() => {
+  posSettings.data = undefined
+  posSettings.isError = false
+  posSettings.lastOpts = undefined
+  posSettings.branchId = "branch-1"
 })
 
 const MANAGER_ROLE_ID = "00000001-0000-0000-0000-000000000006"
@@ -181,5 +206,83 @@ describe("AdminSidebar branch pricing item", () => {
     render(<AdminSidebar />, { wrapper: Wrapper })
     expect(screen.queryByText("Şube Fiyatları")).not.toBeInTheDocument()
     expect(groupLabels()).toEqual([])
+  })
+})
+
+// Section F of the cash/report programme: the simple order flow has no
+// kitchen display, so its menu link is hidden too. Fail-open: when the
+// setting is unknown the link stays.
+describe("AdminSidebar kitchen link (order_flow)", () => {
+  const ROLE = {
+    manager: "00000001-0000-0000-0000-000000000006",
+    cashier: "00000001-0000-0000-0000-000000000001",
+    kitchen: "00000001-0000-0000-0000-000000000004",
+  }
+
+  function signIn(roleId: string) {
+    const enc = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url")
+    setAccessToken(`${enc({ alg: "HS256", typ: "CTX" })}.${enc({ rids: [roleId] })}.sig`)
+    useAuthStore.setState({ user: { id: "u1", name: "U", email: "u@x" }, tenantId: "tenant-1" })
+  }
+
+  const kitchenLink = () => screen.queryByRole("link", { name: "Mutfak Ekranı" })
+
+  beforeEach(() => {
+    tenantModules.value = undefined
+    tenantModules.isError = false
+  })
+
+  afterEach(() => {
+    clearAccessToken()
+    useAuthStore.setState({ user: null, tenantId: null })
+  })
+
+  it("hides it for the manager when the selected branch is simple", () => {
+    signIn(ROLE.manager)
+    posSettings.data = { order_flow: "simple" }
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(kitchenLink()).not.toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Adisyonlar" })).toBeInTheDocument()
+  })
+
+  it("hides it for the cashier on a simple branch", () => {
+    signIn(ROLE.cashier)
+    posSettings.data = { order_flow: "simple" }
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(kitchenLink()).not.toBeInTheDocument()
+  })
+
+  it("keeps it on the full flow", () => {
+    signIn(ROLE.manager)
+    posSettings.data = { order_flow: "full" }
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(kitchenLink()).toBeInTheDocument()
+  })
+
+  it("keeps it while the settings are loading, on error, or with no branch (fail-open)", () => {
+    signIn(ROLE.manager)
+    const { unmount } = render(<AdminSidebar />, { wrapper: Wrapper })
+    expect(kitchenLink()).toBeInTheDocument()
+    unmount()
+
+    posSettings.isError = true
+    const second = render(<AdminSidebar />, { wrapper: Wrapper })
+    expect(kitchenLink()).toBeInTheDocument()
+    second.unmount()
+
+    posSettings.branchId = ""
+    render(<AdminSidebar />, { wrapper: Wrapper })
+    expect(kitchenLink()).toBeInTheDocument()
+  })
+
+  it("does not fetch settings for the kitchen role (no pos.check.read) and keeps its menu", () => {
+    signIn(ROLE.kitchen)
+    render(<AdminSidebar />, { wrapper: Wrapper })
+
+    expect(posSettings.lastOpts?.enabled).toBe(false)
+    expect(kitchenLink()).toBeInTheDocument()
   })
 })

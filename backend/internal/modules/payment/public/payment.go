@@ -66,6 +66,13 @@ var ErrCheckBranchMismatch = errors.New("payment: check belongs to another branc
 // with a dangling check_id. Callers map it to HTTP 422.
 var ErrCheckNotFound = errors.New("payment: check not found")
 
+// ErrPaymentExceedsDue is returned by PaymentService.RegisterSale when the
+// amount would take the check's collected money (completed plus
+// fiscal-pending) past its total. Without it two stations settling the same
+// adisyon at once — POS and the web till — both charged the customer in
+// full. Callers map it to HTTP 409 with code "payment_exceeds_due".
+var ErrPaymentExceedsDue = errors.New("payment: amount exceeds what the check still owes")
+
 // ErrCashSessionClosed is returned by CashSessionPinService.Join/Switch when
 // the target session is not open (ADR-DATA-008 PIN akışı §4: participation
 // and switching only make sense against an open drawer). Callers map it to

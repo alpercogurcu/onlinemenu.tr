@@ -199,8 +199,16 @@ var ErrCheckBranchMismatch = errors.New("pos: check belongs to another branch")
 //
 // branchID is the branch the caller intends to book the write under. Pass
 // uuid.Nil to skip the branch comparison.
+//
+// CheckTotal reports what the check owes in kuruş, computed exactly as
+// CheckService.Close computes it (inactive orders excluded). Payment needs it
+// to refuse a sale that would collect more than the check is worth; exposing
+// the number rather than an "is this amount payable" verdict is deliberate,
+// because what has already been paid is payment's own data and pos must not
+// read it.
 type CheckWriteGuard interface {
 	AssertCheckWritable(ctx context.Context, tenantID, checkID, branchID uuid.UUID) error
+	CheckTotal(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error)
 }
 
 // CheckReader allows other modules to read check state without importing POS internals.

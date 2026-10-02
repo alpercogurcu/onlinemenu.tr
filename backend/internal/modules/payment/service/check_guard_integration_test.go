@@ -22,10 +22,39 @@ import (
 // pos table, so the real guard cannot be built from this package — and the
 // contract under test is exactly "what payment does with pos's verdict",
 // which a stub states more precisely than a seeded check would.
+//
+// total is what CheckTotal reports. Left unset it is effectively unlimited, so
+// tests about the verdict alone are not tripped by the overpayment guard;
+// overpayment tests set it with withTotal.
 type stubCheckGuard struct {
-	mu      sync.Mutex
-	verdict error
-	calls   int
+	mu       sync.Mutex
+	verdict  error
+	calls    int
+	total    int64
+	hasTotal bool
+	totalErr error
+}
+
+const unlimitedCheckTotal = int64(1) << 50
+
+func (g *stubCheckGuard) CheckTotal(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.totalErr != nil {
+		return 0, g.totalErr
+	}
+	if !g.hasTotal {
+		return unlimitedCheckTotal, nil
+	}
+	return g.total, nil
+}
+
+func (g *stubCheckGuard) withTotal(total int64) *stubCheckGuard {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.total = total
+	g.hasTotal = true
+	return g
 }
 
 func (g *stubCheckGuard) AssertCheckWritable(_ context.Context, _, _, _ uuid.UUID) error {

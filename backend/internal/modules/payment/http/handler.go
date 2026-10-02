@@ -398,6 +398,10 @@ func (h *Handler) registerSaleError(w http.ResponseWriter, err error) {
 		// "başka bir işlemle çakışıyor" bucket, which told the cashier to
 		// refresh instead of to open the drawer (seen live, 2026-10-01).
 		respondError(w, http.StatusConflict, codeNoCashSessionOpen, "bu şubede açık kasa oturumu yok — satış öncesi kasa açılmalı")
+	case errors.Is(err, pub.ErrPaymentExceedsDue):
+		// Usually another station settled (part of) the same adisyon a moment
+		// earlier; the cashier needs to refresh the balance, not retry blindly.
+		respondError(w, http.StatusConflict, codePaymentExceedsDue, "tutar adisyonun kalan borcunu aşıyor")
 	case errors.Is(err, pub.ErrInvalidInput):
 		// 422, not 500. Until now this endpoint had no sentinel mapping at
 		// all, so an unknown payment method or a non-positive amount was
@@ -419,6 +423,7 @@ const (
 	codeCheckBranchMismatch = "check_branch_mismatch"
 	codeCheckNotFound       = "check_not_found"
 	codeNoCashSessionOpen   = "no_cash_session_open"
+	codePaymentExceedsDue   = "payment_exceeds_due"
 )
 
 type errorResponse struct {

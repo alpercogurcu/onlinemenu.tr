@@ -686,12 +686,30 @@ func TestPOSSpine_CloseBlockedWhileFiscalPending(t *testing.T) {
 
 func TestPOSSpine_IdempotentPayment(t *testing.T) {
 	ctx := context.Background()
-	checkSvc, _, paySvc := buildServices()
+	checkSvc, orderSvc, paySvc := buildServices()
 
 	check, err := checkSvc.Open(ctx, tenantID, staffPrincipal(), posdomain.Check{
 		BranchID:   branchID,
 		TableLabel: "T3",
 		OpenedBy:   &staffID,
+	})
+	require.NoError(t, err)
+
+	// The check must owe what is paid: RegisterSale refuses an amount above
+	// the check total (payment_exceeds_due), and an empty check owes nothing.
+	_, err = orderSvc.Place(ctx, tenantID, staffPrincipal(), posdomain.Order{
+		BranchID:     branchID,
+		CheckID:      &check.ID,
+		OrderChannel: posdomain.OrderChannelDineIn,
+		Items: []posdomain.OrderItem{
+			{
+				ProductID:       spineProduct(5000, 800),
+				ProductName:     "Karışık Izgara",
+				Quantity:        1,
+				UnitPriceAmount: 5000,
+				TaxRateBPS:      800,
+			},
+		},
 	})
 	require.NoError(t, err)
 

@@ -68,6 +68,10 @@ func (stubCheckWriteGuard) AssertCheckWritable(context.Context, uuid.UUID, uuid.
 	return nil
 }
 
+func (stubCheckWriteGuard) CheckTotal(context.Context, uuid.UUID, uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 // supplyExternals provides the dependencies cmd/api/main.go injects into this
 // module. ValidateApp only resolves the graph — no constructor runs and no hook
 // fires — so the nil pointers (and the stub interface impls above) are never

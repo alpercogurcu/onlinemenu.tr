@@ -156,6 +156,19 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 	if err != nil {
 		return domain.Payment{}, err
 	}
+	// Read here, not under the lock below, for the same pool-starvation reason
+	// as the verdict. Residual window: an order placed or cancelled between
+	// this read and the lock is not seen — a raised total can yield a
+	// spurious 409 (the cashier retries), a lowered one can let a small
+	// overpayment through. The double charge this guards against is still
+	// closed, because two racing stations read the same total and the lock
+	// makes the second one count the first one's payment.
+	var checkTotal int64
+	if checkVerdict == nil && hasCheck(req) {
+		if checkTotal, err = s.checks.CheckTotal(ctx, req.TenantID, *req.CheckID); err != nil {
+			return domain.Payment{}, fmt.Errorf("payment/service: read check total: %w", err)
+		}
+	}
 
 	var payment domain.Payment
 	err = s.db.WithTenantTx(ctx, req.TenantID, func(tx pgx.Tx) error {
@@ -171,6 +184,17 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 
 		if checkVerdict != nil {
 			return checkVerdict
+		}
+
+		if hasCheck(req) {
+			replay, err := s.guardAgainstOverpayment(ctx, tx, req, checkTotal)
+			if err != nil {
+				return err
+			}
+			if replay != nil {
+				payment = *replay
+				return nil
+			}
 		}
 
 		// Only a genuinely new registration is gated — never a replay of an
@@ -243,6 +267,51 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 	return payment, nil
 }
 
+// guardAgainstOverpayment refuses a sale that would collect more than the
+// check still owes. It runs inside RegisterSale's transaction, after the
+// idempotency fast path, so a replay never waits on the lock.
+//
+// The per-check lock is what makes the sum below trustworthy: without it two
+// stations both read "nothing paid yet" and both charge in full. Pending
+// payments count as collected — the customer has already handed the money
+// over; only the fiscal receipt is outstanding — and the sums are the same
+// TotalPaidForCheck / PendingTotalForCheck that CheckService.Close reads, so
+// the "may still pay" and "may close" decisions cannot disagree.
+//
+// A non-nil payment return is an idempotent replay discovered under the lock:
+// a concurrent request with the same key committed while this one waited, and
+// counting that payment against the total would turn a harmless retry into a
+// 409.
+func (s *PaymentService) guardAgainstOverpayment(ctx context.Context, tx pgx.Tx, req RegisterSaleRequest, checkTotal int64) (*domain.Payment, error) {
+	checkID := *req.CheckID
+	if err := s.paymentRepo.LockCheckForPayment(ctx, tx, checkID); err != nil {
+		return nil, fmt.Errorf("payment/service: %w", err)
+	}
+	existing, err := s.paymentRepo.GetByIdempotencyKey(ctx, tx, req.TenantID, req.IdempotencyKey)
+	if err == nil {
+		return &existing, nil
+	}
+	if !errors.Is(err, repo.ErrNotFound) {
+		return nil, fmt.Errorf("payment/service: recheck idempotency under lock: %w", err)
+	}
+	paid, err := s.paymentRepo.TotalPaidForCheck(ctx, tx, req.TenantID, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: %w", err)
+	}
+	pending, err := s.paymentRepo.PendingTotalForCheck(ctx, tx, req.TenantID, checkID)
+	if err != nil {
+		return nil, fmt.Errorf("payment/service: %w", err)
+	}
+	if req.AmountTotal > checkTotal-paid-pending {
+		return nil, pub.ErrPaymentExceedsDue
+	}
+	return nil, nil
+}
+
+func hasCheck(req RegisterSaleRequest) bool {
+	return req.CheckID != nil && *req.CheckID != uuid.Nil
+}
+
 // checkVerdictFor asks pos whether req's check may still receive money.
 //
 // It returns (verdict, nil) when pos refused — the caller applies that verdict
@@ -250,7 +319,7 @@ func (s *PaymentService) RegisterSale(ctx context.Context, req RegisterSaleReque
 // at all, which is a 500, not a conflict. A sale with no check_id (masasız
 // satış, paket servis) is unaffected: there is nothing to validate.
 func (s *PaymentService) checkVerdictFor(ctx context.Context, req RegisterSaleRequest) (verdict, failure error) {
-	if req.CheckID == nil || *req.CheckID == uuid.Nil {
+	if !hasCheck(req) {
 		return nil, nil
 	}
 	if s.checks == nil {

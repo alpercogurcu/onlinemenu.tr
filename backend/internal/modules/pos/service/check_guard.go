@@ -87,6 +87,22 @@ func (s *CheckReadService) AssertCheckWritable(ctx context.Context, tenantID, ch
 	return assertCheckWritable(c, branchID)
 }
 
+// CheckTotal implements pub.CheckWriteGuard. Unlocked for the same reason as
+// AssertCheckWritable: the caller's own transaction cannot inherit a lock
+// taken here.
+func (s *CheckReadService) CheckTotal(ctx context.Context, tenantID, checkID uuid.UUID) (int64, error) {
+	var total int64
+	err := s.db.WithTenantReadTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var err error
+		total, err = s.checkRepo.GetTotal(ctx, tx, checkID)
+		return err
+	})
+	if err != nil {
+		return 0, wrapErr(err, "pos/service/check-read: check total: %w")
+	}
+	return total, nil
+}
+
 var (
 	_ pub.CheckReader     = (*CheckReadService)(nil)
 	_ pub.CheckWriteGuard = (*CheckReadService)(nil)

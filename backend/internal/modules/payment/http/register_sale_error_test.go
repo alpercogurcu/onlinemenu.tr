@@ -53,6 +53,12 @@ func TestRegisterSaleError_MapsSentinels(t *testing.T) {
 			wantBodyCode: codeNoCashSessionOpen,
 		},
 		{
+			name:         "payment exceeds due",
+			err:          fmt.Errorf("payment/service: register sale: %w", pub.ErrPaymentExceedsDue),
+			wantStatus:   http.StatusConflict,
+			wantBodyCode: codePaymentExceedsDue,
+		},
+		{
 			name:       "invalid input",
 			err:        fmt.Errorf("%w: amount_total must be positive", pub.ErrInvalidInput),
 			wantStatus: http.StatusUnprocessableEntity,

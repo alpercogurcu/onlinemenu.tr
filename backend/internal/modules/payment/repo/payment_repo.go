@@ -343,3 +343,18 @@ func isUniqueViolation(err error) bool {
 	}
 	return false
 }
+
+// LockCheckForPayment serializes every payment written against one check
+// until tx ends. A transaction-scoped advisory lock rather than a row lock:
+// the checks row belongs to pos and payment may not touch it, and there is no
+// payment row to lock yet when the first sale on a check arrives.
+//
+// check_id is a UUID, unique across tenants, so the key needs no tenant
+// component; the 'check:' prefix keeps it apart from any future advisory key
+// hashed from another kind of id.
+func (r *PaymentRepo) LockCheckForPayment(ctx context.Context, tx pgx.Tx, checkID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('check:' || $1::text))`, checkID); err != nil {
+		return fmt.Errorf("payment/repo: lock check for payment: %w", err)
+	}
+	return nil
+}

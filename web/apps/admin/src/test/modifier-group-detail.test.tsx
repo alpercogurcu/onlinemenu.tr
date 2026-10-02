@@ -82,6 +82,7 @@ function makeProduct(overrides: Partial<Product>): Product {
     description: "",
     image_key: "",
     price_amount: 12000,
+    cost_amount: null,
     currency: "TRY",
     sku: "",
     unit: "adet",

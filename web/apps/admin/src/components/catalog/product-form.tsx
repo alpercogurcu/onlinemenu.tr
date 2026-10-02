@@ -19,6 +19,8 @@ export interface ProductFormValues {
   description: string
   // Kuruş (int64) — see components/catalog/money-input.tsx.
   priceKurus: number | null
+  // Unit cost, KDV hariç; null = unknown (sent as null, never as 0).
+  costKurus: number | null
   taxRateBps: number
   sortOrder: number
   isActive: boolean
@@ -145,6 +147,19 @@ export function ProductForm({ values, errors, categories, onChange }: ProductFor
                 {t("fields.priceHint")}
               </p>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="product-cost">{t("fields.cost")}</Label>
+            <MoneyInput
+              id="product-cost"
+              valueKurus={values.costKurus}
+              onChangeKurus={(value) => onChange({ costKurus: value })}
+              aria-describedby="product-cost-hint"
+            />
+            <p id="product-cost-hint" className="text-xs text-muted-foreground">
+              {t("fields.costHint")}
+            </p>
           </div>
 
           <div className="space-y-2">

@@ -54,6 +54,7 @@ export function useUpdateProduct() {
       name: string
       description: string
       price_amount: number
+      cost_amount: number | null
       currency: string
       unit: string
       tax_rate_bps: number

@@ -34,6 +34,7 @@ const row = (productId: string, patch: Partial<BranchProductOverride> = {}): Bra
   product_id: productId,
   is_available: true,
   price_amount: null,
+  cost_amount: null,
   updated_at: "2026-09-20T10:00:00Z",
   ...patch,
 })
@@ -82,7 +83,7 @@ describe("useUpsertBranchOverride", () => {
     const { result } = renderHook(() => useUpsertBranchOverride("b1"), { wrapper })
 
     act(() => {
-      result.current.mutate({ productId: "p1", is_available: false, price_amount: 12_500 })
+      result.current.mutate({ productId: "p1", is_available: false, price_amount: 12_500, cost_amount: null })
     })
 
     await waitFor(() =>
@@ -93,6 +94,7 @@ describe("useUpsertBranchOverride", () => {
     expect(put).toHaveBeenCalledWith("/api/v1/catalog/branches/b1/products/p1/override", {
       is_available: false,
       price_amount: 12_500,
+      cost_amount: null,
     })
 
     resolvePut({ data: row("p1", { is_available: false, price_amount: 12_500 }) })
@@ -109,7 +111,7 @@ describe("useUpsertBranchOverride", () => {
     const { result } = renderHook(() => useUpsertBranchOverride("b1"), { wrapper })
 
     await act(async () => {
-      await result.current.mutateAsync({ productId: "p1", is_available: true, price_amount: 2_000 }).catch(() => {})
+      await result.current.mutateAsync({ productId: "p1", is_available: true, price_amount: 2_000, cost_amount: null }).catch(() => {})
     })
 
     const cached = client.getQueryData<BranchProductOverride[]>(branchOverridesKey("b1")) ?? []
@@ -125,7 +127,7 @@ describe("useUpsertBranchOverride", () => {
     const { result } = renderHook(() => useUpsertBranchOverride("b1"), { wrapper })
 
     await act(async () => {
-      await result.current.mutateAsync({ productId: "p9", is_available: false, price_amount: null }).catch(() => {})
+      await result.current.mutateAsync({ productId: "p9", is_available: false, price_amount: null, cost_amount: null }).catch(() => {})
     })
 
     expect(client.getQueryData<BranchProductOverride[]>(branchOverridesKey("b1"))).toEqual([])

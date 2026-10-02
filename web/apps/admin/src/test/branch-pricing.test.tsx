@@ -53,6 +53,7 @@ const product = (id: string, name: string, price: number, patch: Partial<Product
   description: "",
   image_key: "",
   price_amount: price,
+  cost_amount: null,
   currency: "TRY",
   sku: "",
   unit: "adet",
@@ -75,6 +76,7 @@ const override = (productId: string, patch: Partial<BranchProductOverride> = {})
   product_id: productId,
   is_available: true,
   price_amount: null,
+  cost_amount: null,
   updated_at: "2026-09-20T10:00:00Z",
   ...patch,
 })
@@ -99,7 +101,7 @@ function mockRoutes() {
   })
   // A stateful fake server: the hook refetches after every save, so a static
   // list would overwrite the very state these tests assert on.
-  put.mockImplementation((url: string, body: { is_available: boolean; price_amount: number | null }) => {
+  put.mockImplementation((url: string, body: { is_available: boolean; price_amount: number | null; cost_amount: number | null }) => {
     const productId = /products\/([^/]+)\/override$/.exec(url)?.[1] ?? ""
     const saved = override(productId, body)
     overrides = [...overrides.filter((o) => o.product_id !== productId), saved]
@@ -195,12 +197,39 @@ describe("BranchPricing", () => {
       expect(put).toHaveBeenCalledWith("/api/v1/catalog/branches/b2/products/p1/override", {
         is_available: true,
         price_amount: 31_050,
+        cost_amount: null,
       }),
     )
     expect(put).toHaveBeenCalledTimes(1)
     await waitFor(() =>
       expect(within(rowOf("p1")).getByText("Şube fiyatı", { selector: "span[data-slot=badge]" })).toBeInTheDocument(),
     )
+  })
+
+  it("commits a typed branch cost: one PUT keeping price and availability, cost as kuruş", async () => {
+    overrides = [override("p2", { price_amount: 31_000, is_available: false })]
+    await openIzmit()
+
+    const input = within(rowOf("p2")).getByLabelText(/şube maliyeti$/) as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, { target: { value: "120,50" } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put.mock.calls[0]).toEqual([
+      "/api/v1/catalog/branches/b2/products/p2/override",
+      { is_available: false, price_amount: 31_000, cost_amount: 12_050 },
+    ])
+  })
+
+  it("keeps the branch cost when only the price is edited (full-replace body)", async () => {
+    overrides = [override("p2", { cost_amount: 9_000 })]
+    await openIzmit()
+
+    commitPrice("p2", "300")
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put.mock.calls[0][1]).toEqual({ is_available: true, price_amount: 30_000, cost_amount: 9_000 })
   })
 
   it("commits on Enter", async () => {
@@ -211,7 +240,7 @@ describe("BranchPricing", () => {
     fireEvent.keyDown(input, { key: "Enter" })
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
-    expect(put.mock.calls[0][1]).toEqual({ is_available: true, price_amount: 30_000 })
+    expect(put.mock.calls[0][1]).toEqual({ is_available: true, price_amount: 30_000, cost_amount: null })
   })
 
   it("does not re-open a closed product when only its price is edited", async () => {
@@ -222,7 +251,7 @@ describe("BranchPricing", () => {
     commitPrice("p3", "85")
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
-    expect(put.mock.calls[0][1]).toEqual({ is_available: false, price_amount: 8_500 })
+    expect(put.mock.calls[0][1]).toEqual({ is_available: false, price_amount: 8_500, cost_amount: null })
   })
 
   it("keeps the branch price when the switch closes a product", async () => {
@@ -235,7 +264,7 @@ describe("BranchPricing", () => {
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
     expect(put.mock.calls[0]).toEqual([
       "/api/v1/catalog/branches/b2/products/p2/override",
-      { is_available: false, price_amount: 31_000 },
+      { is_available: false, price_amount: 31_000, cost_amount: null },
     ])
     await waitFor(() => expect(within(rowOf("p2")).getByText("Kapalı")).toBeInTheDocument())
   })
@@ -248,7 +277,7 @@ describe("BranchPricing", () => {
     commitPrice("p2", "")
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
-    expect(put.mock.calls[0][1]).toEqual({ is_available: true, price_amount: null })
+    expect(put.mock.calls[0][1]).toEqual({ is_available: true, price_amount: null, cost_amount: null })
     expect(del).not.toHaveBeenCalled()
   })
 

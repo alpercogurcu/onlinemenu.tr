@@ -16,6 +16,9 @@ export interface Product {
   description: string
   image_key: string
   price_amount: number
+  // Kuruş, KDV hariç; null = unknown (never 0). Every product PUT must
+  // round-trip it or a save wipes the stored cost.
+  cost_amount: number | null
   currency: string
   sku: string
   unit: string
@@ -42,6 +45,8 @@ export interface BranchProductOverride {
   is_available: boolean
   // Kuruş (int64); null means "use the tenant price".
   price_amount: number | null
+  // Kuruş, KDV hariç; null = use the product cost.
+  cost_amount: number | null
   updated_at: string
 }
 export interface Category {

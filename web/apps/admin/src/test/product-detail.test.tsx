@@ -47,6 +47,7 @@ const PRODUCT: Product = {
   description: "Acılı",
   image_key: "",
   price_amount: 15000,
+  cost_amount: 8000,
   currency: "TRY",
   sku: "",
   unit: "adet",
@@ -245,6 +246,30 @@ describe("ProductEditor", () => {
     )
   })
 
+  it("sends the typed cost as kuruş on create, and null when the field is left empty", async () => {
+    renderEditor({ productId: undefined })
+
+    fireEvent.change(await screen.findByLabelText("Ad *"), { target: { value: "Maliyetli" } })
+    fireEvent.change(screen.getByLabelText("Fiyat (KDV dahil) *"), { target: { value: "150" } })
+    fireEvent.change(screen.getByLabelText("Maliyet (KDV hariç)"), { target: { value: "62,5" } })
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    expect(post.mock.calls[0][1]).toEqual(expect.objectContaining({ cost_amount: 6250 }))
+  })
+
+  it("seeds the cost field from the loaded product and sends null once it is cleared", async () => {
+    renderEditor()
+
+    const cost = await screen.findByLabelText("Maliyet (KDV hariç)")
+    expect(cost).toHaveValue("80,00")
+    fireEvent.change(cost, { target: { value: "" } })
+    fireEvent.click(screen.getByRole("button", { name: "Kaydet" }))
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+    expect(put.mock.calls[0][1]).toEqual(expect.objectContaining({ cost_amount: null }))
+  })
+
   // Backend 8dad7a0: a new product joins the tenant's only active menu by
   // itself (menu_membership "auto"); otherwise ("manual") nobody sees it on
   // the QR menu until someone places it — the toast says which happened.
@@ -396,6 +421,7 @@ describe("ProductEditor", () => {
       expect(put).toHaveBeenCalledWith(`/api/v1/catalog/products/${PRODUCT.id}`, {
         name: PRODUCT.name,
         price_amount: PRODUCT.price_amount,
+        cost_amount: 8000,
         unit: PRODUCT.unit,
         description: PRODUCT.description,
         tax_rate_bps: PRODUCT.tax_rate_bps,

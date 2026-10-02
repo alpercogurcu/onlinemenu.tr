@@ -48,14 +48,16 @@ export function useProductBranchOverrideBranches(
   return { branchIds, isLoading: results.some((r) => r.isLoading) }
 }
 
-// Both fields are required on purpose: the backend defaults an omitted
+// All fields are required on purpose: the backend defaults an omitted
 // is_available to true, so a price-only body would silently re-open a product
-// the owner had closed. Same failure class as useUpdateProduct's full-replace
+// the owner had closed, and an omitted cost_amount is stored as NULL, wiping
+// the branch cost. Same failure class as useUpdateProduct's full-replace
 // body — a missing field is a compile error here, not a data-loss bug.
 export interface BranchOverrideInput {
   productId: string
   is_available: boolean
   price_amount: number | null
+  cost_amount: number | null
 }
 
 interface OptimisticContext {
@@ -82,14 +84,15 @@ export function useUpsertBranchOverride(branchId: string) {
   return useMutation<BranchProductOverride, unknown, BranchOverrideInput, OptimisticContext>({
     mutationKey,
     scope: { id: scopeId },
-    mutationFn: async ({ productId, is_available, price_amount }) => {
+    mutationFn: async ({ productId, is_available, price_amount, cost_amount }) => {
       const { data } = await api.put<BranchProductOverride>(rowPath(branchId, productId), {
         is_available,
         price_amount,
+        cost_amount,
       })
       return data
     },
-    onMutate: async ({ productId, is_available, price_amount }) => {
+    onMutate: async ({ productId, is_available, price_amount, cost_amount }) => {
       await qc.cancelQueries({ queryKey: key })
       const rows = qc.getQueryData<BranchProductOverride[]>(key) ?? []
       const previous = rows.find((row) => row.product_id === productId)
@@ -98,6 +101,7 @@ export function useUpsertBranchOverride(branchId: string) {
         product_id: productId,
         is_available,
         price_amount,
+        cost_amount,
         updated_at: previous?.updated_at ?? new Date().toISOString(),
       }
       qc.setQueryData<BranchProductOverride[]>(key, [...withoutRow(rows, productId), next])

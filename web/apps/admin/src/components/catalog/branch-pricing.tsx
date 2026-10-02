@@ -30,7 +30,7 @@ import { useCategories, useProducts } from "@/hooks/use-catalog"
 import { useSelectedBranch } from "@/hooks/use-selected-branch"
 import { useBranches } from "@/hooks/use-tenant"
 import { useAuthStore } from "@/store/auth-store"
-import { branchSaleState, overrideDiffers } from "@/lib/branch-overrides"
+import { branchSaleState, overrideHasDeviation } from "@/lib/branch-overrides"
 import { formatKurus, formatKurusForInput, parseLiraToKurus } from "@/lib/money"
 import { branchSaleStateVariant } from "@/lib/status-badge"
 import type { BranchProductOverride, Product } from "@/types"
@@ -40,6 +40,7 @@ interface RowProps {
   categoryName: string | null
   override: BranchProductOverride | undefined
   onPriceCommit: (product: Product, priceAmount: number | null, onFailure: () => void) => Promise<void>
+  onCostCommit: (product: Product, costAmount: number | null, onFailure: () => void) => Promise<void>
   onAvailabilityChange: (product: Product, isAvailable: boolean) => Promise<void>
   onReset: (product: Product) => Promise<void>
 }
@@ -57,17 +58,21 @@ function BranchPricingRow({
   categoryName,
   override,
   onPriceCommit,
+  onCostCommit,
   onAvailabilityChange,
   onReset,
 }: RowProps) {
   const t = useTranslations("catalog.branchPricing")
   const [invalid, setInvalid] = useState(false)
   const [revision, setRevision] = useState(0)
+  const [costInvalid, setCostInvalid] = useState(false)
+  const [costRevision, setCostRevision] = useState(0)
 
   const storedPrice = override?.price_amount ?? null
+  const storedCost = override?.cost_amount ?? null
   const isAvailable = override?.is_available ?? true
   const state = branchSaleState(override)
-  const differs = overrideDiffers(override)
+  const differs = overrideHasDeviation(override)
 
   const commit = (input: HTMLInputElement) => {
     const text = input.value.trim()
@@ -84,6 +89,23 @@ function BranchPricingRow({
       return
     }
     onPriceCommit(product, parsed, () => setRevision((r) => r + 1))
+  }
+
+  const commitCost = (input: HTMLInputElement) => {
+    const text = input.value.trim()
+    const parsed = text === "" ? null : parseLiraToKurus(text)
+    if (text !== "" && parsed === null) {
+      input.value = storedCost === null ? "" : formatKurusForInput(storedCost)
+      setCostInvalid(false)
+      toast.error(t("toast.invalidPrice"))
+      return
+    }
+    setCostInvalid(false)
+    if (parsed === storedCost) {
+      input.value = storedCost === null ? "" : formatKurusForInput(storedCost)
+      return
+    }
+    onCostCommit(product, parsed, () => setCostRevision((r) => r + 1))
   }
 
   return (
@@ -113,6 +135,26 @@ function BranchPricingRow({
             setInvalid(text !== "" && parseLiraToKurus(text) === null)
           }}
           onBlur={(e) => commit(e.currentTarget)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur()
+          }}
+        />
+      </TableCell>
+      <TableCell className="w-40">
+        <Input
+          key={`cost:${storedCost ?? "none"}:${costRevision}`}
+          defaultValue={storedCost === null ? "" : formatKurusForInput(storedCost)}
+          inputMode="decimal"
+          placeholder={product.cost_amount == null ? undefined : formatKurusForInput(product.cost_amount)}
+          title={storedCost === null ? t("costHint") : undefined}
+          aria-label={t("costLabel", { name: product.name })}
+          aria-invalid={costInvalid || undefined}
+          className="text-right tabular-nums"
+          onChange={(e) => {
+            const text = e.target.value.trim()
+            setCostInvalid(text !== "" && parseLiraToKurus(text) === null)
+          }}
+          onBlur={(e) => commitCost(e.currentTarget)}
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur()
           }}
@@ -181,14 +223,14 @@ export function BranchPricing() {
   )
 
   const overriddenCount = useMemo(
-    () => products.filter((p) => overrideDiffers(overrideByProduct.get(p.id))).length,
+    () => products.filter((p) => overrideHasDeviation(overrideByProduct.get(p.id))).length,
     [products, overrideByProduct],
   )
 
   const visibleProducts = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("tr")
     return products.filter((p) => {
-      if (onlyOverridden && !overrideDiffers(overrideByProduct.get(p.id))) return false
+      if (onlyOverridden && !overrideHasDeviation(overrideByProduct.get(p.id))) return false
       if (needle && !p.name.toLocaleLowerCase("tr").includes(needle)) return false
       return true
     })
@@ -233,6 +275,18 @@ export function BranchPricing() {
         productId: product.id,
         is_available: currentOverride(product.id)?.is_available ?? true,
         price_amount: priceAmount,
+        cost_amount: currentOverride(product.id)?.cost_amount ?? null,
+      },
+      onFailure,
+    )
+
+  const handleCostCommit = (product: Product, costAmount: number | null, onFailure: () => void) =>
+    save(
+      {
+        productId: product.id,
+        is_available: currentOverride(product.id)?.is_available ?? true,
+        price_amount: currentOverride(product.id)?.price_amount ?? null,
+        cost_amount: costAmount,
       },
       onFailure,
     )
@@ -242,6 +296,7 @@ export function BranchPricing() {
       productId: product.id,
       is_available: isAvailable,
       price_amount: currentOverride(product.id)?.price_amount ?? null,
+      cost_amount: currentOverride(product.id)?.cost_amount ?? null,
     })
 
   const handleReset = async (product: Product) => {
@@ -302,6 +357,7 @@ export function BranchPricing() {
             <TableHead>{t("columns.category")}</TableHead>
             <TableHead className="text-right">{t("columns.tenantPrice")}</TableHead>
             <TableHead className="text-right">{t("columns.branchPrice")}</TableHead>
+            <TableHead className="text-right">{t("columns.branchCost")}</TableHead>
             <TableHead>{t("columns.available")}</TableHead>
             <TableHead>{t("columns.state")}</TableHead>
             <TableHead className="w-[140px]" />
@@ -315,6 +371,7 @@ export function BranchPricing() {
               categoryName={product.category_id ? (categoryNameById.get(product.category_id) ?? null) : null}
               override={overrideByProduct.get(product.id)}
               onPriceCommit={handlePriceCommit}
+              onCostCommit={handleCostCommit}
               onAvailabilityChange={handleAvailabilityChange}
               onReset={handleReset}
             />

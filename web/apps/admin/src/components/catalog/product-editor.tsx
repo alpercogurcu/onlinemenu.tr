@@ -50,6 +50,7 @@ const emptyValues: ProductFormValues = {
   unit: UNIT_OPTIONS[0],
   description: "",
   priceKurus: null,
+  costKurus: null,
   // Defaults to %10 rather than TAX_RATE_OPTIONS[0] (%0) — %10 is the common
   // case for new products and %0 is easy to leave unnoticed.
   taxRateBps: 1000,
@@ -57,7 +58,7 @@ const emptyValues: ProductFormValues = {
   isActive: true,
 }
 
-// Backend PUT /catalog/products/{id} REPLACES the whole row from these ten
+// Backend PUT /catalog/products/{id} REPLACES the whole row from these eleven
 // fields — a body missing any of them zeroes it out server-side. Every PUT
 // call (here and in the products list page) must go through this so a
 // single-field action like "deactivate" can never regress into a partial
@@ -71,6 +72,7 @@ export function toProductBody(
       | "name"
       | "description"
       | "price_amount"
+      | "cost_amount"
       | "currency"
       | "unit"
       | "tax_rate_bps"
@@ -85,6 +87,7 @@ export function toProductBody(
     name: product.name,
     description: product.description,
     price_amount: product.price_amount,
+    cost_amount: product.cost_amount ?? null,
     currency: product.currency,
     unit: product.unit,
     tax_rate_bps: product.tax_rate_bps,
@@ -198,6 +201,7 @@ export function ProductEditor({ productId }: ProductEditorProps) {
       unit: product.unit,
       description: product.description,
       priceKurus: product.price_amount,
+      costKurus: product.cost_amount ?? null,
       taxRateBps: product.tax_rate_bps,
       sortOrder: product.sort_order,
       isActive: product.is_active,
@@ -248,6 +252,7 @@ export function ProductEditor({ productId }: ProductEditorProps) {
       unit: values.unit,
       description: values.description,
       price_amount: values.priceKurus as number,
+      cost_amount: values.costKurus,
       currency: product?.currency ?? "TRY",
       tax_rate_bps: values.taxRateBps,
       sort_order: values.sortOrder,
@@ -283,6 +288,7 @@ export function ProductEditor({ productId }: ProductEditorProps) {
           unit: body.unit,
           description: body.description,
           priceKurus: body.price_amount,
+          costKurus: body.cost_amount,
           taxRateBps: body.tax_rate_bps,
           sortOrder: body.sort_order,
           isActive: body.is_active,

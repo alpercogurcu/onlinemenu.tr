@@ -30,6 +30,7 @@ const PRODUCT: Product = {
   description: "",
   image_key: "",
   price_amount: 32_000,
+  cost_amount: null,
   currency: "TRY",
   sku: "",
   unit: "adet",
@@ -45,6 +46,7 @@ const row = (branchId: string, patch: Partial<BranchProductOverride>): BranchPro
   product_id: PRODUCT_ID,
   is_available: true,
   price_amount: null,
+  cost_amount: null,
   updated_at: "2026-09-20T10:00:00Z",
   ...patch,
 })
